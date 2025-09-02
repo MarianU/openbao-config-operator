@@ -1,0 +1,46 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: mto-extension-openbao.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions: {}
+  description: MTO Extension for OpenBao
+  displayName: MTO Extension OpenBao
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - kubernetes
+  - mto
+  - tenancy
+  - OpenBao
+  - openshift
+  links:
+  - name: Mto Extension OpenBao
+    url: https://stakater.com
+  maintainers:
+  - email: support@stakater.com
+    name: Stakater
+  maturity: alpha
+  provider:
+    name: Stakater
+    url: https://stakater.com
+  version: 0.0.0
