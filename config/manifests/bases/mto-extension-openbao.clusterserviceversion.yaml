@@ -28,16 +28,16 @@ spec:
   - supported: true
     type: AllNamespaces
   keywords:
-  - kubernetes
-  - mto
-  - tenancy
+  - Kubernetes
+  - OpenShift
   - OpenBao
-  - openshift
+  - MTO
+  - Tenancy
   links:
-  - name: Mto Extension OpenBao
-    url: https://stakater.com
+  - name: Mto Extension Openbao
+    url: https://mto-extension-openbao.domain
   maintainers:
-  - email: support@stakater.com
+  - email: hello@stakater.com
     name: Stakater
   maturity: alpha
   provider:
