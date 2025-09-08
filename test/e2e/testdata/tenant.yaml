@@ -1,0 +1,9 @@
+apiVersion: tenantoperator.stakater.com/v1beta3
+kind: Tenant
+metadata:
+  name: myTenant
+spec:
+  accessControl:
+    owners: { users: ["kubeadmin"] }
+  namespaces:
+    withTenantPrefix: [ namespace1, namespace2 ]

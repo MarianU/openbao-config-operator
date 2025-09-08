@@ -1,0 +1,51 @@
+apiVersion: tenantoperator.stakater.com/v1alpha1
+kind: OpenBaoIntegration
+metadata:
+  name: bao-integration
+  namespace: mto-system
+spec:
+  tenancy:
+    mode: path
+    defaults:
+      env: prod
+  server:
+    url: http://openbao.mto-system.svc:8200
+    tokenSecretRef:
+      name: bao-admin-token
+      key: token
+  authManagement:
+    kubernetes: ensure
+    oidc: off
+  engines:
+    - name: kv
+      type: kv-v2
+      layoutRef: kv
+      enabled: true
+      policies:
+        presets: [ editor ]
+      projection:
+        mode: none
+      strategy:
+        mount:
+          manage: ensure
+          path: tenants
+        scope: tenant
+  layout:
+    templates:
+      kv: "tenants/{{ .tenant }}/"
+  rbac:
+    roleScope: namespace
+    token: { ttl: 1h, maxTTL: 4h, renewable: true }
+  safety: { allowDeletes: false }
+  scaffolding:
+    mode: none
+    annotations:
+      enable: mto.secrets/enable
+      env: mto.secrets/env
+      keys: mto.secrets/keys
+  sso:
+    mode: disabled
+  tenantRoleMapping:
+    owner: admin
+    editor: editor
+    viewer: none

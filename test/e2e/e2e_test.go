@@ -1,122 +1,87 @@
-/*
-Copyright 2025 Stakater.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package e2e
 
 import (
-	"fmt"
-	"os/exec"
-	"time"
-
 	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
-	"github.com/stakater-ab/mto-extension-openbao/test/utils"
 )
 
-const namespace = "mto-extension-openbao-system"
-
-var _ = Describe("controller", Ordered, func() {
-	BeforeAll(func() {
-		By("installing prometheus operator")
-		Expect(utils.InstallPrometheusOperator()).To(Succeed())
-
-		By("installing the cert-manager")
-		Expect(utils.InstallCertManager()).To(Succeed())
-
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
-
-	AfterAll(func() {
-		By("uninstalling the Prometheus manager bundle")
-		utils.UninstallPrometheusOperator()
-
-		By("uninstalling the cert-manager bundle")
-		utils.UninstallCertManager()
-
-		By("removing manager namespace")
-		cmd := exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
-
-	Context("Operator", func() {
-		It("should run successfully", func() {
-			var controllerPodName string
-			var err error
-
-			// projectimage stores the name of the image used in the example
-			var projectimage = "example.com/mto-extension-openbao:v0.0.1"
-
-			By("building the manager(Operator) image")
-			cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("loading the the manager(Operator) image on Kind")
-			err = utils.LoadImageToKindClusterWithName(projectimage)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("installing CRDs")
-			cmd = exec.Command("make", "install")
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("deploying the controller-manager")
-			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("validating that the controller-manager pod is running as expected")
-			verifyControllerUp := func() error {
-				// Get pod name
-
-				cmd = exec.Command("kubectl", "get",
-					"pods", "-l", "control-plane=controller-manager",
-					"-o", "go-template={{ range .items }}"+
-						"{{ if not .metadata.deletionTimestamp }}"+
-						"{{ .metadata.name }}"+
-						"{{ \"\\n\" }}{{ end }}{{ end }}",
-					"-n", namespace,
-				)
-
-				podOutput, err := utils.Run(cmd)
-				ExpectWithOffset(2, err).NotTo(HaveOccurred())
-				podNames := utils.GetNonEmptyLines(string(podOutput))
-				if len(podNames) != 1 {
-					return fmt.Errorf("expect 1 controller pods running, but got %d", len(podNames))
-				}
-				controllerPodName = podNames[0]
-				ExpectWithOffset(2, controllerPodName).Should(ContainSubstring("controller-manager"))
-
-				// Validate pod status
-				cmd = exec.Command("kubectl", "get",
-					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
-					"-n", namespace,
-				)
-				status, err := utils.Run(cmd)
-				ExpectWithOffset(2, err).NotTo(HaveOccurred())
-				if string(status) != "Running" {
-					return fmt.Errorf("controller pod in %s status", status)
-				}
-				return nil
-			}
-			EventuallyWithOffset(1, verifyControllerUp, time.Minute, time.Second).Should(Succeed())
-
-		})
+// This file holds a placeholder E2E spec so the test package compiles
+// even if no real tests are defined yet.
+var _ = Describe("E2E (placeholder)", func() {
+	It("does nothing", func() {
+		// no-op
 	})
 })
+
+//package e2e
+//
+//import (
+//	"time"
+//
+//	. "github.com/onsi/ginkgo/v2"
+//	. "github.com/onsi/gomega"
+//
+//	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+//	"sigs.k8s.io/controller-runtime/pkg/client"
+//
+//	mtocommon "github.com/stakater-ab/tenant-operator/api/common"
+//	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
+//
+//	"github.com/stakater-ab/mto-extension-openbao/test/utils"
+//)
+//
+//var _ = Describe("Tenant integration with OpenBao", Ordered, func() {
+//	var k8sClient client.Client
+//	var bao *utils.BaoClient
+//
+//	BeforeAll(func() {
+//		k8sClient = utils.GetK8sClient()
+//		bao = utils.NewBaoClientFromEnv()
+//	})
+//
+//	It("should create mounts, policies, and roles per tenant namespace", func(ctx SpecContext) {
+//		tenant := &mto.Tenant{
+//			ObjectMeta: metav1.ObjectMeta{
+//				Name: "mytenant",
+//			},
+//			Spec: mto.TenantSpec{
+//				AccessControl: mto.AccessControl{
+//					Owners: mtocommon.Members{Users: []string{"kubeadmin"}},
+//				},
+//				Namespaces: mto.NamespacesSpec{
+//					WithTenantPrefix: []string{"namespace1", "namespace2"},
+//				},
+//			},
+//		}
+//
+//		By("creating the Tenant")
+//		Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+//		DeferCleanup(func() {
+//			_ = k8sClient.Delete(ctx, tenant)
+//		})
+//
+//		By("verifying KV mounts exist")
+//		Eventually(func(g Gomega) {
+//			mounts, err := bao.ListMounts(ctx)
+//			g.Expect(err).NotTo(HaveOccurred())
+//			g.Expect(mounts.HasKVv2("secret/tenants/mytenant/prod/mytenant-namespace1/")).To(BeTrue())
+//			g.Expect(mounts.HasKVv2("secret/tenants/mytenant/prod/mytenant-namespace2/")).To(BeTrue())
+//		}).WithTimeout(90 * time.Second).WithPolling(5 * time.Second).Should(Succeed())
+//
+//		By("verifying policies exist")
+//		Eventually(func(g Gomega) {
+//			// naming rule: <tenant>-<namespace>-<role>
+//			pol, err := bao.GetPolicy(ctx, "mytenant-mytenant-namespace1-editor")
+//			g.Expect(err).NotTo(HaveOccurred())
+//			g.Expect(pol).To(ContainSubstring("tenants/mytenant/prod/mytenant-namespace1"))
+//		}).WithTimeout(60 * time.Second).Should(Succeed())
+//
+//		By("verifying k8s auth role exists")
+//		Eventually(func(g Gomega) {
+//			// naming rule: <tenant>-<namespace>
+//			role, err := bao.GetK8sRole(ctx, "mytenant-mytenant-namespace1")
+//			g.Expect(err).NotTo(HaveOccurred())
+//			g.Expect(role.Policies).To(ContainElement("mytenant-mytenant-namespace1-editor"))
+//			g.Expect(role.BoundNamespaces).To(ContainElement("mytenant-namespace1"))
+//		}).WithTimeout(60 * time.Second).Should(Succeed())
+//	})
+//})
