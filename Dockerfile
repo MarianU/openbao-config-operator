@@ -3,6 +3,16 @@ FROM golang:1.23 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+ARG GIT_TOKEN
+ARG GIT_USER
+ENV CGO_ENABLED=0 GO111MODULE=on GOOS=linux TOKEN=$GIT_TOKEN
+
+RUN go env -w GOPRIVATE=github.com/$GIT_USER/*
+# Using oauth2 instead of x-oauth-basic because we are using fine grained token in pipeline
+# More Info : https://stackoverflow.com/a/66156992/3506115
+RUN git config --global url."https://oauth2:${TOKEN}@github.com/".insteadOf "https://github.com/"
+
+
 WORKDIR /workspace
 # Copy the Go Modules manifests
 COPY go.mod go.mod
