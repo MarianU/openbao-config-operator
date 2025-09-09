@@ -121,6 +121,7 @@ const (
 
 // ---------- Spec ----------
 
+// +k8s:deepcopy-gen=true
 type ServerSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Format=uri
@@ -158,6 +159,7 @@ type RoleResolutionPattern struct {
 	Match string `json:"match"`
 }
 
+// +k8s:deepcopy-gen=true
 type RoleResolutionSpec struct {
 	// Claim to inspect (e.g., "groups").
 	// +kubebuilder:validation:MinLength=1
@@ -173,6 +175,7 @@ type RoleResolutionSpec struct {
 	Fallback TenantRoleOrDeny `json:"fallback"`
 }
 
+// +k8s:deepcopy-gen=true
 type SSOSpec struct {
 	// +kubebuilder:default:=cluster
 	// +kubebuilder:validation:Enum=cluster;secret;inline;disabled
@@ -216,6 +219,7 @@ type TenancySpec struct {
 	Defaults TenancyDefaults `json:"defaults"`
 }
 
+// +k8s:deepcopy-gen=true
 type LayoutSpec struct {
 	// Named templates. Example:
 	//   kv: "secret/tenants/{{ .tenant }}/{{ .env }}/{{ .namespace }}/{{ .app }}/{{ .name }}"
@@ -223,6 +227,7 @@ type LayoutSpec struct {
 	Templates map[string]string `json:"templates"`
 }
 
+// +k8s:deepcopy-gen=true
 type RBACTokenSpec struct {
 	// +kubebuilder:default:="1h"
 	TTL *metav1.Duration `json:"ttl,omitempty"`
@@ -234,6 +239,7 @@ type RBACTokenSpec struct {
 	Renewable *bool `json:"renewable,omitempty"`
 }
 
+// +k8s:deepcopy-gen=true
 type RBACSpec struct {
 	// +kubebuilder:default:=namespace
 	// +kubebuilder:validation:Enum=namespace;app
@@ -274,6 +280,7 @@ type EngineStrategy struct {
 	Mount EngineStrategyMount `json:"mount"`
 }
 
+// +k8s:deepcopy-gen=true
 type EnginePolicies struct {
 	// List of Bao policy presets to materialize for this engine.
 	// +kubebuilder:validation:MinItems=1
@@ -289,6 +296,7 @@ type ProjectionSecretStore struct {
 	Name string `json:"name"`
 }
 
+// +k8s:deepcopy-gen=true
 type EngineProjection struct {
 	// +kubebuilder:default:=external-secrets
 	// +kubebuilder:validation:Enum=external-secrets;csi;none
@@ -302,6 +310,7 @@ type EngineProjection struct {
 	// +kubebuilder:validation:XValidation:rule="self.mode == 'external-secrets' || !has(self.secretStore)",message="secretStore must be omitted unless projection.mode=external-secrets"
 }
 
+// +k8s:deepcopy-gen=true
 type EngineSpec struct {
 	// Logical name of this engine config, e.g., "kv".
 	// +kubebuilder:validation:MinLength=1
@@ -357,6 +366,7 @@ type SafetySpec struct {
 
 // ---------- Top-level Spec & Status ----------
 
+// +k8s:deepcopy-gen=true
 type OpenBaoIntegrationSpec struct {
 	Server            ServerSpec         `json:"server"`
 	AuthManagement    AuthManagementSpec `json:"authManagement"`
@@ -373,6 +383,7 @@ type OpenBaoIntegrationSpec struct {
 	Safety      SafetySpec      `json:"safety"`
 }
 
+// +k8s:deepcopy-gen=true
 type OpenBaoIntegrationStatus struct {
 	// Standard conditions: Ready, AuthConfigured, EnginesSynced, etc.
 	// Keep minimal; extend as implementation matures.
@@ -382,7 +393,7 @@ type OpenBaoIntegrationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=obint;scope=Namespaced
+// +kubebuilder:resource:shortName=obint,scope=Namespaced
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.tenancy.mode`,priority=0
 // +kubebuilder:printcolumn:name="SSO",type=string,JSONPath=`.spec.sso.mode`,priority=0
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,priority=0

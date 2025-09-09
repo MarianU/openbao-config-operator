@@ -1,0 +1,64 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoIntegration
+metadata:
+  name: cluster
+  namespace: mto-system
+spec:
+  server:
+    url: http://localhost:8200          # override at apply time if needed
+    tokenSecretRef:
+      name: obx-mgmt-token               # Secret must exist in the same namespace
+      key: token
+
+  authManagement:
+    kubernetes: ensure
+    oidc: ensure
+
+  sso:
+    mode: disabled
+
+  tenancy:
+    mode: path
+    defaults:
+      env: prod
+
+  layout:
+    templates:
+      kv: "secret/tenants/{{ .tenant }}/{{ .env }}/{{ .namespace }}/{{ .app }}/{{ .name }}"
+
+  engines:
+    - name: kv
+      type: kv-v2
+      layoutRef: kv
+      enabled: true
+      strategy:
+        scope: cluster
+        mount:
+          path: /secret/tenants
+          manage: adopt
+      policies:
+        presets: [admin, editor, viewer]
+      projection:
+        mode: none
+
+  rbac:
+    roleScope: namespace
+    token:
+      ttl: "1h"
+      maxTTL: "4h"
+      renewable: false
+
+  scaffolding:
+    mode: on-annotation
+    annotations:
+      enable: mto.secrets/enable
+      keys: mto.secrets/keys
+      env: mto.secrets/env
+
+  safety:
+    allowDeletes: false
+
+  tenantRoleMapping:
+    owner: admin
+    editor: editor
+    viewer: viewer

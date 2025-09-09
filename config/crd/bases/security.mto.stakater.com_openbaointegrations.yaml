@@ -4,16 +4,15 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: openbaointegrations.tenantoperator.stakater.com
+  name: openbaointegrations.security.mto.stakater.com
 spec:
-  group: tenantoperator.stakater.com
+  group: security.mto.stakater.com
   names:
     kind: OpenBaoIntegration
     listKind: OpenBaoIntegrationList
     plural: openbaointegrations
     shortNames:
     - obint
-    - scope=Namespaced
     singular: openbaointegration
   scope: Namespaced
   versions:

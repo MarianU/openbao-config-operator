@@ -1,6 +1,3 @@
-// Package v1alpha1 contains API Schema definitions for the openbao extension v1alpha1 API group
-// +kubebuilder:object:generate=true
-// +groupName=tenantoperator.stakater.com
 package v1alpha1
 
 import (
@@ -9,12 +6,14 @@ import (
 )
 
 var (
-	// GroupVersion is group version used to register these objects
-	GroupVersion = schema.GroupVersion{Group: "security.mto.stakater.com", Version: "v1alpha1"}
-
-	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
+	GroupVersion  = schema.GroupVersion{Group: "security.mto.stakater.com", Version: "v1alpha1"}
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
-
-	// AddToScheme adds the types in this group-version to the given scheme.
-	AddToScheme = SchemeBuilder.AddToScheme
+	AddToScheme   = SchemeBuilder.AddToScheme
 )
+
+func init() {
+	SchemeBuilder.Register(
+		&OpenBaoIntegration{},
+		&OpenBaoIntegrationList{},
+	)
+}

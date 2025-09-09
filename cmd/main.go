@@ -19,8 +19,13 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
+	"net/http"
 	"os"
-
+	"reflect"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"time"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -44,7 +49,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	utilruntime.Must(obxv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -150,6 +155,28 @@ func main() {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
+
+	t := &obxv1alpha1.OpenBaoIntegration{}
+	gvk, err := apiutil.GVKForObject(t, mgr.GetScheme())
+	setupLog.Info("GVK probe",
+		"err", err,
+		"gvk", gvk.String(),
+		"type", reflect.TypeOf(t).Elem().String(),
+		"pkgPath", reflect.TypeOf(t).Elem().PkgPath(),
+	)
+
+	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoIntegration{}, mgr.GetScheme())
+	//setupLog.Info("GVK probe", "gvk", gvk.String(), "err", err)
+
+	if err := (&appcontroller.ClusterAuthReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		HTTP:   &http.Client{Timeout: 10 * time.Second},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClusterAuth")
+		os.Exit(1)
+	}
+	// +kubebuilder:scaffold:builder
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
