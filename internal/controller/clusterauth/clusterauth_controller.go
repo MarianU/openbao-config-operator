@@ -82,7 +82,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, nil
 	}
 
-	// Ensure k8s auth is mounted (non-destructive: only observe in this first cut)
+	// Ensure k8s auth is mounted (non-destructive: first version only observe)
 	mounted, err := r.kubernetesAuthMounted(ctx, strings.TrimRight(obi.Spec.Server.URL, "/"), string(token))
 	if err != nil {
 		l.Error(err, "bao sys/auth check failed")
@@ -102,7 +102,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Recheck periodically (JWKS/CA can drift later; future steps will configure)
+	// Recheck periodically
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
@@ -111,7 +111,7 @@ func (r *ClusterAuthReconciler) patchStatus(ctx context.Context, obi *obxv1alpha
 }
 
 func setAuthCond(obi *obxv1alpha1.OpenBaoIntegration, status metav1.ConditionStatus, reason, msg string) {
-	condType := "AuthConfigured" // aligns with your CRD comments
+	condType := "AuthConfigured"
 	now := metav1.Now()
 	meta.SetStatusCondition(&obi.Status.Conditions, metav1.Condition{
 		Type:               condType,
@@ -125,10 +125,6 @@ func setAuthCond(obi *obxv1alpha1.OpenBaoIntegration, status metav1.ConditionSta
 
 // ---- tiny Bao call: GET /v1/sys/auth and look for "kubernetes/" key ----
 
-type sysAuthMap map[string]struct {
-	Type string `json:"type"`
-}
-
 func (r *ClusterAuthReconciler) kubernetesAuthMounted(ctx context.Context, baseURL, token string) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/sys/auth", nil)
 	if err != nil {
@@ -141,7 +137,11 @@ func (r *ClusterAuthReconciler) kubernetesAuthMounted(ctx context.Context, baseU
 	if err != nil {
 		return false, err
 	}
-	defer res.Body.Close()
+	defer func() {
+		if cerr := res.Body.Close(); cerr != nil {
+			// best-effort close
+		}
+	}()
 
 	if res.StatusCode >= 300 {
 		// return a small, helpful snippet

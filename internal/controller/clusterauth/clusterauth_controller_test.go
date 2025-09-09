@@ -3,20 +3,21 @@ package clusterauth
 import (
 	"context"
 	"encoding/json"
-	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"net/http"
-	"net/http/httptest"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"testing"
-	"time"
+
+	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -45,7 +46,7 @@ func makeCR(ns, name string, mutate func(*obxv1alpha1.OpenBaoIntegration)) *obxv
 	return cr
 }
 
-func baoServer(t *testing.T, status int, body any) *httptest.Server {
+func baoServer(status int, body any) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sys/auth" {
 			http.NotFound(w, r)
@@ -78,7 +79,6 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 
 	type tc struct {
 		name          string
-		setupObjs     []client.Object
 		baoStatus     int
 		baoBody       any
 		expectReason  string
@@ -139,7 +139,7 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 				WithStatusSubresource(cr).
 				Build()
 
-			srv := baoServer(t, c.baoStatus, c.baoBody)
+			srv := baoServer(c.baoStatus, c.baoBody)
 			defer srv.Close()
 
 			r := &ClusterAuthReconciler{

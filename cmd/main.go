@@ -19,26 +19,26 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
 	"net/http"
 	"os"
 	"reflect"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"time"
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
+
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
 	// +kubebuilder:scaffold:imports
 )
 
