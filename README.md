@@ -23,6 +23,7 @@ git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 2. ensure openbao is running in the cluster at port 8200.
 3. `export VAULT_ADDR="http://localhost:8200"`
 4. `export VAULT_TOKEN="<root-or-admin-token>"`
+5. `bao auth enable kubernetes`
 
 ### Setup
 `./test/e2e/obx_e2e_setup.sh`

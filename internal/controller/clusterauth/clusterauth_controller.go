@@ -24,7 +24,6 @@ import (
 
 // -------- RBAC --------
 
-// Watches your CR and updates status; reads Secrets for the Bao token.
 //+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaointegrations,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaointegrations/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaointegrations/finalizers,verbs=update

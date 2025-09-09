@@ -19,6 +19,8 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
+	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
 	"net/http"
 	"os"
 	"reflect"
@@ -50,6 +52,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(obxv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(mtov1beta3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -177,6 +180,16 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create TenantReconciler")
+		os.Exit(1)
+	}
+	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup Tenant controller")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
