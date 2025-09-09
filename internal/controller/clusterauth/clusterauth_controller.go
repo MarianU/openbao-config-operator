@@ -138,9 +138,7 @@ func (r *ClusterAuthReconciler) kubernetesAuthMounted(ctx context.Context, baseU
 		return false, err
 	}
 	defer func() {
-		if cerr := res.Body.Close(); cerr != nil {
-			// best-effort close
-		}
+		_ = res.Body.Close()
 	}()
 
 	if res.StatusCode >= 300 {
