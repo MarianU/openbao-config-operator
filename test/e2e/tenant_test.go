@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"k8s.io/apimachinery/pkg/types"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -9,12 +8,12 @@ import (
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/stakater-ab/mto-extension-openbao/test/utils"
 	mtocommon "github.com/stakater-ab/tenant-operator/api/common"
 	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
-
-	"github.com/stakater-ab/mto-extension-openbao/test/utils"
 )
 
 var _ = Describe("Tenant → OpenBao (namespace granularity)", Ordered, func() {

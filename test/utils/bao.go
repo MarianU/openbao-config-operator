@@ -87,8 +87,7 @@ func (c *BaoClient) ListMounts(ctx context.Context) (Mounts, error) {
 		return nil, err
 	}
 	defer func() {
-		if cerr := resp.Body.Close(); cerr != nil {
-		}
+		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode >= 300 {
 		return nil, statusErr(resp, "mounts")
@@ -126,8 +125,7 @@ func (c *BaoClient) GetPolicy(ctx context.Context, name string) (string, error) 
 		return "", err
 	}
 	defer func() {
-		if cerr := resp.Body.Close(); cerr != nil {
-		}
+		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return "", fmt.Errorf("policy %q not found", name)
@@ -168,8 +166,7 @@ func (c *BaoClient) GetK8sRole(ctx context.Context, name string) (*K8sRole, erro
 		return nil, err
 	}
 	defer func() {
-		if cerr := resp.Body.Close(); cerr != nil {
-		}
+		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("k8s role %q not found (mount=%q)", name, c.K8sAuthPath)
