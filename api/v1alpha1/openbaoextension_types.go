@@ -151,7 +151,6 @@ type SSOClusterRef struct {
 }
 
 type RoleResolutionPattern struct {
-	// +kubebuilder:validation:Enum=owner;editor;viewer
 	Role TenantRole `json:"role"`
 
 	// Template-aware group matcher, e.g., "tenant-{{ .tenant }}-owners".
@@ -178,7 +177,6 @@ type RoleResolutionSpec struct {
 // +k8s:deepcopy-gen=true
 type SSOSpec struct {
 	// +kubebuilder:default:=cluster
-	// +kubebuilder:validation:Enum=cluster;secret;inline;disabled
 	Mode SSOMode `json:"mode"`
 
 	// Present when mode=cluster.
@@ -213,9 +211,7 @@ type TenancyDefaults struct {
 
 type TenancySpec struct {
 	// +kubebuilder:default:=path
-	// +kubebuilder:validation:Enum=path;namespace
-	Mode TenancyMode `json:"mode"`
-
+	Mode     TenancyMode     `json:"mode"`
 	Defaults TenancyDefaults `json:"defaults"`
 }
 
@@ -242,7 +238,6 @@ type RBACTokenSpec struct {
 // +k8s:deepcopy-gen=true
 type RBACSpec struct {
 	// +kubebuilder:default:=namespace
-	// +kubebuilder:validation:Enum=namespace;app
 	RoleScope RoleScope `json:"roleScope"`
 
 	Token RBACTokenSpec `json:"token"`
@@ -250,15 +245,10 @@ type RBACSpec struct {
 
 type TenantRoleMapping struct {
 	// +kubebuilder:default:=admin
-	// +kubebuilder:validation:Enum=admin;editor;viewer;none
 	Owner PolicyRole `json:"owner"`
-
 	// +kubebuilder:default:=editor
-	// +kubebuilder:validation:Enum=admin;editor;viewer;none
 	Editor PolicyRole `json:"editor"`
-
 	// +kubebuilder:default:=viewer
-	// +kubebuilder:validation:Enum=admin;editor;viewer;none
 	Viewer PolicyRole `json:"viewer"`
 }
 
@@ -274,9 +264,8 @@ type EngineStrategyMount struct {
 
 type EngineStrategy struct {
 	// +kubebuilder:default:=cluster
-	// +kubebuilder:validation:Enum=cluster;tenant
 	Scope StrategyScope `json:"scope"`
-
+	// +kubebuilder:default:=adopt
 	Mount EngineStrategyMount `json:"mount"`
 }
 
@@ -289,9 +278,7 @@ type EnginePolicies struct {
 
 type ProjectionSecretStore struct {
 	// +kubebuilder:default:=namespace
-	// +kubebuilder:validation:Enum=namespace;cluster
 	Scope SecretStoreScope `json:"scope"`
-
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 }
@@ -299,7 +286,6 @@ type ProjectionSecretStore struct {
 // +k8s:deepcopy-gen=true
 type EngineProjection struct {
 	// +kubebuilder:default:=external-secrets
-	// +kubebuilder:validation:Enum=external-secrets;csi;none
 	Mode ProjectionMode `json:"mode"`
 
 	// Required when mode=external-secrets; must be omitted otherwise.
@@ -314,9 +300,7 @@ type EngineProjection struct {
 type EngineSpec struct {
 	// Logical name of this engine config, e.g., "kv".
 	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// +kubebuilder:validation:Enum=kv-v2
+	Name string     `json:"name"`
 	Type EngineType `json:"type"`
 
 	// Reference to a layout template key, e.g., "kv".
@@ -352,9 +336,7 @@ const (
 
 type ScaffoldingSpec struct {
 	// +kubebuilder:default:=on-annotation
-	// +kubebuilder:validation:Enum=none;on-annotation
-	Mode ScaffoldingMode `json:"mode"`
-
+	Mode        ScaffoldingMode        `json:"mode"`
 	Annotations ScaffoldingAnnotations `json:"annotations"`
 }
 

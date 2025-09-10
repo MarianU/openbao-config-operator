@@ -101,16 +101,11 @@ spec:
                     projection:
                       properties:
                         mode:
-                          allOf:
-                          - enum:
-                            - external-secrets
-                            - csi
-                            - none
-                          - enum:
-                            - external-secrets
-                            - csi
-                            - none
                           default: external-secrets
+                          enum:
+                          - external-secrets
+                          - csi
+                          - none
                           type: string
                         secretStore:
                           description: Required when mode=external-secrets; must be
@@ -120,14 +115,10 @@ spec:
                               minLength: 1
                               type: string
                             scope:
-                              allOf:
-                              - enum:
-                                - namespace
-                                - cluster
-                              - enum:
-                                - namespace
-                                - cluster
                               default: namespace
+                              enum:
+                              - namespace
+                              - cluster
                               type: string
                           required:
                           - name
@@ -139,6 +130,7 @@ spec:
                     strategy:
                       properties:
                         mount:
+                          default: adopt
                           properties:
                             manage:
                               allOf:
@@ -161,25 +153,18 @@ spec:
                           - path
                           type: object
                         scope:
-                          allOf:
-                          - enum:
-                            - cluster
-                            - tenant
-                          - enum:
-                            - cluster
-                            - tenant
                           default: cluster
+                          enum:
+                          - cluster
+                          - tenant
                           type: string
                       required:
                       - mount
                       - scope
                       type: object
                     type:
-                      allOf:
-                      - enum:
-                        - kv-v2
-                      - enum:
-                        - kv-v2
+                      enum:
+                      - kv-v2
                       type: string
                   required:
                   - enabled
@@ -208,14 +193,10 @@ spec:
               rbac:
                 properties:
                   roleScope:
-                    allOf:
-                    - enum:
-                      - namespace
-                      - app
-                    - enum:
-                      - namespace
-                      - app
                     default: namespace
+                    enum:
+                    - namespace
+                    - app
                     type: string
                   token:
                     properties:
@@ -261,14 +242,10 @@ spec:
                     - keys
                     type: object
                   mode:
-                    allOf:
-                    - enum:
-                      - none
-                      - on-annotation
-                    - enum:
-                      - none
-                      - on-annotation
                     default: on-annotation
+                    enum:
+                    - none
+                    - on-annotation
                     type: string
                 required:
                 - annotations
@@ -330,18 +307,12 @@ spec:
                       keep the CRD general.
                     type: object
                   mode:
-                    allOf:
-                    - enum:
-                      - cluster
-                      - secret
-                      - inline
-                      - disabled
-                    - enum:
-                      - cluster
-                      - secret
-                      - inline
-                      - disabled
                     default: cluster
+                    enum:
+                    - cluster
+                    - secret
+                    - inline
+                    - disabled
                     type: string
                   roleResolution:
                     description: Required except when mode=disabled.
@@ -367,15 +338,10 @@ spec:
                               minLength: 1
                               type: string
                             role:
-                              allOf:
-                              - enum:
-                                - owner
-                                - editor
-                                - viewer
-                              - enum:
-                                - owner
-                                - editor
-                                - viewer
+                              enum:
+                              - owner
+                              - editor
+                              - viewer
                               type: string
                           required:
                           - match
@@ -426,14 +392,10 @@ spec:
                     - env
                     type: object
                   mode:
-                    allOf:
-                    - enum:
-                      - path
-                      - namespace
-                    - enum:
-                      - path
-                      - namespace
                     default: path
+                    enum:
+                    - path
+                    - namespace
                     type: string
                 required:
                 - defaults
@@ -442,46 +404,28 @@ spec:
               tenantRoleMapping:
                 properties:
                   editor:
-                    allOf:
-                    - enum:
-                      - admin
-                      - editor
-                      - viewer
-                      - none
-                    - enum:
-                      - admin
-                      - editor
-                      - viewer
-                      - none
                     default: editor
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
                     type: string
                   owner:
-                    allOf:
-                    - enum:
-                      - admin
-                      - editor
-                      - viewer
-                      - none
-                    - enum:
-                      - admin
-                      - editor
-                      - viewer
-                      - none
                     default: admin
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
                     type: string
                   viewer:
-                    allOf:
-                    - enum:
-                      - admin
-                      - editor
-                      - viewer
-                      - none
-                    - enum:
-                      - admin
-                      - editor
-                      - viewer
-                      - none
                     default: viewer
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
                     type: string
                 required:
                 - editor
