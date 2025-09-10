@@ -11,13 +11,13 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
-func MinimalOpenBaoIntegration(ns, name, url, secretName, secretKey string) *obxv1alpha1.OpenBaoIntegration {
-	return &obxv1alpha1.OpenBaoIntegration{
+func MinimalOpenBaoExtension(ns, name, url, secretName, secretKey string) *obxv1alpha1.OpenBaoExtension {
+	return &obxv1alpha1.OpenBaoExtension{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns,
 			Name:      name,
 		},
-		Spec: obxv1alpha1.OpenBaoIntegrationSpec{
+		Spec: obxv1alpha1.OpenBaoExtensionSpec{
 			Server: obxv1alpha1.ServerSpec{
 				URL: url,
 				TokenSecretRef: corev1.SecretKeySelector{

@@ -15,7 +15,7 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaointegrations
+  - openbaoextensions
   verbs:
   - create
   - delete
@@ -27,13 +27,13 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaointegrations/finalizers
+  - openbaoextensions/finalizers
   verbs:
   - update
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaointegrations/status
+  - openbaoextensions/status
   verbs:
   - get
   - patch

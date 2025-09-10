@@ -13,7 +13,7 @@ var (
 
 func init() {
 	SchemeBuilder.Register(
-		&OpenBaoIntegration{},
-		&OpenBaoIntegrationList{},
+		&OpenBaoExtension{},
+		&OpenBaoExtensionList{},
 	)
 }

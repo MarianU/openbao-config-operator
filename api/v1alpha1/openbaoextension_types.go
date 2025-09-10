@@ -367,7 +367,7 @@ type SafetySpec struct {
 // ---------- Top-level Spec & Status ----------
 
 // +k8s:deepcopy-gen=true
-type OpenBaoIntegrationSpec struct {
+type OpenBaoExtensionSpec struct {
 	Server            ServerSpec         `json:"server"`
 	AuthManagement    AuthManagementSpec `json:"authManagement"`
 	SSO               SSOSpec            `json:"sso"`
@@ -384,7 +384,7 @@ type OpenBaoIntegrationSpec struct {
 }
 
 // +k8s:deepcopy-gen=true
-type OpenBaoIntegrationStatus struct {
+type OpenBaoExtensionStatus struct {
 	// Standard conditions: Ready, AuthConfigured, EnginesSynced, etc.
 	// Keep minimal; extend as implementation matures.
 	// +optional
@@ -393,21 +393,21 @@ type OpenBaoIntegrationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=obint,scope=Namespaced
+// +kubebuilder:resource:shortName=obx,scope=Namespaced
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.tenancy.mode`,priority=0
 // +kubebuilder:printcolumn:name="SSO",type=string,JSONPath=`.spec.sso.mode`,priority=0
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,priority=0
-type OpenBaoIntegration struct {
+type OpenBaoExtension struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   OpenBaoIntegrationSpec   `json:"spec,omitempty"`
-	Status OpenBaoIntegrationStatus `json:"status,omitempty"`
+	Spec   OpenBaoExtensionSpec   `json:"spec,omitempty"`
+	Status OpenBaoExtensionStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
-type OpenBaoIntegrationList struct {
+type OpenBaoExtensionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []OpenBaoIntegration `json:"items"`
+	Items           []OpenBaoExtension `json:"items"`
 }

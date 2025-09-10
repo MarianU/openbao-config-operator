@@ -24,9 +24,9 @@ import (
 
 // -------- RBAC --------
 
-//+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaointegrations,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaointegrations/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaointegrations/finalizers,verbs=update
+//+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaoextensions,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaoextensions/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaoextensions/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 type ClusterAuthReconciler struct {
@@ -44,15 +44,15 @@ func NewClusterAuthReconciler(mgr ctrl.Manager) *ClusterAuthReconciler {
 }
 
 func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	l := log.FromContext(ctx).WithValues("openbaointegration", req.NamespacedName)
+	l := log.FromContext(ctx).WithValues("openbaoextension", req.NamespacedName)
 
-	var obi obxv1alpha1.OpenBaoIntegration
+	var obi obxv1alpha1.OpenBaoExtension
 	if err := r.Get(ctx, req.NamespacedName, &obi); err != nil {
 		// deleted or not found; nothing to do
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	l.Info("reconciling OpenBaoIntegration", "ns", req.Namespace, "name", req.Name)
+	l.Info("reconciling OpenBaoExtension", "ns", req.Namespace, "name", req.Name)
 
 	// Default: pessimistic until proven OK
 	setAuthCond(&obi, metav1.ConditionFalse, "Unknown", "Reconciling")
@@ -105,11 +105,11 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-func (r *ClusterAuthReconciler) patchStatus(ctx context.Context, obi *obxv1alpha1.OpenBaoIntegration) error {
+func (r *ClusterAuthReconciler) patchStatus(ctx context.Context, obi *obxv1alpha1.OpenBaoExtension) error {
 	return r.Status().Update(ctx, obi)
 }
 
-func setAuthCond(obi *obxv1alpha1.OpenBaoIntegration, status metav1.ConditionStatus, reason, msg string) {
+func setAuthCond(obi *obxv1alpha1.OpenBaoExtension, status metav1.ConditionStatus, reason, msg string) {
 	condType := "AuthConfigured"
 	now := metav1.Now()
 	meta.SetStatusCondition(&obi.Status.Conditions, metav1.Condition{
@@ -191,6 +191,6 @@ func (r *ClusterAuthReconciler) kubernetesAuthMounted(ctx context.Context, baseU
 // SetupWithManager registers the controller.
 func (r *ClusterAuthReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&obxv1alpha1.OpenBaoIntegration{}).
+		For(&obxv1alpha1.OpenBaoExtension{}).
 		Complete(r)
 }

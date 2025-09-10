@@ -27,10 +27,10 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func makeCR(ns, name string, mutate func(*obxv1alpha1.OpenBaoIntegration)) *obxv1alpha1.OpenBaoIntegration {
-	cr := &obxv1alpha1.OpenBaoIntegration{
+func makeCR(ns, name string, mutate func(*obxv1alpha1.OpenBaoExtension)) *obxv1alpha1.OpenBaoExtension {
+	cr := &obxv1alpha1.OpenBaoExtension{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: obxv1alpha1.OpenBaoIntegrationSpec{
+		Spec: obxv1alpha1.OpenBaoExtensionSpec{
 			Server: obxv1alpha1.ServerSpec{
 				URL: "http://placeholder", // replaced per test
 				TokenSecretRef: corev1.SecretKeySelector{
@@ -63,7 +63,7 @@ func baoServer(status int, body any) *httptest.Server {
 	}))
 }
 
-func getCond(t *testing.T, cr *obxv1alpha1.OpenBaoIntegration, typ string) *metav1.Condition {
+func getCond(t *testing.T, cr *obxv1alpha1.OpenBaoExtension, typ string) *metav1.Condition {
 	for i := range cr.Status.Conditions {
 		if cr.Status.Conditions[i].Type == typ {
 			return &cr.Status.Conditions[i]
@@ -156,7 +156,7 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 			require.NoError(t, err)
 			require.WithinDuration(t, time.Now().Add(c.expectRequeue), time.Now().Add(res.RequeueAfter), time.Second)
 
-			var got obxv1alpha1.OpenBaoIntegration
+			var got obxv1alpha1.OpenBaoExtension
 			require.NoError(t, fc.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "ex"}, &got))
 
 			cond := getCond(t, &got, "AuthConfigured")

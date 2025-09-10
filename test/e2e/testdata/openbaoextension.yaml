@@ -1,7 +1,7 @@
 apiVersion: tenantoperator.stakater.com/v1alpha1
-kind: OpenBaoIntegration
+kind: OpenBaoExtension
 metadata:
-  name: bao-integration
+  name: bao-extension
   namespace: mto-system
 spec:
   tenancy:

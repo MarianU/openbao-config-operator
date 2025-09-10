@@ -159,7 +159,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	t := &obxv1alpha1.OpenBaoIntegration{}
+	t := &obxv1alpha1.OpenBaoExtension{}
 	gvk, err := apiutil.GVKForObject(t, mgr.GetScheme())
 	setupLog.Info("GVK probe",
 		"err", err,
@@ -168,7 +168,7 @@ func main() {
 		"pkgPath", reflect.TypeOf(t).Elem().PkgPath(),
 	)
 
-	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoIntegration{}, mgr.GetScheme())
+	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoExtension{}, mgr.GetScheme())
 	//setupLog.Info("GVK probe", "gvk", gvk.String(), "err", err)
 
 	if err := (&appcontroller.ClusterAuthReconciler{

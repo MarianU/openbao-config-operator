@@ -1,5 +1,5 @@
 apiVersion: security.mto.stakater.com/v1alpha1
-kind: OpenBaoIntegration
+kind: OpenBaoExtension
 metadata:
   name: cluster
   namespace: mto-system
