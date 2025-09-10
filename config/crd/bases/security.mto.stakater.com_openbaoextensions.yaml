@@ -190,8 +190,75 @@ spec:
                 required:
                 - templates
                 type: object
+              policyOverrides:
+                description: If capabilityOverrides.<tier> present ⇒ it replaces defaults
+                  for that tier.
+                properties:
+                  admin:
+                    properties:
+                      capabilities:
+                        description: Complete verb set for this tier (replaces defaults).
+                        items:
+                          description: OpenBao/Vault policy verbs.
+                          enum:
+                          - create
+                          - read
+                          - update
+                          - delete
+                          - list
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - capabilities
+                    type: object
+                  editor:
+                    properties:
+                      capabilities:
+                        description: Complete verb set for this tier (replaces defaults).
+                        items:
+                          description: OpenBao/Vault policy verbs.
+                          enum:
+                          - create
+                          - read
+                          - update
+                          - delete
+                          - list
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - capabilities
+                    type: object
+                  viewer:
+                    properties:
+                      capabilities:
+                        description: Complete verb set for this tier (replaces defaults).
+                        items:
+                          description: OpenBao/Vault policy verbs.
+                          enum:
+                          - create
+                          - read
+                          - update
+                          - delete
+                          - list
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - capabilities
+                    type: object
+                type: object
               rbac:
                 properties:
+                  defaultCapability:
+                    default: editor
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
+                    type: string
                   roleScope:
                     default: namespace
                     enum:
@@ -210,6 +277,7 @@ spec:
                         type: string
                     type: object
                 required:
+                - defaultCapability
                 - roleScope
                 - token
                 type: object
@@ -402,6 +470,8 @@ spec:
                 - mode
                 type: object
               tenantRoleMapping:
+                description: If tenantRoleMapping.<role> = none ⇒ ignore any capabilityOverrides.<tier>
+                  for that tier.
                 properties:
                   editor:
                     default: editor

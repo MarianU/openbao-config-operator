@@ -235,10 +235,44 @@ type RBACTokenSpec struct {
 	Renewable *bool `json:"renewable,omitempty"`
 }
 
+// OpenBao/Vault policy verbs.
+// +kubebuilder:validation:Enum=create;read;update;delete;list
+type PolicyCapability string
+
+const (
+	CapCreate PolicyCapability = "create"
+	CapRead   PolicyCapability = "read"
+	CapUpdate PolicyCapability = "update"
+	CapDelete PolicyCapability = "delete"
+	CapList   PolicyCapability = "list"
+)
+
+type PolicyCapabilityOverride struct {
+	// Complete verb set for this tier (replaces defaults).
+	// +kubebuilder:validation:MinItems=1
+	Capabilities []PolicyCapability `json:"capabilities"`
+}
+
+type PolicyOverrides struct {
+	Admin  *PolicyCapabilityOverride `json:"admin,omitempty"`
+	Editor *PolicyCapabilityOverride `json:"editor,omitempty"`
+	Viewer *PolicyCapabilityOverride `json:"viewer,omitempty"`
+}
+
 // +k8s:deepcopy-gen=true
 type RBACSpec struct {
 	// +kubebuilder:default:=namespace
 	RoleScope RoleScope `json:"roleScope"`
+
+	// Default capability tier for Kubernetes-auth workloads.
+	// Semantics:
+	//   - admin|editor|viewer → create k8s auth role(s) per scope and bind the tenant’s
+	//     ServiceAccount(s) to the corresponding OpenBao policy.
+	//   - none → **do not create** any k8s-auth role/binding for workloads
+	//     (skip k8s-auth scaffolding entirely for this tenant).
+
+	// +kubebuilder:default:=editor
+	DefaultCapability PolicyRole `json:"defaultCapability"`
 
 	Token RBACTokenSpec `json:"token"`
 }
@@ -350,13 +384,18 @@ type SafetySpec struct {
 
 // +k8s:deepcopy-gen=true
 type OpenBaoExtensionSpec struct {
-	Server            ServerSpec         `json:"server"`
-	AuthManagement    AuthManagementSpec `json:"authManagement"`
-	SSO               SSOSpec            `json:"sso"`
-	Tenancy           TenancySpec        `json:"tenancy"`
-	Layout            LayoutSpec         `json:"layout"`
-	RBAC              RBACSpec           `json:"rbac"`
-	TenantRoleMapping TenantRoleMapping  `json:"tenantRoleMapping"`
+	Server         ServerSpec         `json:"server"`
+	AuthManagement AuthManagementSpec `json:"authManagement"`
+	SSO            SSOSpec            `json:"sso"`
+	Tenancy        TenancySpec        `json:"tenancy"`
+	Layout         LayoutSpec         `json:"layout"`
+	RBAC           RBACSpec           `json:"rbac"`
+
+	//If tenantRoleMapping.<role> = none ⇒ ignore any capabilityOverrides.<tier> for that tier.
+	TenantRoleMapping TenantRoleMapping `json:"tenantRoleMapping"`
+
+	//If capabilityOverrides.<tier> present ⇒ it replaces defaults for that tier.
+	PolicyOverrides PolicyOverrides `json:"policyOverrides,omitempty"`
 
 	// +kubebuilder:validation:MinItems=1
 	Engines []EngineSpec `json:"engines"`
