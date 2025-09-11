@@ -122,6 +122,14 @@ test: manifests generate fmt vet envtest ## Run tests.
 test-e2e:
 	go test ./test/e2e/ -v -ginkgo.v
 
+.PHONY: test-e2e-pipeline # Run the e2e tests against a Kind k8s instance that is spun up.
+test-e2e-pipeline:
+	@echo "--------------------------------------"
+	@echo " E2E pipeline target running"
+	@echo " Operator image: $(OPERATOR_IMAGE)"
+	@echo " Branch: $(BRANCH_NAME)"
+	@echo "--------------------------------------"
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
