@@ -22,7 +22,7 @@ var _ = Describe("Tenant → OpenBao (namespace granularity)", Ordered, func() {
 
 	BeforeAll(func() {
 		k8sClient = utils.GetK8sClient()
-		bao = utils.NewBaoClientFromEnv() // requires BAO_ADDR and BAO_TOKEN
+		bao = utils.NewBaoClientFromEnv()
 	})
 
 	It("creates mounts, policies, and roles per tenant namespace", func(ctx SpecContext) {

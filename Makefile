@@ -117,18 +117,67 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+OPENBAO_NS   ?= openbao
+OPERATOR_NS  ?= mto-system
+VAULT_ADDR   ?= http://openbao.$(OPENBAO_NS).svc.cluster.local:8200
+POLICY_FILE  ?= test/policies/obx-e2e-read.hcl
+TOKEN_SECRET ?= mto-openbao-token
+TOKEN_KEY    ?= token
+
+# Local/test VAULT_ADDR via port-forward (host can reach cluster svc)
+VAULT_ADDR_LOCAL ?= http://127.0.0.1:18200
 
 .PHONY: test-e2e-pipeline # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e-pipeline:
-	@echo "--------------------------------------"
-	@echo " E2E pipeline target running"
-	@echo " Operator image: $(OPERATOR_IMAGE)"
-	@echo " Branch: $(BRANCH_NAME)"
-	@echo "--------------------------------------"
+test-e2e-pipeline: tenant-crd-install openbao-install openbao-provision-creds operator-deploy test-e2e
+
+.PHONY: test-e2e
+test-e2e:
+	@echo "Running e2e with VAULT_ADDR=$(VAULT_ADDR_LOCAL)"
+	@# 1) Port-forward OpenBao service -> localhost:18200
+	@kubectl -n $(OPENBAO_NS) port-forward svc/openbao 18200:8200 >/dev/null 2>&1 & echo $$! > .pf.pid
+	@# 2) Wait until the port responds
+	@for i in $$(seq 1 60); do \
+		if curl -sS -o /dev/null $(VAULT_ADDR_LOCAL)/v1/sys/health; then echo "OpenBao reachable on 127.0.0.1:18200"; break; fi; \
+		sleep 1; \
+	done
+	@# 3) Read limited token from Secret and run tests with env set
+	@TOKEN=$$(kubectl -n $(OPERATOR_NS) get secret $(TOKEN_SECRET) \
+		-o go-template='{{index .data "$(TOKEN_KEY)" | base64decode}}'); \
+	VAULT_ADDR=$(VAULT_ADDR_LOCAL) VAULT_TOKEN="$$TOKEN" \
+		go test ./test/e2e/ -v -ginkgo.v; \
+	RC=$$?; \
+	# 4) Always clean up port-forward
+	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
+	exit $$RC
+
+.PHONY: tenant-crd-install
+tenant-crd-install:
+	@echo "Installing Tenant CRD"
+	kubectl apply -f hack/e2e/mto/tenant.yaml
+
+.PHONY: openbao-install
+openbao-install:
+	kubectl create ns $(OPENBAO_NS) --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n $(OPENBAO_NS) apply -f hack/e2e/openbao/deploy.yaml
+	kubectl -n $(OPENBAO_NS) apply -f hack/e2e/openbao/svc.yaml
+	kubectl -n $(OPENBAO_NS) wait deploy/openbao --for=condition=Available --timeout=180s
+
+.PHONY: openbao-provision-creds
+openbao-provision-creds:
+	OPENBAO_NS=$(OPENBAO_NS) \
+	OPERATOR_NS=$(OPERATOR_NS) \
+	VAULT_ADDR=$(VAULT_ADDR) \
+	VAULT_TOKEN=root \
+	POLICY_NAME=obx-e2e-read \
+	POLICY_FILE=$(POLICY_FILE) \
+	./hack/e2e/openbao/provision_credentials.sh
+
+.PHONY: operator-deploy
+operator-deploy:
+	kubectl create ns $(OPERATOR_NS) --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n $(OPERATOR_NS) apply -f hack/e2e/obx/rbac.yaml
+	OPERATOR_IMAGE=$(OPERATOR_IMAGE) ./hack/apply_env_yaml.sh hack/e2e/obx/deploy.yaml.tmpl
+	kubectl -n $(OPERATOR_NS) rollout status deploy/mto-openbao-extension --timeout=180s
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
