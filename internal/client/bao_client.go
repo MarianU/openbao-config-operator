@@ -93,33 +93,55 @@ func (c *httpClient) do(req *http.Request, want2xx bool) ([]byte, error) {
 
 // CheckAuthMount returns true if an auth mount with the given path exists and is type "kubernetes".
 func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, error) {
-	mount = strings.Trim(mount, "/") + "/"
+	// Normalize the target key once (accept with/without trailing slash)
+	want := strings.Trim(mount, "/")
+
 	req, err := c.authReq(ctx, "GET", "/v1/sys/auth", nil)
 	if err != nil {
 		return false, err
 	}
-	b, err := c.do(req, true)
+	data, err := c.do(req, true)
 	if err != nil {
 		return false, err
 	}
 
-	var resp struct {
-		Data map[string]struct {
-			Type string `json:"type"`
-		} `json:"data"`
+	type mnt struct {
+		Type string `json:"type"`
 	}
-	// handle flat map too
-	if err := json.Unmarshal(b, &resp); err != nil {
-		var flat map[string]struct {
-			Type string `json:"type"`
-		}
-		if err2 := json.Unmarshal(b, &flat); err2 != nil {
-			return false, err
-		}
-		resp.Data = flat
+
+	// The response can be either wrapped ({ "data": { ... } }) or flat (map[string]mount).
+	// Try wrapped first.
+	var wrapped struct {
+		Data map[string]mnt `json:"data"`
 	}
-	m, ok := resp.Data[mount]
-	return ok && m.Type == "kubernetes", nil
+	maps := make(map[string]mnt)
+
+	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Data != nil {
+		maps = wrapped.Data
+	} else {
+		// Fallback: flat map
+		var flat map[string]mnt
+		if err2 := json.Unmarshal(data, &flat); err2 != nil {
+			return false, err // return the original unmarshal error for context
+		}
+		maps = flat
+	}
+
+	// First try direct lookup using both key variants.
+	if m, ok := maps[want+"/"]; ok && m.Type == "kubernetes" {
+		return true, nil
+	}
+	if m, ok := maps[want]; ok && m.Type == "kubernetes" {
+		return true, nil
+	}
+
+	// As a final guard, scan and normalize keys; some servers differ on trailing slash handling.
+	for k, m := range maps {
+		if strings.Trim(k, "/") == want && m.Type == "kubernetes" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // --- Mounts: verify KV v2 ---

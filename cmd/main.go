@@ -21,12 +21,9 @@ import (
 	"flag"
 	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
 	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
-	"net/http"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"os"
 	"reflect"
-	"time"
-
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -171,14 +168,11 @@ func main() {
 	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoExtension{}, mgr.GetScheme())
 	//setupLog.Info("GVK probe", "gvk", gvk.String(), "err", err)
 
-	if err := (&appcontroller.ClusterAuthReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		HTTP:   &http.Client{Timeout: 10 * time.Second},
-	}).SetupWithManager(mgr); err != nil {
+	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterAuth")
 		os.Exit(1)
 	}
+
 	// +kubebuilder:scaffold:builder
 
 	tenantReconciler, err := controllers.NewTenantReconciler(mgr)

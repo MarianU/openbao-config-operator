@@ -145,7 +145,6 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 			r := &ClusterAuthReconciler{
 				Client: fc,
 				Scheme: scheme,
-				HTTP:   srv.Client(),
 			}
 
 			// point URL to test server
