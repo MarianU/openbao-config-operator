@@ -221,7 +221,11 @@ func (in *OpenBaoExtensionSpec) DeepCopyInto(out *OpenBaoExtensionSpec) {
 	in.Layout.DeepCopyInto(&out.Layout)
 	in.RBAC.DeepCopyInto(&out.RBAC)
 	out.TenantRoleMapping = in.TenantRoleMapping
-	in.PolicyOverrides.DeepCopyInto(&out.PolicyOverrides)
+	if in.PolicyOverrides != nil {
+		in, out := &in.PolicyOverrides, &out.PolicyOverrides
+		*out = new(PolicyOverrides)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Engines != nil {
 		in, out := &in.Engines, &out.Engines
 		*out = make([]EngineSpec, len(*in))
