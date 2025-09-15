@@ -2,9 +2,12 @@ package tenant
 
 import (
 	"context"
+	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	mtocommon "github.com/stakater-ab/tenant-operator/api/common"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
@@ -206,4 +209,66 @@ func TestReconcile_FailsWhenAuthMountMissing(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
 	require.Error(t, err, "should error when kubernetes auth mount is absent")
 	require.Empty(t, fb.upsertedRoles, "no roles should be created when auth mount is missing")
+}
+
+func TestReconcile_PropagatesTokenFromExtension(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	require.NoError(t, mtov1beta3.AddToScheme(scheme))
+
+	// Import your real extension API package:
+	// extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	require.NoError(t, extv1alpha1.AddToScheme(scheme))
+
+	// OpenBaoExtension with rbac.token set
+	dur := func(s string) *metav1.Duration {
+		d, err := time.ParseDuration(s)
+		require.NoError(t, err)
+		md := metav1.Duration{Duration: d}
+		return &md
+	}
+	boolp := func(b bool) *bool { return &b }
+
+	ext := &extv1alpha1.OpenBaoExtension{}
+	ext.Name = "default"
+	ext.Spec.RBAC.Token.TTL = dur("1h")
+	ext.Spec.RBAC.Token.MaxTTL = dur("4h")
+	ext.Spec.RBAC.Token.Renewable = boolp(false)
+
+	// Tenant
+	ten := &mtov1beta3.Tenant{}
+	ten.Name = "mytenant"
+	ten.Spec = mtov1beta3.TenantSpec{
+		Namespaces: &mtov1beta3.Namespaces{
+			WithTenantPrefix: []mtocommon.Namespace{"ns"},
+		},
+	}
+
+	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten, ext).Build()
+	fb := newFakeBao(true, true)
+
+	r := &TenantReconciler{
+		Client:    cl,
+		Scheme:    scheme,
+		Log:       logr.Discard(),
+		baoClient: fb,
+		kvMount:   "secret",
+		authMount: "kubernetes",
+		env:       "prod",
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
+	require.NoError(t, err)
+
+	ns := bao.NamespaceFull("mytenant", "ns", true)
+	role := bao.RoleName("mytenant", ns)
+
+	spec, ok := fb.upsertedRoles[role]
+	require.True(t, ok, "role should be created")
+
+	// Expect seconds-formatted strings (per leaseString)
+	require.Equal(t, "3600s", spec.TokenTTL)
+	require.Equal(t, "14400s", spec.TokenMaxTTL)
+	require.NotNil(t, spec.Renewable)
+	require.Equal(t, false, *spec.Renewable)
 }

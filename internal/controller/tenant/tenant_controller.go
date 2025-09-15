@@ -5,16 +5,18 @@ package tenant
 import (
 	"context"
 	"fmt"
-	"os"
-
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"time"
 
 	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
 
+	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	// internal utils
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
 	bao "github.com/stakater-ab/mto-extension-openbao/internal/utils"
@@ -118,15 +120,29 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 
-		renew := true
+		// Defaults come from OpenBaoExtension.spec.rbac.token
+		var tokenTTL, tokenMaxTTL string
+		var tokenRenewable *bool
+
+		var extList extv1alpha1.OpenBaoExtensionList
+		if err := r.List(ctx, &extList); err == nil && len(extList.Items) > 0 {
+			ext := extList.Items[0]
+			tokenTTL = leaseString(ext.Spec.RBAC.Token.TTL)
+			tokenMaxTTL = leaseString(ext.Spec.RBAC.Token.MaxTTL)
+			if ext.Spec.RBAC.Token.Renewable != nil {
+				tokenRenewable = ext.Spec.RBAC.Token.Renewable
+			}
+		}
+
 		spec := baoclient.K8sRoleSpec{
 			Policies:                      []string{polName},
 			BoundServiceAccountNames:      []string{"default"},
 			BoundServiceAccountNamespaces: []string{nsFull},
-			TokenTTL:                      "1h",
-			TokenMaxTTL:                   "4h",
-			Renewable:                     &renew,
+			TokenTTL:                      tokenTTL,    // e.g., "3600s" or "" if unset
+			TokenMaxTTL:                   tokenMaxTTL, // e.g., "14400s" or "" if unset
+			Renewable:                     tokenRenewable,
 		}
+
 		if err := r.baoClient.UpsertK8sRole(ctx, r.authMount, roleName, spec); err != nil {
 			log.Error(err, "failed to upsert k8s auth role", "role", roleName)
 			return ctrl.Result{}, err
@@ -142,4 +158,16 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&mto.Tenant{}).
 		Complete(r)
+}
+
+// format as "<secs>s" which Vault/OpenBao accepts (e.g., "3600s")
+func leaseString(d *metav1.Duration) string {
+	if d == nil {
+		return ""
+	}
+	s := int64(d.Duration / time.Second)
+	if s < 0 {
+		s = 0
+	}
+	return fmt.Sprintf("%ds", s)
 }
