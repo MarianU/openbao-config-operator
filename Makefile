@@ -75,6 +75,8 @@ CONTAINER_TOOL ?= docker
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+TEST_CLUSTER_NAME ?= e2e-test-cluster
+
 .PHONY: all
 all: build
 
@@ -153,14 +155,13 @@ test-e2e:
 .PHONY: tenant-crd-install
 tenant-crd-install:
 	@echo "Installing Tenant CRD"
-	kubectl apply -f hack/e2e/mto/tenant.yaml
+	$(KUBECTL) apply -f hack/e2e/mto/tenant.yaml
 
 .PHONY: openbao-install
 openbao-install:
-	kubectl create ns $(OPENBAO_NS) --dry-run=client -o yaml | kubectl apply -f -
-	kubectl -n $(OPENBAO_NS) apply -f hack/e2e/openbao/deploy.yaml
-	kubectl -n $(OPENBAO_NS) apply -f hack/e2e/openbao/svc.yaml
-	kubectl -n $(OPENBAO_NS) wait deploy/openbao --for=condition=Available --timeout=180s
+	$(HELM) repo add openbao https://openbao.github.io/openbao-helm ;\
+	$(HELM) repo update ;\
+	$(HELM) install openbao openbao/openbao --namespace $(OPENBAO_NS) --create-namespace
 
 .PHONY: openbao-provision-creds
 openbao-provision-creds:
@@ -245,14 +246,23 @@ install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
-.PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+# .PHONY: deploy
+# deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+# 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+# 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
-.PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+# .PHONY: undeploy
+# undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+# 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+.PHONY: cluster
+cluster: 
+	$(KIND) cluster create --name $(TEST_CLUSTER_NAME)
+
+.PHONY: deploy
+deploy: cluster tenant-crd-install openbao-install openbao-provision-creds
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG}
+	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
 ##@ Dependencies
 
@@ -267,12 +277,17 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+HELMIFY ?= $(LOCALBIN)/helmify
+HELM ?= $(LOCALBIN)/helm
+KIND ?= $(LOCALBIN)/kind
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v1.64.4
+HELMIFY_VERSION ?= v0.4.18
+KIND_VERSION ?= v0.30.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -293,6 +308,30 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: helmify
+helmify: $(HELMIFY)
+$(HELMIFY): $(LOCALBIN)
+	$(call go-install-tool,$(HELMIFY),github.com/arttor/helmify/cmd/helmify,${HELMIFY_VERSION})
+
+.PHONY: helm
+helm: $(HELM)
+$(HELM): $(LOCALBIN)
+	@if [ ! -f $(HELM) ]; then \
+		echo "Downloading helm v3.19.0" ;\
+		curl -sSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz ;\
+		tar -zxvf helm-v3.19.0-linux-amd64.tar.gz ;\
+		mv linux-amd64/helm $(HELM) ;\
+		rm -rf linux-amd64 helm-v3.19.0-linux-amd64.tar.gz ;\
+		chmod +x $(HELM) ;\
+	else \
+		echo "Helm already installed at $(HELM)" ;\
+	fi
+
+.PHONY: kind
+kind: $(KIND)
+$(KIND): $(LOCALBIN)
+	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
