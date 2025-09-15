@@ -395,7 +395,7 @@ type OpenBaoExtensionSpec struct {
 	TenantRoleMapping TenantRoleMapping `json:"tenantRoleMapping"`
 
 	//If capabilityOverrides.<tier> present ⇒ it replaces defaults for that tier.
-	PolicyOverrides PolicyOverrides `json:"policyOverrides,omitempty"`
+	PolicyOverrides *PolicyOverrides `json:"policyOverrides,omitempty"`
 
 	// +kubebuilder:validation:MinItems=1
 	Engines []EngineSpec `json:"engines"`

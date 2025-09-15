@@ -6,15 +6,15 @@ import (
 	"context"
 	"fmt"
 	"github.com/go-logr/logr"
+	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strings"
 	"time"
-
-	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
 
 	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	// internal utils
@@ -109,11 +109,25 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, fmt.Errorf("kubernetes auth mount %q not found or wrong type; enable it or set OPENBAO_AUTH_MOUNT", r.authMount)
 	}
 
+	// --- NEW: fetch OpenBaoExtension once and compute editorCaps once ---
+	var extList extv1alpha1.OpenBaoExtensionList
+	_ = r.List(ctx, &extList) // best-effort; OK if it fails or is empty
+
+	var editorCaps []string
+	{
+		var spec *extv1alpha1.OpenBaoExtensionSpec
+		if len(extList.Items) > 0 {
+			spec = &extList.Items[0].Spec
+		}
+		editorCaps = effectiveCaps(spec, "editor")
+	}
+	// --------------------------------------------------------------------
+
 	for _, it := range wanted {
 		nsFull := bao.NamespaceFull(ten, it.short, it.withPrefix)
 		polName := bao.PolicyNameEditor(ten, nsFull)
 		roleName := bao.RoleName(ten, nsFull)
-		polBody := bao.KVv2NamespaceEditorPolicy(r.kvMount, ten, r.env, nsFull)
+		polBody := buildKVv2NamespacePolicy(r.kvMount, ten, r.env, nsFull, editorCaps)
 
 		if err := r.baoClient.UpsertPolicy(ctx, polName, polBody); err != nil {
 			log.Error(err, "failed to upsert policy", "policy", polName)
@@ -124,8 +138,8 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		var tokenTTL, tokenMaxTTL string
 		var tokenRenewable *bool
 
-		var extList extv1alpha1.OpenBaoExtensionList
-		if err := r.List(ctx, &extList); err == nil && len(extList.Items) > 0 {
+		// Reuse extList fetched above
+		if len(extList.Items) > 0 {
 			ext := extList.Items[0]
 			tokenTTL = leaseString(ext.Spec.RBAC.Token.TTL)
 			tokenMaxTTL = leaseString(ext.Spec.RBAC.Token.MaxTTL)
@@ -170,4 +184,149 @@ func leaseString(d *metav1.Duration) string {
 		s = 0
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// --- policyOverrides helpers (minimal) ---
+
+// Operator "built-ins" when no overrides are provided.
+var builtinCaps = map[string][]string{
+	"admin":  {"create", "read", "update", "delete", "list"},
+	"editor": {"create", "read", "update", "list"},
+	"viewer": {"read", "list"},
+}
+
+// Compute effective capabilities for a tier from spec (overrides replace built-ins).
+// Also enforces safety.allowDeletes=false by stripping "delete".
+func effectiveCaps(spec *extv1alpha1.OpenBaoExtensionSpec, tier string) []string {
+	base := builtinCaps[tier]
+	caps := append([]string(nil), base...)
+
+	// Guard both spec and the pointer field
+	if spec != nil && spec.PolicyOverrides != nil {
+		switch tier {
+		case "admin":
+			if spec.PolicyOverrides.Admin != nil && len(spec.PolicyOverrides.Admin.Capabilities) > 0 {
+				caps = append([]string(nil), toStrings(spec.PolicyOverrides.Admin.Capabilities)...)
+			}
+		case "editor":
+			if spec.PolicyOverrides.Editor != nil && len(spec.PolicyOverrides.Editor.Capabilities) > 0 {
+				caps = append([]string(nil), toStrings(spec.PolicyOverrides.Editor.Capabilities)...)
+			}
+		case "viewer":
+			if spec.PolicyOverrides.Viewer != nil && len(spec.PolicyOverrides.Viewer.Capabilities) > 0 {
+				caps = append([]string(nil), toStrings(spec.PolicyOverrides.Viewer.Capabilities)...)
+			}
+		}
+	}
+
+	// Safety gate (value struct; zero == false)
+	allowDeletes := false
+	if spec != nil {
+		allowDeletes = spec.Safety.AllowDeletes
+	}
+	if !allowDeletes {
+		caps = filterOut(caps, "delete")
+	}
+	return dedupeKeepOrder(caps)
+}
+
+// Build a kv-v2 policy body for the namespace scope using the given capabilities.
+// - Data paths: create/update/read; delete only if present in caps.
+// - Metadata paths: read; list if present in caps.
+// We do NOT grant metadata delete here.
+func buildKVv2NamespacePolicy(kvMount, tenant, env, nsFull string, caps []string) string {
+	prefix := fmt.Sprintf("tenants/%s/%s/%s", strings.ToLower(tenant), env, nsFull)
+	has := func(verb string) bool { return contains(caps, verb) }
+
+	var b strings.Builder
+
+	// data/*
+	var dataCaps []string
+	if has("create") {
+		dataCaps = append(dataCaps, "create")
+	}
+	if has("update") {
+		dataCaps = append(dataCaps, "update")
+	}
+	if has("read") {
+		dataCaps = append(dataCaps, "read")
+	}
+	if has("delete") {
+		dataCaps = append(dataCaps, "delete")
+	}
+	if len(dataCaps) > 0 {
+		fmt.Fprintf(&b, "path \"%s/data/%s/*\" {\n  capabilities = [%s]\n}\n\n",
+			kvMount, prefix, quotedCSV(dataCaps))
+	}
+
+	// metadata/*
+	var metaCaps []string
+	if has("read") {
+		metaCaps = append(metaCaps, "read")
+	}
+	if has("list") {
+		metaCaps = append(metaCaps, "list")
+	}
+	if len(metaCaps) > 0 {
+		fmt.Fprintf(&b, "path \"%s/metadata/%s/*\" {\n  capabilities = [%s]\n}\n\n",
+			kvMount, prefix, quotedCSV(metaCaps))
+		// Allow listing the parent prefix for UX
+		if has("list") {
+			fmt.Fprintf(&b, "path \"%s/metadata/%s\" {\n  capabilities = [\"list\"]\n}\n\n",
+				kvMount, prefix)
+		}
+	}
+
+	return b.String()
+}
+
+func filterOut(in []string, forbid string) []string {
+	out := in[:0]
+	for _, v := range in {
+		if v != forbid {
+			out = append(out, v)
+		}
+	}
+	return append([]string(nil), out...)
+}
+
+func dedupeKeepOrder(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func contains(in []string, needle string) bool {
+	for _, v := range in {
+		if v == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func quotedCSV(in []string) string {
+	if len(in) == 0 {
+		return ""
+	}
+	tmp := make([]string, len(in))
+	for i := range in {
+		tmp[i] = fmt.Sprintf("%q", in[i])
+	}
+	return strings.Join(tmp, ", ")
+}
+
+func toStrings(in []extv1alpha1.PolicyCapability) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = string(v)
+	}
+	return out
 }
