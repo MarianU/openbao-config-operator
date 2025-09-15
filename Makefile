@@ -120,7 +120,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 OPENBAO_NS   ?= openbao
-OPERATOR_NS  ?= mto-system
+OPERATOR_NS  ?= mto-extension-openbao-system
 VAULT_ADDR   ?= http://openbao.$(OPENBAO_NS).svc.cluster.local:8200
 POLICY_FILE  ?= test/policies/obx-e2e-read.hcl
 TOKEN_SECRET ?= mto-openbao-token
@@ -161,7 +161,7 @@ tenant-crd-install:
 openbao-install: helm
 	$(HELM) repo add openbao https://openbao.github.io/openbao-helm ;\
 	$(HELM) repo update ;\
-	$(HELM) install openbao openbao/openbao --namespace $(OPENBAO_NS) --create-namespace
+	$(HELM) upgrade openbao openbao/openbao --namespace $(OPENBAO_NS) --create-namespace --install --set server.dev.enabled=true
 
 .PHONY: openbao-provision-creds
 openbao-provision-creds:
@@ -251,9 +251,9 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 # 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 # 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
-# .PHONY: undeploy
-# undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-# 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+.PHONY: undeploy
+undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: cluster
 cluster: kind
@@ -265,8 +265,9 @@ cluster: kind
 	fi
 
 .PHONY: deploy
-deploy: kustomize cluster tenant-crd-install openbao-install openbao-provision-creds
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG}
+deploy: kustomize cluster install tenant-crd-install openbao-install openbao-provision-creds
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
+	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
 ##@ Dependencies

@@ -130,7 +130,9 @@ spec:
                     strategy:
                       properties:
                         mount:
-                          default: adopt
+                          default:
+                            manage: adopt
+                            path: secret
                           properties:
                             manage:
                               allOf:
