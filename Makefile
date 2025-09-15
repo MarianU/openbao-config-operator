@@ -158,7 +158,7 @@ tenant-crd-install:
 	$(KUBECTL) apply -f hack/e2e/mto/tenant.yaml
 
 .PHONY: openbao-install
-openbao-install:
+openbao-install: helm
 	$(HELM) repo add openbao https://openbao.github.io/openbao-helm ;\
 	$(HELM) repo update ;\
 	$(HELM) install openbao openbao/openbao --namespace $(OPENBAO_NS) --create-namespace
@@ -256,11 +256,16 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 # 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: cluster
-cluster: 
-	$(KIND) cluster create --name $(TEST_CLUSTER_NAME)
+cluster: kind
+	@if ! $(KIND) get clusters | grep -q "^$(TEST_CLUSTER_NAME)"; then \
+		echo "Creating kind cluster '$(TEST_CLUSTER_NAME)'"; \
+		$(KIND) create cluster --name $(TEST_CLUSTER_NAME); \
+	else \
+		echo "Kind cluster '$(TEST_CLUSTER_NAME)' already exists"; \
+	fi
 
 .PHONY: deploy
-deploy: cluster tenant-crd-install openbao-install openbao-provision-creds
+deploy: kustomize cluster tenant-crd-install openbao-install openbao-provision-creds
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG}
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
