@@ -267,13 +267,14 @@ cluster: kind
 .PHONY: pull-secret
 pull-secret:
 	echo "Creating pull secret in namespace '$(OPERATOR_NS)'"; \
+	$(KUBECTL) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KUBECTL) apply -f -; \
 	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
 		--docker-server=ghcr.io \
 		--docker-username=${GHCR_USERNAME} \
 		--docker-password=${GHCR_TOKEN} 
 
 .PHONY: deploy
-deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds
+deploy: kustomize cluster tenant-crd-install openbao-install openbao-provision-creds
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
