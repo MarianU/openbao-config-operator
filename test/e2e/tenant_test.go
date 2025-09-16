@@ -55,12 +55,12 @@ var _ = Describe("Tenant → OpenBao (namespace granularity)", Ordered, func() {
 		Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
 
-		By("verifying KV v2 mounts exist (per namespace)")
+		By("verifying the base KV v2 mount exists at secret/")
 		Eventually(func(g Gomega) {
 			mounts, err := bao.ListMounts(ctx)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(mounts.HasKVv2("secret/tenants/mytenant/prod/mytenant-namespace1/")).To(BeTrue())
-			g.Expect(mounts.HasKVv2("secret/tenants/mytenant/prod/mytenant-namespace2/")).To(BeTrue())
+			// The operator writes under subpaths of the single KV v2 engine at "secret/".
+			g.Expect(mounts.HasKVv2("secret/")).To(BeTrue())
 		}).WithTimeout(10 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 
 		By("verifying policy exists for one namespace (naming: <tenant>-<namespace>-<role>)")
