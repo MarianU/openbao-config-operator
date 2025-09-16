@@ -244,7 +244,11 @@ func TestReconcile_PropagatesTokenFromExtension(t *testing.T) {
 		},
 	}
 
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten, ext).Build()
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext). // <— add this
+		Build()
 	fb := newFakeBao(true, true)
 
 	r := &TenantReconciler{
@@ -271,6 +275,22 @@ func TestReconcile_PropagatesTokenFromExtension(t *testing.T) {
 	require.Equal(t, "14400s", spec.TokenMaxTTL)
 	require.NotNil(t, spec.Renewable)
 	require.Equal(t, false, *spec.Renewable)
+
+	// assert leaf condition written by Tenant controller (requires OBX status subresource in client)
+	var got extv1alpha1.OpenBaoExtension
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: "default"}, &got))
+
+	var cond *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "TenantsReconciled" {
+			cond = &got.Status.Conditions[i]
+			break
+		}
+	}
+	require.NotNil(t, cond, "TenantsReconciled condition should be present")
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "Success", cond.Reason)
+	require.Equal(t, got.Generation, cond.ObservedGeneration)
 }
 
 func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
@@ -297,7 +317,11 @@ func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
 		},
 	}
 
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten, ext).Build()
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext).
+		Build()
 	fb := newFakeBao(true, true)
 
 	r := &TenantReconciler{
@@ -328,6 +352,8 @@ func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
 	// Metadata block: read + list still present.
 	require.Contains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns/*"`)
 	require.Contains(t, body, `capabilities = ["read", "list"]`)
+
+	assertTenantsReconciledLeaf(t, r, "default")
 }
 
 func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
@@ -354,7 +380,11 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 		},
 	}
 
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten, ext).Build()
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext). // <— add this
+		Build()
 	fb := newFakeBao(true, true)
 
 	r := &TenantReconciler{
@@ -383,6 +413,8 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 	// Metadata block should remain read+list only (no metadata delete granted by our builder).
 	require.Contains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns/*"`)
 	require.Contains(t, body, `capabilities = ["read", "list"]`)
+
+	assertTenantsReconciledLeaf(t, r, "default")
 }
 
 func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) {
@@ -409,7 +441,11 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 		},
 	}
 
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten, ext).Build()
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext). // <— add this
+		Build()
 	fb := newFakeBao(true, true)
 
 	r := &TenantReconciler{
@@ -438,4 +474,38 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 
 	// Parent metadata prefix "list" stanza should be absent when list not granted.
 	require.NotContains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns"`)
+
+	assertTenantsReconciledLeaf(t, r, "default")
+}
+
+func getCond(t *testing.T, obx *extv1alpha1.OpenBaoExtension, typ string) *metav1.Condition {
+	for i := range obx.Status.Conditions {
+		if obx.Status.Conditions[i].Type == typ {
+			return &obx.Status.Conditions[i]
+		}
+	}
+	t.Fatalf("condition %q not found", typ)
+	return nil
+}
+
+func assertTenantsReconciledLeaf(t *testing.T, r *TenantReconciler, name string) {
+	t.Helper()
+	var got extv1alpha1.OpenBaoExtension
+	require.NoError(t, r.Client.Get(context.Background(), types.NamespacedName{Name: name}, &got))
+
+	var leaf *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == extv1alpha1.CondTenantsReconciled {
+			leaf = &got.Status.Conditions[i]
+			break
+		}
+	}
+	require.NotNil(t, leaf, "TenantsReconciled should be present")
+	require.Equal(t, metav1.ConditionTrue, leaf.Status)
+	require.Equal(t, extv1alpha1.ReasonSuccess, leaf.Reason)
+	require.Equal(t, got.Generation, leaf.ObservedGeneration)
+
+	for _, c := range got.Status.Conditions {
+		require.NotEqual(t, extv1alpha1.CondReady, c.Type)
+	}
 }
