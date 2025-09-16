@@ -268,12 +268,10 @@ cluster: kind
 pull-secret:
 	echo "Creating pull secret in namespace '$(OPERATOR_NS)'"; \
 	$(KUBECTL) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KUBECTL) apply -f - ;\
-	[ -n "$$GHCR_USERNAME" ] || { echo "GHCR_USERNAME is empty"; exit 2; }; \
-	[ -n "$$GHCR_TOKEN" ] || { echo "GHCR_TOKEN is empty"; exit 2; }; \
 	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
 		--docker-server=ghcr.io \
-		--docker-username="$$GHCR_USERNAME" \
-		--docker-password="$$GHCR_TOKEN" \
+		--docker-username=${GHCR_USERNAME} \
+		--docker-password=${GHCR_TOKEN} \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 
 .PHONY: deploy
