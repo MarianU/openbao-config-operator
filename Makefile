@@ -264,11 +264,20 @@ cluster: kind
 		echo "Kind cluster '$(TEST_CLUSTER_NAME)' already exists"; \
 	fi
 
+.PHONY: pull-secret
+pull-secret:
+	echo "Creating pull secret in namespace '$(OPERATOR_NS)'"; \
+	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
+		--docker-server=ghcr.io \
+		--docker-username=${GHCR_USERNAME} \
+		--docker-password=${GHCR_TOKEN} 
+
 .PHONY: deploy
-deploy: kustomize cluster install tenant-crd-install openbao-install openbao-provision-creds
+deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+	$(KUBECTL) rollout status deployment -n $(OPERATOR_NS) --timeout=180s
 
 ##@ Dependencies
 
@@ -283,7 +292,6 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
-HELMIFY ?= $(LOCALBIN)/helmify
 HELM ?= $(LOCALBIN)/helm
 KIND ?= $(LOCALBIN)/kind
 
@@ -292,7 +300,6 @@ KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v1.64.4
-HELMIFY_VERSION ?= v0.4.18
 KIND_VERSION ?= v0.30.0
 
 .PHONY: kustomize
