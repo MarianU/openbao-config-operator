@@ -55,6 +55,14 @@ kcurl_json -X PUT "${VAULT_ADDR}/v1/sys/policies/acl/${POLICY_NAME}" \
   --data "$(jq -n --rawfile policy "${POLICY_FILE}" '{policy:$policy}')" >/dev/null
 
 echo ">> Creating limited token"
+echo ">> Debug: Creating token with policies [\"${POLICY_NAME}\"] ttl ${TOKEN_TTL} renewable true"
+echo ">> Debug: Payload"
+jq -n \
+      --argjson policies "[\"${POLICY_NAME}\"]" \
+      --arg ttl "${TOKEN_TTL}" \
+      --argjson renewable true \
+      '{policies:$policies,ttl:$ttl,renewable:$renewable}'
+
 TOKEN="$(
   kcurl_json -X POST "${VAULT_ADDR}/v1/auth/token/create" \
     --data "$(jq -n \
