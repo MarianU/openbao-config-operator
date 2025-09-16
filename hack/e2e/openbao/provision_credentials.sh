@@ -78,7 +78,7 @@ KCURL_OUTPUT=$(kcurl_json -X POST "${VAULT_ADDR}/v1/auth/token/create" --data "$
 echo ">> Debug: kcurl_json output"
 echo "$KCURL_OUTPUT"
 
-TOKEN=$(echo "$KCURL_OUTPUT" | jq -r '.auth.client_token')
+TOKEN=$(echo "$KCURL_OUTPUT" | head -n1 | jq -r '.auth.client_token')
 echo ">> Debug: Extracted token: $TOKEN"
 [ -n "${TOKEN}" ] && [ "${TOKEN}" != "null" ] || { echo "Failed to create token"; exit 1; }
 
