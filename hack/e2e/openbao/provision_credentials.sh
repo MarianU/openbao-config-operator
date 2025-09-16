@@ -55,15 +55,31 @@ kcurl_json -X PUT "${VAULT_ADDR}/v1/sys/policies/acl/${POLICY_NAME}" \
   --data "$(jq -n --rawfile policy "${POLICY_FILE}" '{policy:$policy}')" >/dev/null
 
 echo ">> Creating limited token"
-TOKEN="$(
-  kcurl_json -X POST "${VAULT_ADDR}/v1/auth/token/create" \
-    --data "$(jq -n \
+echo ">> Debug: Creating token with policies [\"${POLICY_NAME}\"] ttl ${TOKEN_TTL} renewable true"
+echo ">> Debug: Payload"
+jq -n \
       --argjson policies "[\"${POLICY_NAME}\"]" \
       --arg ttl "${TOKEN_TTL}" \
       --argjson renewable true \
-      '{policies:$policies,ttl:$ttl,renewable:$renewable}')" \
-  | jq -r '.auth.client_token'
-)"
+      '{policies:$policies,ttl:$ttl,renewable:$renewable}'
+
+echo ">> Debug: jq input"
+JQ_INPUT=$(jq -n \
+  --argjson policies "[\"${POLICY_NAME}\"]" \
+  --arg ttl "${TOKEN_TTL}" \
+  --argjson renewable true \
+  '{policies:$policies,ttl:$ttl,renewable:$renewable}')
+echo "$JQ_INPUT"
+
+echo ">> Debug: kcurl_json command"
+echo "kcurl_json -X POST \"${VAULT_ADDR}/v1/auth/token/create\" --data '$JQ_INPUT'"
+
+KCURL_OUTPUT=$(kcurl_json -X POST "${VAULT_ADDR}/v1/auth/token/create" --data "$JQ_INPUT")
+echo ">> Debug: kcurl_json output"
+echo "$KCURL_OUTPUT"
+
+TOKEN=$(echo "$KCURL_OUTPUT" | head -n1 | jq -r '.auth.client_token')
+echo ">> Debug: Extracted token: $TOKEN"
 [ -n "${TOKEN}" ] && [ "${TOKEN}" != "null" ] || { echo "Failed to create token"; exit 1; }
 
 echo ">> Storing token in ${OPERATOR_NS}/${SECRET_NAME}.${SECRET_KEY}"

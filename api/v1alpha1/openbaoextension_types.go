@@ -299,7 +299,7 @@ type EngineStrategyMount struct {
 type EngineStrategy struct {
 	// +kubebuilder:default:=cluster
 	Scope StrategyScope `json:"scope"`
-	// +kubebuilder:default:=adopt
+	// +kubebuilder:default:={manage: adopt, path: "secret"}
 	Mount EngineStrategyMount `json:"mount"`
 }
 

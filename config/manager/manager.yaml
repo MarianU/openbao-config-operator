@@ -63,6 +63,18 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+        
+        env:
+          - name: VAULT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mto-openbao-token
+                key: token
+          - name: VAULT_ADDR
+            valueFrom:
+              configMapKeyRef:
+                name: controller-manager-config
+                key: VAULT_ADDR
         image: controller:latest
         name: manager
         securityContext:
