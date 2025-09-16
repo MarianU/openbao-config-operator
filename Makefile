@@ -267,7 +267,7 @@ cluster: kind
 .PHONY: pull-secret
 pull-secret:
 	echo "Creating pull secret in namespace '$(OPERATOR_NS)'"; \
-	$(KUBECTL) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KUBECTL) apply -f -; \
+	$(KUBECTL) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KUBECTL) apply -f - ;\
 	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
 		--docker-server=ghcr.io \
 		--docker-username=${GHCR_USERNAME} \
