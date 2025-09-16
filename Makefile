@@ -271,7 +271,7 @@ pull-secret:
 	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
 		--docker-server=ghcr.io \
 		--docker-username=${GHCR_USERNAME} \
-		--docker-password=${GHCR_TOKEN} 
+		--docker-password=${GHCR_TOKEN}
 
 .PHONY: deploy
 deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds
@@ -293,7 +293,7 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
-HELM ?= $(LOCALBIN)/helm
+HELM ?= $(shell command -v helm || echo $(PWD)/bin/helm)
 KIND ?= $(LOCALBIN)/kind
 
 ## Tool Versions
