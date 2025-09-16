@@ -95,28 +95,28 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 	cases := []tc{
 		{
 			name:          "present-unwrapped",
-			expectReason:  "KubernetesAuthPresent",
+			expectReason:  "Success",
 			expectStatus:  metav1.ConditionTrue,
 			expectRequeue: 5 * time.Minute,
 			baoStatus:     200, baoBody: unwrapped,
 		},
 		{
 			name:          "present-wrapped",
-			expectReason:  "KubernetesAuthPresent",
+			expectReason:  "Success",
 			expectStatus:  metav1.ConditionTrue,
 			expectRequeue: 5 * time.Minute,
 			baoStatus:     200, baoBody: wrapped,
 		},
 		{
 			name:          "missing",
-			expectReason:  "KubernetesAuthMissing",
+			expectReason:  "WaitingForDependencies",
 			expectStatus:  metav1.ConditionFalse,
 			expectRequeue: 5 * time.Minute,
 			baoStatus:     200, baoBody: map[string]any{"token/": map[string]any{"type": "token"}},
 		},
 		{
 			name:          "bao-error-500",
-			expectReason:  "BaoError",
+			expectReason:  "Error",
 			expectStatus:  metav1.ConditionFalse,
 			expectRequeue: 30 * time.Second,
 			baoStatus:     500, baoBody: map[string]any{"error": "boom"},
