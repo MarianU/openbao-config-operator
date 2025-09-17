@@ -122,7 +122,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 OPENBAO_NS   ?= openbao
 OPERATOR_NS  ?= mto-extension-openbao-system
 VAULT_ADDR   ?= http://openbao.$(OPENBAO_NS).svc.cluster.local:8200
-POLICY_FILE  ?= test/policies/obx-e2e-read.hcl
+POLICY_FILE  ?= test/policies/obx-e2e-manage.hcl
 TOKEN_SECRET ?= mto-openbao-token
 TOKEN_KEY    ?= token
 
@@ -136,19 +136,28 @@ test-e2e-pipeline: tenant-crd-install openbao-install openbao-provision-creds op
 test-e2e:
 	@echo "Running e2e with VAULT_ADDR=$(VAULT_ADDR_LOCAL)"
 	@# 1) Port-forward OpenBao service -> localhost:18200
-	@kubectl -n $(OPENBAO_NS) port-forward svc/openbao 18200:8200 >/dev/null 2>&1 & echo $$! > .pf.pid
-	@# 2) Wait until the port responds
-	@for i in $$(seq 1 60); do \
-		if curl -sS -o /dev/null $(VAULT_ADDR_LOCAL)/v1/sys/health; then echo "OpenBao reachable on 127.0.0.1:18200"; break; fi; \
+	@kubectl -n $(OPENBAO_NS) port-forward svc/openbao 18200:8200 >/tmp/pf.log 2>&1 & echo $$! > .pf.pid
+	@# 2) Wait until the port responds (fail if it never does)
+	@ok=0; \
+	for i in $$(seq 1 60); do \
+		if curl -sS -o /dev/null $(VAULT_ADDR_LOCAL)/v1/sys/health; then \
+			echo "OpenBao reachable on 127.0.0.1:18200"; ok=1; break; \
+		fi; \
 		sleep 1; \
-	done
+	done; \
+	if [ $$ok -ne 1 ]; then \
+		echo "ERROR: OpenBao not reachable on 127.0.0.1:18200 after 60s"; \
+		kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
+		exit 1; \
+	fi
 	@# 3) Read limited token from Secret and run tests with env set
 	@TOKEN=$$(kubectl -n $(OPERATOR_NS) get secret $(TOKEN_SECRET) \
 		-o go-template='{{index .data "$(TOKEN_KEY)" | base64decode}}'); \
+	if [ -z "$$TOKEN" ]; then echo "ERROR: empty VAULT_TOKEN from secret $(TOKEN_SECRET)"; \
+	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; exit 1; fi; \
 	VAULT_ADDR=$(VAULT_ADDR_LOCAL) VAULT_TOKEN="$$TOKEN" \
 		go test ./test/e2e/ -v -ginkgo.v; \
 	RC=$$?; \
-	# 4) Always clean up port-forward
 	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
 	exit $$RC
 
@@ -169,7 +178,7 @@ openbao-provision-creds:
 	OPERATOR_NS=$(OPERATOR_NS) \
 	VAULT_ADDR=$(VAULT_ADDR) \
 	VAULT_TOKEN=root \
-	POLICY_NAME=obx-e2e-read \
+	POLICY_NAME=obx-e2e-manage \
 	POLICY_FILE=$(POLICY_FILE) \
 	./hack/e2e/openbao/provision_credentials.sh
 
@@ -246,10 +255,14 @@ install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
-# .PHONY: deploy
-# deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-# 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-# 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+.PHONY: deploy
+deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds install
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
+	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
+	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+	$(KUBECTL) wait --for=condition=Established crd/openbaoextensions.security.mto.stakater.com --timeout=60s
+	$(KUBECTL) wait --for=condition=Established crd/tenants.tenantoperator.stakater.com --timeout=60s
+	$(KUBECTL) -n $(OPERATOR_NS) rollout status deployment/mto-extension-openbao-controller-manager --timeout=180s
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
@@ -273,13 +286,6 @@ pull-secret:
 		--docker-username=${GHCR_USERNAME} \
 		--docker-password=${GHCR_TOKEN} \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
-
-.PHONY: deploy
-deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
-	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
-	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
-	$(KUBECTL) rollout status deployment -n $(OPERATOR_NS) --timeout=180s
 
 ##@ Dependencies
 

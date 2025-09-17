@@ -3,11 +3,11 @@ set -euo pipefail
 
 # ---- Inputs ----
 OPENBAO_NS=${OPENBAO_NS:-openbao}
-OPERATOR_NS=${OPERATOR_NS:-mto-system}
+OPERATOR_NS=${OPERATOR_NS:-mto-extension-openbao-system}
 VAULT_ADDR=${VAULT_ADDR:-http://openbao.${OPENBAO_NS}.svc.cluster.local:8200}
 VAULT_TOKEN=${VAULT_TOKEN:-root}
-POLICY_NAME=${POLICY_NAME:-obx-e2e-read}
-POLICY_FILE=${POLICY_FILE:-test/policies/obx-e2e-read.hcl}
+POLICY_NAME=${POLICY_NAME:-obx-e2e-manage}
+POLICY_FILE=${POLICY_FILE:-test/policies/obx-e2e-manage.hcl}
 SECRET_NAME=${SECRET_NAME:-mto-openbao-token}
 SECRET_KEY=${SECRET_KEY:-token}
 TOKEN_TTL=${TOKEN_TTL:-1h}
@@ -49,6 +49,11 @@ kcurl_json "${VAULT_ADDR}/v1/auth/token/lookup-self" >/dev/null
 echo ">> Tuning 'secret/' to KV v2"
 kcurl_json -X POST "${VAULT_ADDR}/v1/sys/mounts/secret/tune" \
   --data '{"options":{"version":"2"}}' >/dev/null || true
+
+echo ">> Enabling auth/kubernetes"
+kcurl_json -X POST "${VAULT_ADDR}/v1/sys/auth/kubernetes" \
+curl -sS -H "X-Vault-Token: $VAULT_TOKEN" \
+  --data '{"type":"kubernetes"}' \ || true
 
 echo ">> Writing policy '${POLICY_NAME}' from ${POLICY_FILE}"
 kcurl_json -X PUT "${VAULT_ADDR}/v1/sys/policies/acl/${POLICY_NAME}" \
