@@ -53,7 +53,7 @@ kcurl_json -X POST "${VAULT_ADDR}/v1/sys/mounts/secret/tune" \
 echo ">> Enabling auth/kubernetes"
 kcurl_json -X POST "${VAULT_ADDR}/v1/sys/auth/kubernetes" \
 curl -sS -H "X-Vault-Token: $VAULT_TOKEN" \
-  --data '{"type":"kubernetes"}' \ || true
+  --data '{"type":"kubernetes"}' || true
 
 echo ">> Writing policy '${POLICY_NAME}' from ${POLICY_FILE}"
 kcurl_json -X PUT "${VAULT_ADDR}/v1/sys/policies/acl/${POLICY_NAME}" \
