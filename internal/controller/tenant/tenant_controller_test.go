@@ -2,26 +2,32 @@ package tenant
 
 import (
 	"context"
-	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	mtocommon "github.com/stakater-ab/tenant-operator/api/common"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
-
-	// internal deps under your module
+	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
 	bao "github.com/stakater-ab/mto-extension-openbao/internal/utils"
+	mtocommon "github.com/stakater-ab/tenant-operator/api/common"
+	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+)
+
+const (
+	testTenantName  = "mytenant"
+	testDefaultName = "default"
 )
 
 // ---- Fake Bao client ----
@@ -78,8 +84,6 @@ func (f *fakeBao) GetK8sRole(ctx context.Context, authMount, roleName string) (*
 	}, nil
 }
 
-// delete methods not needed yet for this unit test
-
 // ---- Tests ----
 
 func TestReconcile_WithTenantPrefix(t *testing.T) {
@@ -89,7 +93,7 @@ func TestReconcile_WithTenantPrefix(t *testing.T) {
 
 	// Seed a Tenant with withTenantPrefix
 	ten := &mtov1beta3.Tenant{}
-	ten.Name = "mytenant"
+	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
 		Namespaces: &mtov1beta3.Namespaces{
 			WithTenantPrefix: []mtocommon.Namespace{"namespace1", "namespace2"},
@@ -109,33 +113,33 @@ func TestReconcile_WithTenantPrefix(t *testing.T) {
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
 	require.NoError(t, err)
 
 	// Expect artifacts for namespace1
-	ns1 := bao.NamespaceFull("mytenant", "namespace1", true) // -> mytenant-namespace1
-	pol1 := bao.PolicyNameEditor("mytenant", ns1)            // -> mytenant-mytenant-namespace1-editor
-	role1 := bao.RoleName("mytenant", ns1)                   // -> mytenant-mytenant-namespace1
+	ns1 := bao.NamespaceFull(testTenantName, "namespace1", true) // -> mytenant-namespace1
+	pol1 := bao.PolicyNameEditor(testTenantName, ns1)            // -> mytenant-mytenant-namespace1-editor
+	role1 := bao.RoleName(testTenantName, ns1)                   // -> mytenant-mytenant-namespace1
 
 	body1, ok := fb.upsertedPolicies[pol1]
 	require.True(t, ok, "policy for ns1 should be created")
-	require.Contains(t, body1, `path "secret/data/tenants/mytenant/prod/mytenant-namespace1/*"`)
-	require.Contains(t, body1, `path "secret/metadata/tenants/mytenant/prod/mytenant-namespace1/*"`)
+	require.Contains(t, body1, fmt.Sprintf(`path "secret/data/tenants/%s/prod/%s/*"`, testTenantName, ns1))
+	require.Contains(t, body1, fmt.Sprintf(`path "secret/metadata/tenants/%s/prod/%s/*"`, testTenantName, ns1))
 
 	spec1, ok := fb.upsertedRoles[role1]
 	require.True(t, ok, "role for ns1 should be created")
 	require.ElementsMatch(t, []string{pol1}, spec1.Policies)
-	require.ElementsMatch(t, []string{"default"}, spec1.BoundServiceAccountNames)
+	require.ElementsMatch(t, []string{testDefaultName}, spec1.BoundServiceAccountNames)
 	require.ElementsMatch(t, []string{ns1}, spec1.BoundServiceAccountNamespaces)
 
 	// And for namespace2
-	ns2 := bao.NamespaceFull("mytenant", "namespace2", true)
-	pol2 := bao.PolicyNameEditor("mytenant", ns2)
-	role2 := bao.RoleName("mytenant", ns2)
+	ns2 := bao.NamespaceFull(testTenantName, "namespace2", true)
+	pol2 := bao.PolicyNameEditor(testTenantName, ns2)
+	role2 := bao.RoleName(testTenantName, ns2)
 
 	body2, ok := fb.upsertedPolicies[pol2]
 	require.True(t, ok, "policy for ns2 should be created")
-	require.Contains(t, body2, `path "secret/data/tenants/mytenant/prod/mytenant-namespace2/*"`)
+	require.Contains(t, body2, fmt.Sprintf(`path "secret/data/tenants/%s/prod/%s/*"`, testTenantName, ns2))
 
 	_, ok = fb.upsertedRoles[role2]
 	require.True(t, ok, "role for ns2 should be created")
@@ -188,7 +192,7 @@ func TestReconcile_FailsWhenAuthMountMissing(t *testing.T) {
 	require.NoError(t, mtov1beta3.AddToScheme(scheme))
 
 	ten := &mtov1beta3.Tenant{}
-	ten.Name = "mytenant"
+	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
 		Namespaces: &mtov1beta3.Namespaces{WithTenantPrefix: []mtocommon.Namespace{"ns"}},
 	}
@@ -206,7 +210,7 @@ func TestReconcile_FailsWhenAuthMountMissing(t *testing.T) {
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
 	require.Error(t, err, "should error when kubernetes auth mount is absent")
 	require.Empty(t, fb.upsertedRoles, "no roles should be created when auth mount is missing")
 }
@@ -216,8 +220,6 @@ func TestReconcile_PropagatesTokenFromExtension(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, mtov1beta3.AddToScheme(scheme))
 
-	// Import your real extension API package:
-	// extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	require.NoError(t, extv1alpha1.AddToScheme(scheme))
 
 	// OpenBaoExtension with rbac.token set
@@ -230,87 +232,14 @@ func TestReconcile_PropagatesTokenFromExtension(t *testing.T) {
 	boolp := func(b bool) *bool { return &b }
 
 	ext := &extv1alpha1.OpenBaoExtension{}
-	ext.Name = "default"
+	ext.Name = testDefaultName
 	ext.Spec.RBAC.Token.TTL = dur("1h")
 	ext.Spec.RBAC.Token.MaxTTL = dur("4h")
 	ext.Spec.RBAC.Token.Renewable = boolp(false)
 
 	// Tenant
 	ten := &mtov1beta3.Tenant{}
-	ten.Name = "mytenant"
-	ten.Spec = mtov1beta3.TenantSpec{
-		Namespaces: &mtov1beta3.Namespaces{
-			WithTenantPrefix: []mtocommon.Namespace{"ns"},
-		},
-	}
-
-	cl := crfake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(ten, ext).
-		WithStatusSubresource(ext). // <— add this
-		Build()
-	fb := newFakeBao(true, true)
-
-	r := &TenantReconciler{
-		Client:    cl,
-		Scheme:    scheme,
-		Log:       logr.Discard(),
-		baoClient: fb,
-		kvMount:   "secret",
-		authMount: "kubernetes",
-		env:       "prod",
-	}
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
-	require.NoError(t, err)
-
-	ns := bao.NamespaceFull("mytenant", "ns", true)
-	role := bao.RoleName("mytenant", ns)
-
-	spec, ok := fb.upsertedRoles[role]
-	require.True(t, ok, "role should be created")
-
-	// Expect seconds-formatted strings (per leaseString)
-	require.Equal(t, "3600s", spec.TokenTTL)
-	require.Equal(t, "14400s", spec.TokenMaxTTL)
-	require.NotNil(t, spec.Renewable)
-	require.Equal(t, false, *spec.Renewable)
-
-	// assert leaf condition written by Tenant controller (requires OBX status subresource in client)
-	var got extv1alpha1.OpenBaoExtension
-	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: "default"}, &got))
-
-	var cond *metav1.Condition
-	for i := range got.Status.Conditions {
-		if got.Status.Conditions[i].Type == "TenantsReconciled" {
-			cond = &got.Status.Conditions[i]
-			break
-		}
-	}
-	require.NotNil(t, cond, "TenantsReconciled condition should be present")
-	require.Equal(t, metav1.ConditionTrue, cond.Status)
-	require.Equal(t, "Success", cond.Reason)
-	require.Equal(t, got.Generation, cond.ObservedGeneration)
-}
-
-func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
-	t.Parallel()
-	scheme := runtime.NewScheme()
-	require.NoError(t, mtov1beta3.AddToScheme(scheme))
-	require.NoError(t, extv1alpha1.AddToScheme(scheme))
-
-	// Extension: editor explicitly includes delete, but safety=false should strip it.
-	ext := &extv1alpha1.OpenBaoExtension{}
-	ext.Name = "default"
-	ext.Spec.Safety.AllowDeletes = false
-	ext.Spec.PolicyOverrides = &extv1alpha1.PolicyOverrides{
-		Editor: &extv1alpha1.PolicyCapabilityOverride{
-			Capabilities: []extv1alpha1.PolicyCapability{"create", "read", "update", "delete", "list"},
-		},
-	}
-
-	ten := &mtov1beta3.Tenant{}
-	ten.Name = "mytenant"
+	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
 		Namespaces: &mtov1beta3.Namespaces{
 			WithTenantPrefix: []mtocommon.Namespace{"ns"},
@@ -334,26 +263,99 @@ func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
 	require.NoError(t, err)
 
-	ns := bao.NamespaceFull("mytenant", "ns", true)
-	pol := bao.PolicyNameEditor("mytenant", ns)
+	ns := bao.NamespaceFull(testTenantName, "ns", true)
+	role := bao.RoleName(testTenantName, ns)
+
+	spec, ok := fb.upsertedRoles[role]
+	require.True(t, ok, "role should be created")
+
+	// Expect seconds-formatted strings (per leaseString)
+	require.Equal(t, "3600s", spec.TokenTTL)
+	require.Equal(t, "14400s", spec.TokenMaxTTL)
+	require.NotNil(t, spec.Renewable)
+	require.Equal(t, false, *spec.Renewable)
+
+	// assert leaf condition written by Tenant controller (requires OBX status subresource in client)
+	var got extv1alpha1.OpenBaoExtension
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: testDefaultName}, &got))
+
+	var cond *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "TenantsReconciled" {
+			cond = &got.Status.Conditions[i]
+			break
+		}
+	}
+	require.NotNil(t, cond, "TenantsReconciled condition should be present")
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "Success", cond.Reason)
+	require.Equal(t, got.Generation, cond.ObservedGeneration)
+}
+
+func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	require.NoError(t, mtov1beta3.AddToScheme(scheme))
+	require.NoError(t, extv1alpha1.AddToScheme(scheme))
+
+	// Extension: editor explicitly includes delete, but safety=false should strip it.
+	ext := &extv1alpha1.OpenBaoExtension{}
+	ext.Name = testDefaultName
+	ext.Spec.Safety.AllowDeletes = false
+	ext.Spec.PolicyOverrides = &extv1alpha1.PolicyOverrides{
+		Editor: &extv1alpha1.PolicyCapabilityOverride{
+			Capabilities: []extv1alpha1.PolicyCapability{"create", "read", "update", "delete", "list"},
+		},
+	}
+
+	ten := &mtov1beta3.Tenant{}
+	ten.Name = testTenantName
+	ten.Spec = mtov1beta3.TenantSpec{
+		Namespaces: &mtov1beta3.Namespaces{
+			WithTenantPrefix: []mtocommon.Namespace{"ns"},
+		},
+	}
+
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext).
+		Build()
+	fb := newFakeBao(true, true)
+
+	r := &TenantReconciler{
+		Client:    cl,
+		Scheme:    scheme,
+		Log:       logr.Discard(),
+		baoClient: fb,
+		kvMount:   "secret",
+		authMount: "kubernetes",
+		env:       "prod",
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
+	require.NoError(t, err)
+
+	ns := bao.NamespaceFull(testTenantName, "ns", true)
+	pol := bao.PolicyNameEditor(testTenantName, ns)
 
 	body, ok := fb.upsertedPolicies[pol]
 	require.True(t, ok)
 
 	// Data block present…
-	require.Contains(t, body, `path "secret/data/tenants/mytenant/prod/mytenant-ns/*"`)
+	require.Contains(t, body, fmt.Sprintf(`path "secret/data/tenants/%s/prod/%s/*"`, testTenantName, ns))
 	// …but must NOT include delete due to safety=false.
 	require.NotContains(t, body, `capabilities = ["create", "update", "read", "delete"]`)
 	require.Contains(t, body, `capabilities = ["create", "update", "read"]`)
 
 	// Metadata block: read + list still present.
-	require.Contains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns/*"`)
+	require.Contains(t, body, fmt.Sprintf(`path "secret/metadata/tenants/%s/prod/%s/*"`, testTenantName, ns))
 	require.Contains(t, body, `capabilities = ["read", "list"]`)
 
-	assertTenantsReconciledLeaf(t, r, "default")
+	assertTenantsReconciledLeaf(t, r, testDefaultName)
 }
 
 func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
@@ -364,7 +366,7 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 
 	// Extension: editor includes delete and safety=true => delete should appear on data/*.
 	ext := &extv1alpha1.OpenBaoExtension{}
-	ext.Name = "default"
+	ext.Name = testDefaultName
 	ext.Spec.Safety.AllowDeletes = true
 	ext.Spec.PolicyOverrides = &extv1alpha1.PolicyOverrides{
 		Editor: &extv1alpha1.PolicyCapabilityOverride{
@@ -373,7 +375,7 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 	}
 
 	ten := &mtov1beta3.Tenant{}
-	ten.Name = "mytenant"
+	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
 		Namespaces: &mtov1beta3.Namespaces{
 			WithTenantPrefix: []mtocommon.Namespace{"ns"},
@@ -383,7 +385,7 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 	cl := crfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(ten, ext).
-		WithStatusSubresource(ext). // <— add this
+		WithStatusSubresource(ext).
 		Build()
 	fb := newFakeBao(true, true)
 
@@ -397,24 +399,24 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
 	require.NoError(t, err)
 
-	ns := bao.NamespaceFull("mytenant", "ns", true)
-	pol := bao.PolicyNameEditor("mytenant", ns)
+	ns := bao.NamespaceFull(testTenantName, "ns", true)
+	pol := bao.PolicyNameEditor(testTenantName, ns)
 
 	body, ok := fb.upsertedPolicies[pol]
 	require.True(t, ok)
 
 	// Data block includes delete now.
-	require.Contains(t, body, `path "secret/data/tenants/mytenant/prod/mytenant-ns/*"`)
+	require.Contains(t, body, fmt.Sprintf(`path "secret/data/tenants/%s/prod/%s/*"`, testTenantName, ns))
 	require.Contains(t, body, `capabilities = ["create", "update", "read", "delete"]`)
 
 	// Metadata block should remain read+list only (no metadata delete granted by our builder).
-	require.Contains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns/*"`)
+	require.Contains(t, body, fmt.Sprintf(`path "secret/metadata/tenants/%s/prod/%s/*"`, testTenantName, ns))
 	require.Contains(t, body, `capabilities = ["read", "list"]`)
 
-	assertTenantsReconciledLeaf(t, r, "default")
+	assertTenantsReconciledLeaf(t, r, testDefaultName)
 }
 
 func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) {
@@ -425,7 +427,7 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 
 	// Extension: editor has no list capability.
 	ext := &extv1alpha1.OpenBaoExtension{}
-	ext.Name = "default"
+	ext.Name = testDefaultName
 	ext.Spec.Safety.AllowDeletes = true // explicit, but irrelevant here
 	ext.Spec.PolicyOverrides = &extv1alpha1.PolicyOverrides{
 		Editor: &extv1alpha1.PolicyCapabilityOverride{
@@ -434,7 +436,7 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 	}
 
 	ten := &mtov1beta3.Tenant{}
-	ten.Name = "mytenant"
+	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
 		Namespaces: &mtov1beta3.Namespaces{
 			WithTenantPrefix: []mtocommon.Namespace{"ns"},
@@ -444,7 +446,7 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 	cl := crfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(ten, ext).
-		WithStatusSubresource(ext). // <— add this
+		WithStatusSubresource(ext).
 		Build()
 	fb := newFakeBao(true, true)
 
@@ -458,34 +460,24 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mytenant"}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
 	require.NoError(t, err)
 
-	ns := bao.NamespaceFull("mytenant", "ns", true)
-	pol := bao.PolicyNameEditor("mytenant", ns)
+	ns := bao.NamespaceFull(testTenantName, "ns", true)
+	pol := bao.PolicyNameEditor(testTenantName, ns)
 
 	body, ok := fb.upsertedPolicies[pol]
 	require.True(t, ok)
 
 	// Metadata/* block should be read-only (no list).
-	require.Contains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns/*"`)
+	require.Contains(t, body, fmt.Sprintf(`path "secret/metadata/tenants/%s/prod/%s/*"`, testTenantName, ns))
 	require.Contains(t, body, `capabilities = ["read"]`)
 	require.NotContains(t, body, `capabilities = ["read", "list"]`)
 
 	// Parent metadata prefix "list" stanza should be absent when list not granted.
-	require.NotContains(t, body, `path "secret/metadata/tenants/mytenant/prod/mytenant-ns"`)
+	require.NotContains(t, body, fmt.Sprintf(`path "secret/metadata/tenants/%s/prod/%s"`, testTenantName, ns))
 
-	assertTenantsReconciledLeaf(t, r, "default")
-}
-
-func getCond(t *testing.T, obx *extv1alpha1.OpenBaoExtension, typ string) *metav1.Condition {
-	for i := range obx.Status.Conditions {
-		if obx.Status.Conditions[i].Type == typ {
-			return &obx.Status.Conditions[i]
-		}
-	}
-	t.Fatalf("condition %q not found", typ)
-	return nil
+	assertTenantsReconciledLeaf(t, r, testDefaultName)
 }
 
 func assertTenantsReconciledLeaf(t *testing.T, r *TenantReconciler, name string) {
