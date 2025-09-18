@@ -19,11 +19,11 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
-	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"os"
 	"reflect"
+
+	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -38,6 +38,7 @@ import (
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
+	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
 	// +kubebuilder:scaffold:imports
 )
 
