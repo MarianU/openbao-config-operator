@@ -10,6 +10,26 @@ import (
 	"strings"
 )
 
+// ---- Local constants (client package scope) ----
+
+const (
+	// API paths
+	pathSysAuth        = "/v1/sys/auth"
+	pathSysMounts      = "/v1/sys/mounts"
+	pathPolicyPrefix   = "/v1/sys/policies/acl/"
+	pathAuthRoleFormat = "/v1/auth/%s/role/%s"
+
+	// HTTP headers / values
+	hdrVaultToken  = "X-Vault-Token"
+	hdrContentType = "Content-Type"
+	ctJSON         = "application/json"
+
+	// API type strings (server-side conventions)
+	authTypeKubernetes = "kubernetes"
+	kvType             = "kv"
+	kvVersionV2        = "2"
+)
+
 // ---- Public interface ----
 
 type Client interface {
@@ -71,9 +91,9 @@ func (c *httpClient) authReq(ctx context.Context, method, path string, body any)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Vault-Token", c.token)
+	req.Header.Set(hdrVaultToken, c.token)
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(hdrContentType, ctJSON)
 	}
 	return req, nil
 }
@@ -96,7 +116,7 @@ func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, er
 	// Normalize the target key once (accept with/without trailing slash)
 	want := strings.Trim(mount, "/")
 
-	req, err := c.authReq(ctx, "GET", "/v1/sys/auth", nil)
+	req, err := c.authReq(ctx, http.MethodGet, pathSysAuth, nil)
 	if err != nil {
 		return false, err
 	}
@@ -128,16 +148,16 @@ func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, er
 	}
 
 	// First try direct lookup using both key variants.
-	if m, ok := maps[want+"/"]; ok && m.Type == "kubernetes" {
+	if m, ok := maps[want+"/"]; ok && m.Type == authTypeKubernetes {
 		return true, nil
 	}
-	if m, ok := maps[want]; ok && m.Type == "kubernetes" {
+	if m, ok := maps[want]; ok && m.Type == authTypeKubernetes {
 		return true, nil
 	}
 
 	// As a final guard, scan and normalize keys; some servers differ on trailing slash handling.
 	for k, m := range maps {
-		if strings.Trim(k, "/") == want && m.Type == "kubernetes" {
+		if strings.Trim(k, "/") == want && m.Type == authTypeKubernetes {
 			return true, nil
 		}
 	}
@@ -149,7 +169,7 @@ func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, er
 // GET /v1/sys/mounts and check that <mount>/ exists with type=kv and options.version=2.
 func (c *httpClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, error) {
 	mount = strings.Trim(mount, "/") + "/"
-	req, err := c.authReq(ctx, "GET", "/v1/sys/mounts", nil)
+	req, err := c.authReq(ctx, http.MethodGet, pathSysMounts, nil)
 	if err != nil {
 		return false, err
 	}
@@ -178,7 +198,7 @@ func (c *httpClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, er
 	if !ok {
 		return false, nil
 	}
-	return m.Type == "kv" && m.Options != nil && m.Options["version"] == "2", nil
+	return m.Type == kvType && m.Options != nil && m.Options["version"] == kvVersionV2, nil
 }
 
 // --- Policies ---
@@ -186,7 +206,7 @@ func (c *httpClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, er
 // PUT /v1/sys/policies/acl/:name  with {"policy": "<rules>"}
 func (c *httpClient) UpsertPolicy(ctx context.Context, name, rules string) error {
 	body := map[string]string{"policy": rules}
-	req, err := c.authReq(ctx, "PUT", "/v1/sys/policies/acl/"+name, body)
+	req, err := c.authReq(ctx, http.MethodPut, pathPolicyPrefix+name, body)
 	if err != nil {
 		return err
 	}
@@ -195,7 +215,7 @@ func (c *httpClient) UpsertPolicy(ctx context.Context, name, rules string) error
 }
 
 func (c *httpClient) GetPolicy(ctx context.Context, name string) (string, error) {
-	req, err := c.authReq(ctx, "GET", "/v1/sys/policies/acl/"+name, nil)
+	req, err := c.authReq(ctx, http.MethodGet, pathPolicyPrefix+name, nil)
 	if err != nil {
 		return "", err
 	}
@@ -235,7 +255,7 @@ func (c *httpClient) UpsertK8sRole(ctx context.Context, authMount, roleName stri
 		body["token_renewable"] = *spec.Renewable
 	}
 
-	req, err := c.authReq(ctx, "POST", fmt.Sprintf("/v1/auth/%s/role/%s", authMount, roleName), body)
+	req, err := c.authReq(ctx, http.MethodPost, fmt.Sprintf(pathAuthRoleFormat, authMount, roleName), body)
 	if err != nil {
 		return err
 	}
@@ -245,7 +265,7 @@ func (c *httpClient) UpsertK8sRole(ctx context.Context, authMount, roleName stri
 
 func (c *httpClient) GetK8sRole(ctx context.Context, authMount, roleName string) (*K8sRole, error) {
 	authMount = strings.Trim(authMount, "/")
-	req, err := c.authReq(ctx, "GET", fmt.Sprintf("/v1/auth/%s/role/%s", authMount, roleName), nil)
+	req, err := c.authReq(ctx, http.MethodGet, fmt.Sprintf(pathAuthRoleFormat, authMount, roleName), nil)
 	if err != nil {
 		return nil, err
 	}
