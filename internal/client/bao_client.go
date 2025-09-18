@@ -98,14 +98,19 @@ func (c *httpClient) authReq(ctx context.Context, method, path string, body any)
 	return req, nil
 }
 
-func (c *httpClient) do(req *http.Request, want2xx bool) ([]byte, error) {
+func (c *httpClient) do(req *http.Request) ([]byte, error) {
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if want2xx && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+	defer func() {
+		_ = resp.Body.Close() // errcheck: explicitly ignore close error
+	}()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
 	}
 	return b, nil
@@ -120,7 +125,7 @@ func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	data, err := c.do(req, true)
+	data, err := c.do(req)
 	if err != nil {
 		return false, err
 	}
@@ -134,7 +139,7 @@ func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, er
 	var wrapped struct {
 		Data map[string]mnt `json:"data"`
 	}
-	maps := make(map[string]mnt)
+	var maps map[string]mnt
 
 	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Data != nil {
 		maps = wrapped.Data
@@ -173,7 +178,7 @@ func (c *httpClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	data, err := c.do(req, true)
+	data, err := c.do(req)
 	if err != nil {
 		return false, err
 	}
@@ -210,7 +215,7 @@ func (c *httpClient) UpsertPolicy(ctx context.Context, name, rules string) error
 	if err != nil {
 		return err
 	}
-	_, err = c.do(req, true)
+	_, err = c.do(req)
 	return err
 }
 
@@ -219,7 +224,7 @@ func (c *httpClient) GetPolicy(ctx context.Context, name string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	b, err := c.do(req, true)
+	b, err := c.do(req)
 	if err != nil {
 		return "", err
 	}
@@ -259,7 +264,7 @@ func (c *httpClient) UpsertK8sRole(ctx context.Context, authMount, roleName stri
 	if err != nil {
 		return err
 	}
-	_, err = c.do(req, true)
+	_, err = c.do(req)
 	return err
 }
 
@@ -269,7 +274,7 @@ func (c *httpClient) GetK8sRole(ctx context.Context, authMount, roleName string)
 	if err != nil {
 		return nil, err
 	}
-	b, err := c.do(req, true)
+	b, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
