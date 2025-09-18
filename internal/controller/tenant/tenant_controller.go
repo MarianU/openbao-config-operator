@@ -406,6 +406,7 @@ func (r *TenantReconciler) firstOpenBaoExtension(list *extv1alpha1.OpenBaoExtens
 	return &list.Items[0]
 }
 
+//nolint:unparam // keep typ flexible for future condition types
 func (r *TenantReconciler) setCondGen(ext *extv1alpha1.OpenBaoExtension, typ string, st metav1.ConditionStatus, reason, msg string) {
 	util.SetCond(&ext.Status.Conditions, typ, st, reason, msg)
 	if c := util.FindCond(ext.Status.Conditions, typ); c != nil {
@@ -414,6 +415,8 @@ func (r *TenantReconciler) setCondGen(ext *extv1alpha1.OpenBaoExtension, typ str
 }
 
 // remove condition entries of a given type to avoid stale failures persisting
+//
+//nolint:unparam // keep typ flexible for future condition types
 func (r *TenantReconciler) removeCondGen(ext *extv1alpha1.OpenBaoExtension, typ string) {
 	conds := ext.Status.Conditions
 	out := conds[:0]

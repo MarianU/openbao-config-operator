@@ -39,6 +39,7 @@ type fakeBao struct {
 	upsertedRoles    map[string]baoclient.K8sRoleSpec
 }
 
+//nolint:unparam // keep kvOK flexible for future negative-case tests
 func newFakeBao(kvOK, authOK bool) *fakeBao {
 	return &fakeBao{
 		kvOK:             kvOK,

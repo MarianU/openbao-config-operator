@@ -272,7 +272,10 @@ func (c *BaoClient) GetK8sRole(ctx context.Context, name string) (*K8sRole, erro
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil &&
-		(len(wrapped.Data.BoundSANs) > 0 || len(wrapped.Data.BoundNS) > 0 || len(wrapped.Data.Policies) > 0 || len(wrapped.Data.TokenPols) > 0) {
+		(len(wrapped.Data.BoundSANs) > 0 ||
+			len(wrapped.Data.BoundNS) > 0 ||
+			len(wrapped.Data.Policies) > 0 ||
+			len(wrapped.Data.TokenPols) > 0) {
 		pols := wrapped.Data.Policies
 		if len(pols) == 0 {
 			pols = wrapped.Data.TokenPols
