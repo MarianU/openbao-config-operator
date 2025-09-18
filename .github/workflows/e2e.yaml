@@ -21,7 +21,7 @@ jobs:
     name: Run E2E Tests
     needs: verify-label
     if: ${{ needs.verify-label.result == 'success' }}
-    uses: stakater/.github/.github/workflows/operator_e2e.yaml@fix/docker-build-private
+    uses: stakater/.github/.github/workflows/operator_e2e.yaml@main
     secrets:
       CONTAINER_REGISTRY_URL: ghcr.io/stakater
       CONTAINER_REGISTRY_USERNAME: stakater-user
