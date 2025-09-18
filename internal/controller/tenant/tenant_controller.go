@@ -75,8 +75,11 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	ten := t.GetName()
 
+	var extList extv1alpha1.OpenBaoExtensionList
+	_ = r.List(ctx, &extList)
+
 	// Best-effort: get (first) OpenBaoExtension to report status against.
-	ext := r.firstOpenBaoExtension(ctx)
+	ext := r.firstOpenBaoExtension(&extList)
 
 	// Mark TenantsReconciled as Reconciling while we work (if ext exists).
 	if ext != nil {
@@ -153,10 +156,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		_ = r.patchStatus(ctx, ext)
 	}
 
-	// fetch OpenBaoExtension once and compute editorCaps once
-	var extList extv1alpha1.OpenBaoExtensionList
-	_ = r.List(ctx, &extList) // best-effort; OK if it fails or is empty
-
+	// compute editorCaps once
 	var editorCaps []string
 	{
 		var spec *extv1alpha1.OpenBaoExtensionSpec
@@ -398,12 +398,10 @@ func toStrings(in []extv1alpha1.PolicyCapability) []string {
 
 // ---- status helpers ----
 
-func (r *TenantReconciler) firstOpenBaoExtension(ctx context.Context) *extv1alpha1.OpenBaoExtension {
-	var list extv1alpha1.OpenBaoExtensionList
-	if err := r.List(ctx, &list); err != nil || len(list.Items) == 0 {
+func (r *TenantReconciler) firstOpenBaoExtension(list *extv1alpha1.OpenBaoExtensionList) *extv1alpha1.OpenBaoExtension {
+	if list == nil || len(list.Items) == 0 {
 		return nil
 	}
-	// choose the first for now
 	return &list.Items[0]
 }
 
