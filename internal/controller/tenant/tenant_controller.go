@@ -26,7 +26,7 @@ import (
 
 	// internal utils
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
-	util "github.com/stakater-ab/mto-extension-openbao/internal/utils"
+	utils "github.com/stakater-ab/mto-extension-openbao/internal/utils"
 )
 
 type TenantReconciler struct {
@@ -84,15 +84,15 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Mark TenantsReconciled as Reconciling while we work (if ext exists).
 	if ext != nil {
-		r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonReconciling, "Reconciling tenants.")
+		utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonReconciling, "Reconciling tenants.")
 		_ = r.patchStatus(ctx, ext)
 	}
 
 	ok, err := r.baoClient.CheckKVv2Mount(ctx, r.kvMount)
 	if err != nil {
-		log.Error(err, "util mount check failed", "mount", r.kvMount)
+		log.Error(err, "utils mount check failed", "mount", r.kvMount)
 		if ext != nil {
-			r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 			_ = r.patchStatus(ctx, ext)
 		}
 		return ctrl.Result{}, err
@@ -101,14 +101,14 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		err := fmt.Errorf("kv-v2 mount %q not present or not v2", r.kvMount)
 		log.Error(err, "precondition failed")
 		if ext != nil {
-			r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 			_ = r.patchStatus(ctx, ext)
 		}
 		return ctrl.Result{}, err
 	}
 
 	if ext != nil {
-		r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
 		_ = r.patchStatus(ctx, ext)
 	}
 
@@ -128,8 +128,8 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if len(wanted) == 0 {
 		// Nothing to do for this tenant; consider it reconciled.
 		if ext != nil {
-			r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
-			r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "No namespaces for tenant.")
+			utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
+			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "No namespaces for tenant.")
 			_ = r.patchStatus(ctx, ext)
 		}
 		return ctrl.Result{}, nil
@@ -137,9 +137,9 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	okAuth, err := r.baoClient.CheckAuthMount(ctx, r.authMount)
 	if err != nil {
-		log.Error(err, "util auth-mount check failed", "authMount", r.authMount)
+		log.Error(err, "utils auth-mount check failed", "authMount", r.authMount)
 		if ext != nil {
-			r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 			_ = r.patchStatus(ctx, ext)
 		}
 		return ctrl.Result{}, err
@@ -147,13 +147,13 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !okAuth {
 		err := fmt.Errorf("kubernetes auth mount %q not found or wrong type; enable it or set OPENBAO_AUTH_MOUNT", r.authMount)
 		if ext != nil {
-			r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 			_ = r.patchStatus(ctx, ext)
 		}
 		return ctrl.Result{}, err
 	}
 	if ext != nil {
-		r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
 		_ = r.patchStatus(ctx, ext)
 	}
 
@@ -168,21 +168,21 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	for _, it := range wanted {
-		nsFull := util.NamespaceFull(ten, it.short, it.withPrefix)
-		polName := util.PolicyNameEditor(ten, nsFull)
-		roleName := util.RoleName(ten, nsFull)
+		nsFull := utils.NamespaceFull(ten, it.short, it.withPrefix)
+		polName := utils.PolicyNameEditor(ten, nsFull)
+		roleName := utils.RoleName(ten, nsFull)
 		polBody := buildKVv2NamespacePolicy(r.kvMount, ten, r.env, nsFull, editorCaps)
 
 		if err := r.baoClient.UpsertPolicy(ctx, polName, polBody); err != nil {
 			log.Error(err, "failed to upsert policy", "policy", polName)
 			if ext != nil {
-				r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+				utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 				_ = r.patchStatus(ctx, ext)
 			}
 			return ctrl.Result{}, err
 		}
 		if ext != nil {
-			r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+			utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
 			_ = r.patchStatus(ctx, ext)
 		}
 
@@ -212,13 +212,13 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.baoClient.UpsertK8sRole(ctx, r.authMount, roleName, spec); err != nil {
 			log.Error(err, "failed to upsert k8s auth role", "role", roleName)
 			if ext != nil {
-				r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+				utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 				_ = r.patchStatus(ctx, ext)
 			}
 			return ctrl.Result{}, err
 		}
 		if ext != nil {
-			r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+			utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
 			_ = r.patchStatus(ctx, ext)
 		}
 
@@ -226,8 +226,8 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if ext != nil {
-		r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
-		r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "All tenants reconciled.")
+		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
+		utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "All tenants reconciled.")
 		_ = r.patchStatus(ctx, ext)
 	}
 
@@ -404,28 +404,6 @@ func (r *TenantReconciler) firstOpenBaoExtension(list *extv1alpha1.OpenBaoExtens
 		return nil
 	}
 	return &list.Items[0]
-}
-
-//nolint:unparam // keep typ flexible for future condition types
-func (r *TenantReconciler) setCondGen(ext *extv1alpha1.OpenBaoExtension, typ string, st metav1.ConditionStatus, reason, msg string) {
-	util.SetCond(&ext.Status.Conditions, typ, st, reason, msg)
-	if c := util.FindCond(ext.Status.Conditions, typ); c != nil {
-		c.ObservedGeneration = ext.GetGeneration()
-	}
-}
-
-// remove condition entries of a given type to avoid stale failures persisting
-//
-//nolint:unparam // keep typ flexible for future condition types
-func (r *TenantReconciler) removeCondGen(ext *extv1alpha1.OpenBaoExtension, typ string) {
-	conds := ext.Status.Conditions
-	out := conds[:0]
-	for i := range conds {
-		if conds[i].Type != typ {
-			out = append(out, conds[i])
-		}
-	}
-	ext.Status.Conditions = out
 }
 
 func (r *TenantReconciler) patchStatus(ctx context.Context, ext *extv1alpha1.OpenBaoExtension) error {
