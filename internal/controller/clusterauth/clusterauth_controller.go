@@ -2,7 +2,6 @@ package clusterauth
 
 import (
 	"context"
-	"github.com/stakater-ab/mto-extension-openbao/internal/constants"
 	"strings"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 
 	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	"github.com/stakater-ab/mto-extension-openbao/internal/constants"
 	"github.com/stakater-ab/mto-extension-openbao/internal/utils"
 )
 
@@ -58,7 +58,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	l.Info("reconciling OpenBaoExtension", "ns", req.Namespace, "name", req.Name)
 
 	// Default: pessimistic until proven OK
-	r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionUnknown, extv1alpha1.ReasonReconciling, "Reconciling")
+	r.setCondGen(&obx, metav1.ConditionUnknown, extv1alpha1.ReasonReconciling, "Reconciling")
 	utils.RecomputeReadyInPlace(&obx)
 	_ = r.patchStatus(ctx, &obx)
 
@@ -66,7 +66,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if obx.Spec.Server.URL == "" ||
 		obx.Spec.Server.TokenSecretRef.Name == "" ||
 		obx.Spec.Server.TokenSecretRef.Key == "" {
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError,
+		r.setCondGen(&obx, metav1.ConditionFalse, extv1alpha1.ReasonError,
 			"spec.server.url and tokenSecretRef{name,key} are required")
 		utils.RecomputeReadyInPlace(&obx)
 		_ = r.patchStatus(ctx, &obx)
@@ -79,7 +79,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Namespace: req.Namespace,
 		Name:      obx.Spec.Server.TokenSecretRef.Name,
 	}, &sec); err != nil {
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+		r.setCondGen(&obx, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 		utils.RecomputeReadyInPlace(&obx)
 		_ = r.patchStatus(ctx, &obx)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -87,7 +87,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	raw, ok := sec.Data[obx.Spec.Server.TokenSecretRef.Key]
 	if !ok || len(raw) == 0 {
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, "secret key empty or missing")
+		r.setCondGen(&obx, metav1.ConditionFalse, extv1alpha1.ReasonError, "secret key empty or missing")
 		utils.RecomputeReadyInPlace(&obx)
 		_ = r.patchStatus(ctx, &obx)
 		return ctrl.Result{}, nil
@@ -95,7 +95,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	token := string(raw)
 	baseURL := strings.TrimRight(obx.Spec.Server.URL, "/")
 
-	r.removeCondGen(&obx, extv1alpha1.CondAuthConfigured)
+	r.removeCondGen(&obx)
 	utils.RecomputeReadyInPlace(&obx)
 	_ = r.patchStatus(ctx, &obx)
 
@@ -105,7 +105,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	okMount, err := cli.CheckAuthMount(ctx, constants.DefaultAuthMount)
 	if err != nil {
 		l.Error(err, "bao sys/auth check failed")
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+		r.setCondGen(&obx, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 		utils.RecomputeReadyInPlace(&obx)
 		_ = r.patchStatus(ctx, &obx)
 		// back off a bit
@@ -113,10 +113,10 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if okMount {
-		r.removeCondGen(&obx, extv1alpha1.CondAuthConfigured)
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "auth/"+constants.DefaultAuthMount+" mount detected")
+		r.removeCondGen(&obx)
+		r.setCondGen(&obx, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "auth/"+constants.DefaultAuthMount+" mount detected")
 	} else {
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, "auth/"+constants.DefaultAuthMount+" not mounted")
+		r.setCondGen(&obx, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, "auth/"+constants.DefaultAuthMount+" not mounted")
 	}
 	utils.RecomputeReadyInPlace(&obx)
 
@@ -129,15 +129,17 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 // setCondGen wraps utils.SetCond for AuthConfigured and stamps ObservedGeneration (tests assert this).
-func (r *ClusterAuthReconciler) setCondGen(obx *extv1alpha1.OpenBaoExtension, typ string, st metav1.ConditionStatus, reason, msg string) {
+func (r *ClusterAuthReconciler) setCondGen(obx *extv1alpha1.OpenBaoExtension, st metav1.ConditionStatus, reason, msg string) {
+	const typ = extv1alpha1.CondAuthConfigured
 	utils.SetCond(&obx.Status.Conditions, typ, st, reason, msg)
 	if c := utils.FindCond(obx.Status.Conditions, typ); c != nil {
 		c.ObservedGeneration = obx.GetGeneration()
 	}
 }
 
-// remove condition entries of a given type to avoid stale failures persisting
-func (r *ClusterAuthReconciler) removeCondGen(obx *extv1alpha1.OpenBaoExtension, typ string) {
+// remove condition entries of AuthConfigured type to avoid stale failures persisting
+func (r *ClusterAuthReconciler) removeCondGen(obx *extv1alpha1.OpenBaoExtension) {
+	const typ = extv1alpha1.CondAuthConfigured
 	conds := obx.Status.Conditions
 	out := conds[:0]
 	for i := range conds {
