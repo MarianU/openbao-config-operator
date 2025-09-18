@@ -103,6 +103,11 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	if ext != nil {
+		r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+		_ = r.patchStatus(ctx, ext)
+	}
+
 	type nsEntry struct {
 		short      string
 		withPrefix bool
@@ -119,6 +124,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if len(wanted) == 0 {
 		// Nothing to do for this tenant; consider it reconciled.
 		if ext != nil {
+			r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
 			r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "No namespaces for tenant.")
 			_ = r.patchStatus(ctx, ext)
 		}
@@ -141,6 +147,10 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			_ = r.patchStatus(ctx, ext)
 		}
 		return ctrl.Result{}, err
+	}
+	if ext != nil {
+		r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+		_ = r.patchStatus(ctx, ext)
 	}
 
 	// fetch OpenBaoExtension once and compute editorCaps once
@@ -169,6 +179,10 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				_ = r.patchStatus(ctx, ext)
 			}
 			return ctrl.Result{}, err
+		}
+		if ext != nil {
+			r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+			_ = r.patchStatus(ctx, ext)
 		}
 
 		// Defaults come from OpenBaoExtension.spec.rbac.token
@@ -202,11 +216,16 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			return ctrl.Result{}, err
 		}
+		if ext != nil {
+			r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
+			_ = r.patchStatus(ctx, ext)
+		}
 
 		log.Info("ensured tenant namespace artifacts", "nsFull", nsFull, "policy", polName, "role", roleName)
 	}
 
 	if ext != nil {
+		r.removeCondGen(ext, extv1alpha1.CondTenantsReconciled)
 		r.setCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "All tenants reconciled.")
 		_ = r.patchStatus(ctx, ext)
 	}
@@ -393,6 +412,18 @@ func (r *TenantReconciler) setCondGen(ext *extv1alpha1.OpenBaoExtension, typ str
 	if c := util.FindCond(ext.Status.Conditions, typ); c != nil {
 		c.ObservedGeneration = ext.GetGeneration()
 	}
+}
+
+// remove condition entries of a given type to avoid stale failures persisting
+func (r *TenantReconciler) removeCondGen(ext *extv1alpha1.OpenBaoExtension, typ string) {
+	conds := ext.Status.Conditions
+	out := conds[:0]
+	for i := range conds {
+		if conds[i].Type != typ {
+			out = append(out, conds[i])
+		}
+	}
+	ext.Status.Conditions = out
 }
 
 func (r *TenantReconciler) patchStatus(ctx context.Context, ext *extv1alpha1.OpenBaoExtension) error {

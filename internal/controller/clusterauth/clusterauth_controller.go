@@ -89,6 +89,10 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	token := string(raw)
 	baseURL := strings.TrimRight(obx.Spec.Server.URL, "/")
 
+	r.removeCondGen(&obx, extv1alpha1.CondAuthConfigured)
+	utils.RecomputeReadyInPlace(&obx)
+	_ = r.patchStatus(ctx, &obx)
+
 	// Use baoclient (no ad-hoc HTTP here)
 	cli := baoclient.NewHTTPClient(baseURL, token)
 
@@ -103,6 +107,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if okMount {
+		r.removeCondGen(&obx, extv1alpha1.CondAuthConfigured)
 		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "auth/kubernetes mount detected")
 	} else {
 		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, "auth/kubernetes not mounted")
@@ -123,6 +128,18 @@ func (r *ClusterAuthReconciler) setCondGen(obx *extv1alpha1.OpenBaoExtension, ty
 	if c := utils.FindCond(obx.Status.Conditions, typ); c != nil {
 		c.ObservedGeneration = obx.GetGeneration()
 	}
+}
+
+// remove condition entries of a given type to avoid stale failures persisting
+func (r *ClusterAuthReconciler) removeCondGen(obx *extv1alpha1.OpenBaoExtension, typ string) {
+	conds := obx.Status.Conditions
+	out := conds[:0]
+	for i := range conds {
+		if conds[i].Type != typ {
+			out = append(out, conds[i])
+		}
+	}
+	obx.Status.Conditions = out
 }
 
 func (r *ClusterAuthReconciler) patchStatus(ctx context.Context, obx *extv1alpha1.OpenBaoExtension) error {

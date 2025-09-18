@@ -268,6 +268,7 @@ deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
+# todo: should follow standardized approach.
 .PHONY: cluster
 cluster: kind
 	@if ! $(KIND) get clusters | grep -q "^$(TEST_CLUSTER_NAME)"; then \
