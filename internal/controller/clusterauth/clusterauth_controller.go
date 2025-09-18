@@ -2,6 +2,7 @@ package clusterauth
 
 import (
 	"context"
+	"github.com/stakater-ab/mto-extension-openbao/internal/constants"
 	"strings"
 	"time"
 
@@ -39,6 +40,11 @@ func NewClusterAuthReconciler(mgr ctrl.Manager) *ClusterAuthReconciler {
 		Scheme: mgr.GetScheme(),
 	}
 }
+
+const (
+	authCheckErrorBackoff = 30 * time.Second
+	authCheckInterval     = 5 * time.Minute
+)
 
 func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx).WithValues("openbaoextension", req.NamespacedName)
@@ -96,14 +102,14 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Use baoclient (no ad-hoc HTTP here)
 	cli := baoclient.NewHTTPClient(baseURL, token)
 
-	okMount, err := cli.CheckAuthMount(ctx, "kubernetes")
+	okMount, err := cli.CheckAuthMount(ctx, constants.DefaultAuthMount)
 	if err != nil {
 		l.Error(err, "bao sys/auth check failed")
 		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 		utils.RecomputeReadyInPlace(&obx)
 		_ = r.patchStatus(ctx, &obx)
 		// back off a bit
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 30 * authCheckErrorBackoff}, nil
 	}
 
 	if okMount {
@@ -119,7 +125,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Recheck periodically
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: authCheckInterval}, nil
 }
 
 // setCondGen wraps utils.SetCond for AuthConfigured and stamps ObservedGeneration (tests assert this).

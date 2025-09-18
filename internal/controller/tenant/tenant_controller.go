@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	"github.com/stakater-ab/mto-extension-openbao/internal/constants"
 
 	// internal utils
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
@@ -57,9 +58,9 @@ func NewTenantReconciler(mgr ctrl.Manager) (*TenantReconciler, error) {
 		Scheme:    mgr.GetScheme(),
 		Log:       ctrl.Log.WithName("controller").WithName("Tenant"),
 		baoClient: baoclient.NewHTTPClient(addr, token),
-		kvMount:   "secret",
-		authMount: "kubernetes",
-		env:       "prod",
+		kvMount:   constants.DefaultKVMount,
+		authMount: constants.DefaultAuthMount,
+		env:       constants.DefaultEnv,
 	}, nil
 }
 
