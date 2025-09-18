@@ -129,6 +129,8 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 // setCondGen wraps utils.SetCond for AuthConfigured and stamps ObservedGeneration (tests assert this).
+//
+//nolint:unparam // keep typ flexible for future condition types
 func (r *ClusterAuthReconciler) setCondGen(obx *extv1alpha1.OpenBaoExtension, st metav1.ConditionStatus, reason, msg string) {
 	const typ = extv1alpha1.CondAuthConfigured
 	utils.SetCond(&obx.Status.Conditions, typ, st, reason, msg)
