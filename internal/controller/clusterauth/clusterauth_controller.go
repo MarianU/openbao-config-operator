@@ -109,14 +109,14 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		utils.RecomputeReadyInPlace(&obx)
 		_ = r.patchStatus(ctx, &obx)
 		// back off a bit
-		return ctrl.Result{RequeueAfter: 30 * authCheckErrorBackoff}, nil
+		return ctrl.Result{RequeueAfter: authCheckErrorBackoff}, nil
 	}
 
 	if okMount {
 		r.removeCondGen(&obx, extv1alpha1.CondAuthConfigured)
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "auth/kubernetes mount detected")
+		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "auth/"+constants.DefaultAuthMount+" mount detected")
 	} else {
-		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, "auth/kubernetes not mounted")
+		r.setCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, "auth/"+constants.DefaultAuthMount+" not mounted")
 	}
 	utils.RecomputeReadyInPlace(&obx)
 
