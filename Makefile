@@ -75,6 +75,8 @@ CONTAINER_TOOL ?= docker
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+TEST_CLUSTER_NAME ?= e2e-test-cluster
+
 .PHONY: all
 all: build
 
@@ -117,10 +119,75 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
+OPENBAO_NS   ?= openbao
+OPERATOR_NS  ?= mto-extension-openbao-system
+VAULT_ADDR   ?= http://openbao.$(OPENBAO_NS).svc.cluster.local:8200
+POLICY_FILE  ?= test/policies/obx-e2e-manage.hcl
+TOKEN_SECRET ?= mto-openbao-token
+TOKEN_KEY    ?= token
+
+# Local/test VAULT_ADDR via port-forward (host can reach cluster svc)
+VAULT_ADDR_LOCAL ?= http://127.0.0.1:18200
+
+.PHONY: test-e2e-pipeline # Run the e2e tests against a Kind k8s instance that is spun up.
+test-e2e-pipeline: tenant-crd-install openbao-install openbao-provision-creds operator-deploy test-e2e
+
+.PHONY: test-e2e
 test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+	@echo "Running e2e with VAULT_ADDR=$(VAULT_ADDR_LOCAL)"
+	@# 1) Port-forward OpenBao service -> localhost:18200
+	@kubectl -n $(OPENBAO_NS) port-forward svc/openbao 18200:8200 >/tmp/pf.log 2>&1 & echo $$! > .pf.pid
+	@# 2) Wait until the port responds (fail if it never does)
+	@ok=0; \
+	for i in $$(seq 1 60); do \
+		if curl -sS -o /dev/null $(VAULT_ADDR_LOCAL)/v1/sys/health; then \
+			echo "OpenBao reachable on 127.0.0.1:18200"; ok=1; break; \
+		fi; \
+		sleep 1; \
+	done; \
+	if [ $$ok -ne 1 ]; then \
+		echo "ERROR: OpenBao not reachable on 127.0.0.1:18200 after 60s"; \
+		kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
+		exit 1; \
+	fi
+	@# 3) Read limited token from Secret and run tests with env set
+	@TOKEN=$$(kubectl -n $(OPERATOR_NS) get secret $(TOKEN_SECRET) \
+		-o go-template='{{index .data "$(TOKEN_KEY)" | base64decode}}'); \
+	if [ -z "$$TOKEN" ]; then echo "ERROR: empty VAULT_TOKEN from secret $(TOKEN_SECRET)"; \
+	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; exit 1; fi; \
+	VAULT_ADDR=$(VAULT_ADDR_LOCAL) VAULT_TOKEN="$$TOKEN" \
+		go test ./test/e2e/ -v -ginkgo.v; \
+	RC=$$?; \
+	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
+	exit $$RC
+
+.PHONY: tenant-crd-install
+tenant-crd-install:
+	@echo "Installing Tenant CRD"
+	$(KUBECTL) apply -f hack/e2e/mto/tenant.yaml
+
+.PHONY: openbao-install
+openbao-install: helm
+	$(HELM) repo add openbao https://openbao.github.io/openbao-helm ;\
+	$(HELM) repo update ;\
+	$(HELM) upgrade openbao openbao/openbao --namespace $(OPENBAO_NS) --create-namespace --install --set server.dev.enabled=true
+
+.PHONY: openbao-provision-creds
+openbao-provision-creds:
+	OPENBAO_NS=$(OPENBAO_NS) \
+	OPERATOR_NS=$(OPERATOR_NS) \
+	VAULT_ADDR=$(VAULT_ADDR) \
+	VAULT_TOKEN=root \
+	POLICY_NAME=obx-e2e-manage \
+	POLICY_FILE=$(POLICY_FILE) \
+	./hack/e2e/openbao/provision_credentials.sh
+
+.PHONY: operator-deploy
+operator-deploy:
+	kubectl create ns $(OPERATOR_NS) --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n $(OPERATOR_NS) apply -f hack/e2e/obx/rbac.yaml
+	OPERATOR_IMAGE=$(OPERATOR_IMAGE) ./hack/apply_env_yaml.sh hack/e2e/obx/deploy.yaml.tmpl
+	kubectl -n $(OPERATOR_NS) rollout status deploy/mto-openbao-extension --timeout=180s
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -145,7 +212,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build --build-arg GIT_USER=${GIT_USER} --build-arg GIT_TOKEN=${GIT_TOKEN} -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -189,13 +256,37 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds install
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
+	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+	$(KUBECTL) wait --for=condition=Established crd/openbaoextensions.security.mto.stakater.com --timeout=60s
+	$(KUBECTL) wait --for=condition=Established crd/tenants.tenantoperator.stakater.com --timeout=60s
+	$(KUBECTL) -n $(OPERATOR_NS) rollout status deployment/mto-extension-openbao-controller-manager --timeout=180s
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+# todo: should follow standardized approach.
+.PHONY: cluster
+cluster: kind
+	@if ! $(KIND) get clusters | grep -q "^$(TEST_CLUSTER_NAME)"; then \
+		echo "Creating kind cluster '$(TEST_CLUSTER_NAME)'"; \
+		$(KIND) create cluster --name $(TEST_CLUSTER_NAME); \
+	else \
+		echo "Kind cluster '$(TEST_CLUSTER_NAME)' already exists"; \
+	fi
+
+.PHONY: pull-secret
+pull-secret:
+	echo "Creating pull secret in namespace '$(OPERATOR_NS)'"; \
+	$(KUBECTL) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KUBECTL) apply -f - ;\
+	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
+		--docker-server=ghcr.io \
+		--docker-username=${GHCR_USERNAME} \
+		--docker-password=${GHCR_TOKEN} \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 
 ##@ Dependencies
 
@@ -210,12 +301,15 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+HELM ?= $(shell command -v helm || echo $(PWD)/bin/helm)
+KIND ?= $(LOCALBIN)/kind
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.3
-CONTROLLER_TOOLS_VERSION ?= v0.16.1
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v1.64.4
+KIND_VERSION ?= v0.30.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -236,6 +330,30 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: helmify
+helmify: $(HELMIFY)
+$(HELMIFY): $(LOCALBIN)
+	$(call go-install-tool,$(HELMIFY),github.com/arttor/helmify/cmd/helmify,${HELMIFY_VERSION})
+
+.PHONY: helm
+helm: $(HELM)
+$(HELM): $(LOCALBIN)
+	@if [ ! -f $(HELM) ]; then \
+		echo "Downloading helm v3.19.0" ;\
+		curl -sSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz ;\
+		tar -zxvf helm-v3.19.0-linux-amd64.tar.gz ;\
+		mv linux-amd64/helm $(HELM) ;\
+		rm -rf linux-amd64 helm-v3.19.0-linux-amd64.tar.gz ;\
+		chmod +x $(HELM) ;\
+	else \
+		echo "Helm already installed at $(HELM)" ;\
+	fi
+
+.PHONY: kind
+kind: $(KIND)
+$(KIND): $(LOCALBIN)
+	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

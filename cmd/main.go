@@ -20,20 +20,25 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"reflect"
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
+	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
+	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -44,7 +49,8 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	utilruntime.Must(obxv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(mtov1beta3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -148,6 +154,35 @@ func main() {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+
+	t := &obxv1alpha1.OpenBaoExtension{}
+	gvk, err := apiutil.GVKForObject(t, mgr.GetScheme())
+	setupLog.Info("GVK probe",
+		"err", err,
+		"gvk", gvk.String(),
+		"type", reflect.TypeOf(t).Elem().String(),
+		"pkgPath", reflect.TypeOf(t).Elem().PkgPath(),
+	)
+
+	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoExtension{}, mgr.GetScheme())
+	//setupLog.Info("GVK probe", "gvk", gvk.String(), "err", err)
+
+	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClusterAuth")
+		os.Exit(1)
+	}
+
+	// +kubebuilder:scaffold:builder
+
+	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create TenantReconciler")
+		os.Exit(1)
+	}
+	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup Tenant controller")
 		os.Exit(1)
 	}
 

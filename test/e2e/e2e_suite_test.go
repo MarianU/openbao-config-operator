@@ -22,6 +22,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	_ "github.com/stakater-ab/mto-extension-openbao/test/utils"
 )
 
 // Run e2e tests using the Ginkgo runner.
