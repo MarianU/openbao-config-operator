@@ -129,9 +129,6 @@ TOKEN_KEY    ?= token
 # Local/test VAULT_ADDR via port-forward (host can reach cluster svc)
 VAULT_ADDR_LOCAL ?= http://127.0.0.1:18200
 
-.PHONY: test-e2e-pipeline # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e-pipeline: tenant-crd-install openbao-install openbao-provision-creds operator-deploy test-e2e
-
 .PHONY: test-e2e
 test-e2e:
 	@echo "Running e2e with VAULT_ADDR=$(VAULT_ADDR_LOCAL)"
@@ -255,9 +252,18 @@ install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
+.PHONY: load-image
+load-image: kind ## Load local image into Kind cluster if it exists locally, otherwise it will be pulled
+	@if $(CONTAINER_TOOL) images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^$(IMG)$$"; then \
+		echo "Found local image $(IMG), loading into Kind cluster $(TEST_CLUSTER_NAME)"; \
+		$(KIND) load docker-image $(IMG) --name $(TEST_CLUSTER_NAME); \
+	else \
+		echo "Local image $(IMG) not found, cluster will pull from registry"; \
+	fi
+
 .PHONY: deploy
-deploy: kustomize cluster pull-secret tenant-crd-install openbao-install openbao-provision-creds install
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE):${TAG} && \
+deploy: kustomize cluster load-image pull-secret tenant-crd-install openbao-install openbao-provision-creds install
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG) && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 	$(KUBECTL) wait --for=condition=Established crd/openbaoextensions.security.mto.stakater.com --timeout=60s
