@@ -50,9 +50,9 @@ echo ">> Tuning 'secret/' to KV v2"
 kcurl_json -X POST "${VAULT_ADDR}/v1/sys/mounts/secret/tune" \
   --data '{"options":{"version":"2"}}' >/dev/null || true
 
-echo ">> Enabling auth/kubernetes"
-kcurl_json -X POST "${VAULT_ADDR}/v1/sys/auth/kubernetes" \
-  --data '{"type":"kubernetes"}' || true
+#echo ">> Enabling auth/kubernetes"
+#kcurl_json -X POST "${VAULT_ADDR}/v1/sys/auth/kubernetes" \
+#  --data '{"type":"kubernetes"}' || true
 
 echo ">> Writing policy '${POLICY_NAME}' from ${POLICY_FILE}"
 kcurl_json -X PUT "${VAULT_ADDR}/v1/sys/policies/acl/${POLICY_NAME}" \

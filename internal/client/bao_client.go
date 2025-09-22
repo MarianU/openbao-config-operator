@@ -35,6 +35,7 @@ const (
 type Client interface {
 	CheckKVv2Mount(ctx context.Context, mount string) (bool, error)
 	CheckAuthMount(ctx context.Context, mount string) (bool, error)
+	EnableAuthMount(ctx context.Context, mount string, typ string) error
 
 	UpsertPolicy(ctx context.Context, name, rules string) error
 	GetPolicy(ctx context.Context, name string) (string, error)
@@ -204,6 +205,44 @@ func (c *httpClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, er
 		return false, nil
 	}
 	return m.Type == kvType && m.Options != nil && m.Options["version"] == kvVersionV2, nil
+}
+
+// EnableAuthMount enables an auth method at /sys/auth/<mount> with the given type.
+// Succeeds idempotently: if the server returns 400 with "already in use", this returns nil.
+func (c *httpClient) EnableAuthMount(ctx context.Context, mount string, typ string) error {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return fmt.Errorf("mount path is empty")
+	}
+	if typ == "" {
+		return fmt.Errorf("auth type is empty")
+	}
+
+	body := map[string]any{"type": typ}
+	req, err := c.authReq(ctx, "POST", "/v1/sys/auth/"+mount, body)
+	if err != nil {
+		return err
+	}
+
+	// We need access to status code and body to treat specific 4xx as success.
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	msg := strings.ToLower(string(b))
+	// Vault/OpenBao commonly returns 400 with a message like "path is already in use" when the mount exists.
+	if resp.StatusCode == http.StatusBadRequest &&
+		(strings.Contains(msg, "already in use") || strings.Contains(msg, "path is already in use")) {
+		return nil
+	}
+
+	return fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
 }
 
 // --- Policies ---

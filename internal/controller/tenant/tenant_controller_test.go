@@ -53,6 +53,11 @@ func (f *fakeBao) CheckKVv2Mount(ctx context.Context, mount string) (bool, error
 func (f *fakeBao) CheckAuthMount(ctx context.Context, mount string) (bool, error) {
 	return f.authOK, nil
 }
+func (f *fakeBao) EnableAuthMount(ctx context.Context, mount, typ string) error {
+	f.authOK = true
+	return nil
+}
+
 func (f *fakeBao) UpsertPolicy(ctx context.Context, name, rules string) error {
 	f.upsertedPolicies[name] = rules
 	return nil
