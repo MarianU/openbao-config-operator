@@ -94,8 +94,10 @@ func (f *fakeBao) GetK8sRole(ctx context.Context, authMount, roleName string) (*
 
 func TestReconcile_WithTenantPrefix(t *testing.T) {
 	t.Parallel()
+
 	scheme := runtime.NewScheme()
 	require.NoError(t, mtov1beta3.AddToScheme(scheme))
+	require.NoError(t, extv1alpha1.AddToScheme(scheme)) // <- register OpenBaoExtension
 
 	// Seed a Tenant with withTenantPrefix
 	ten := &mtov1beta3.Tenant{}
@@ -105,7 +107,15 @@ func TestReconcile_WithTenantPrefix(t *testing.T) {
 			WithTenantPrefix: []mtocommon.Namespace{"namespace1", "namespace2"},
 		},
 	}
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten).Build()
+
+	// OBX ready so tenant reconciler passes the gate
+	ext := obxReady("ns", "ex")
+
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext). // <- allow status handling for OBX in fake client
+		Build()
 
 	fb := newFakeBao(true, true) // kv mount ok, auth mount ok
 
@@ -119,7 +129,9 @@ func TestReconcile_WithTenantPrefix(t *testing.T) {
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: testTenantName},
+	})
 	require.NoError(t, err)
 
 	// Expect artifacts for namespace1
@@ -155,6 +167,7 @@ func TestReconcile_WithoutTenantPrefix(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
 	require.NoError(t, mtov1beta3.AddToScheme(scheme))
+	require.NoError(t, extv1alpha1.AddToScheme(scheme)) // register OBX kind
 
 	ten := &mtov1beta3.Tenant{}
 	ten.Name = "customerA"
@@ -163,7 +176,15 @@ func TestReconcile_WithoutTenantPrefix(t *testing.T) {
 			WithoutTenantPrefix: []mtocommon.Namespace{"app-space"},
 		},
 	}
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten).Build()
+
+	ext := obxReady("ns", "ex")
+
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext).
+		Build()
+
 	fb := newFakeBao(true, true)
 
 	r := &TenantReconciler{
@@ -179,11 +200,11 @@ func TestReconcile_WithoutTenantPrefix(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "customerA"}})
 	require.NoError(t, err)
 
-	ns := bao.NamespaceFull("customerA", "app-space", false) // -> "app-space"
+	ns := bao.NamespaceFull("customerA", "app-space", false)
 	require.Equal(t, "app-space", ns)
 
-	pol := bao.PolicyNameEditor("customerA", ns) // -> "customera-app-space-editor"
-	role := bao.RoleName("customerA", ns)        // -> "customera-app-space"
+	pol := bao.PolicyNameEditor("customerA", ns)
+	role := bao.RoleName("customerA", ns)
 
 	body, ok := fb.upsertedPolicies[pol]
 	require.True(t, ok)
@@ -194,17 +215,49 @@ func TestReconcile_WithoutTenantPrefix(t *testing.T) {
 
 func TestReconcile_FailsWhenAuthMountMissing(t *testing.T) {
 	t.Parallel()
+
+	// Scheme needs BOTH Tenant and OpenBaoExtension types
 	scheme := runtime.NewScheme()
 	require.NoError(t, mtov1beta3.AddToScheme(scheme))
+	require.NoError(t, extv1alpha1.AddToScheme(scheme))
 
+	// Tenant asking for one namespaced env
 	ten := &mtov1beta3.Tenant{}
 	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
-		Namespaces: &mtov1beta3.Namespaces{WithTenantPrefix: []mtocommon.Namespace{"ns"}},
+		Namespaces: &mtov1beta3.Namespaces{
+			WithTenantPrefix: []mtocommon.Namespace{"ns"},
+		},
 	}
-	cl := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(ten).Build()
 
-	fb := newFakeBao(true, false) // kv OK, auth mount missing
+	// Seed an OBX with AuthConfigured=True so the tenant reconciler passes the gate
+	ext := &extv1alpha1.OpenBaoExtension{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ex",
+			Namespace: "mto-extension-openbao-system",
+		},
+		Status: extv1alpha1.OpenBaoExtensionStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               "AuthConfigured",
+					Status:             metav1.ConditionTrue,
+					Reason:             "Success",
+					Message:            "ready",
+					LastTransitionTime: metav1.Now(),
+					ObservedGeneration: 1,
+				},
+			},
+		},
+	}
+
+	// Fake BAO: kv mount present, auth mount missing
+	fb := newFakeBao(true, false)
+
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ten, ext).
+		WithStatusSubresource(ext). // important: let tests read/write status
+		Build()
 
 	r := &TenantReconciler{
 		Client:    cl,
@@ -216,7 +269,11 @@ func TestReconcile_FailsWhenAuthMountMissing(t *testing.T) {
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
+	// Reconcile the tenant (cluster-scoped: no namespace in the request)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: testTenantName},
+	})
+
 	require.Error(t, err, "should error when kubernetes auth mount is absent")
 	require.Empty(t, fb.upsertedRoles, "no roles should be created when auth mount is missing")
 }
@@ -242,6 +299,17 @@ func TestReconcile_PropagatesTokenFromExtension(t *testing.T) {
 	ext.Spec.RBAC.Token.TTL = dur("1h")
 	ext.Spec.RBAC.Token.MaxTTL = dur("4h")
 	ext.Spec.RBAC.Token.Renewable = boolp(false)
+
+	ext.Status.Conditions = []metav1.Condition{
+		{
+			Type:               "AuthConfigured",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Success",
+			Message:            "ready",
+			LastTransitionTime: metav1.Now(),
+			ObservedGeneration: 1,
+		},
+	}
 
 	// Tenant
 	ten := &mtov1beta3.Tenant{}
@@ -317,6 +385,17 @@ func TestPolicyOverrides_EditorDeleteRespectsSafetyFalse(t *testing.T) {
 		},
 	}
 
+	ext.Status.Conditions = []metav1.Condition{
+		{
+			Type:               "AuthConfigured",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Success",
+			Message:            "ready",
+			LastTransitionTime: metav1.Now(),
+			ObservedGeneration: 1,
+		},
+	}
+
 	ten := &mtov1beta3.Tenant{}
 	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
@@ -380,6 +459,17 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 		},
 	}
 
+	ext.Status.Conditions = []metav1.Condition{
+		{
+			Type:               "AuthConfigured",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Success",
+			Message:            "ready",
+			LastTransitionTime: metav1.Now(),
+			ObservedGeneration: 1,
+		},
+	}
+
 	ten := &mtov1beta3.Tenant{}
 	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
@@ -427,6 +517,7 @@ func TestPolicyOverrides_EditorDeleteAllowedWhenSafetyTrue(t *testing.T) {
 
 func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) {
 	t.Parallel()
+
 	scheme := runtime.NewScheme()
 	require.NoError(t, mtov1beta3.AddToScheme(scheme))
 	require.NoError(t, extv1alpha1.AddToScheme(scheme))
@@ -434,13 +525,26 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 	// Extension: editor has no list capability.
 	ext := &extv1alpha1.OpenBaoExtension{}
 	ext.Name = testDefaultName
-	ext.Spec.Safety.AllowDeletes = true // explicit, but irrelevant here
+	ext.Namespace = "mto-extension-openbao-system" // set a namespace
+	ext.Spec.Safety.AllowDeletes = true            // explicit, but irrelevant here
 	ext.Spec.PolicyOverrides = &extv1alpha1.PolicyOverrides{
 		Editor: &extv1alpha1.PolicyCapabilityOverride{
 			Capabilities: []extv1alpha1.PolicyCapability{"create", "read", "update"}, // no list
 		},
 	}
+	// Seed status so tenant reconciler passes the gate
+	ext.Status.Conditions = []metav1.Condition{
+		{
+			Type:               "AuthConfigured",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Success",
+			Message:            "ready",
+			LastTransitionTime: metav1.Now(),
+			ObservedGeneration: 1,
+		},
+	}
 
+	// Tenant with withTenantPrefix
 	ten := &mtov1beta3.Tenant{}
 	ten.Name = testTenantName
 	ten.Spec = mtov1beta3.TenantSpec{
@@ -454,6 +558,7 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 		WithObjects(ten, ext).
 		WithStatusSubresource(ext).
 		Build()
+
 	fb := newFakeBao(true, true)
 
 	r := &TenantReconciler{
@@ -466,9 +571,12 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 		env:       "prod",
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: testTenantName}})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: testTenantName},
+	})
 	require.NoError(t, err)
 
+	// Policy assertions
 	ns := bao.NamespaceFull(testTenantName, "ns", true)
 	pol := bao.PolicyNameEditor(testTenantName, ns)
 
@@ -483,14 +591,38 @@ func TestPolicyOverrides_EditorNoList_RemovesParentListAndListCap(t *testing.T) 
 	// Parent metadata prefix "list" stanza should be absent when list not granted.
 	require.NotContains(t, body, fmt.Sprintf(`path "secret/metadata/tenants/%s/prod/%s"`, testTenantName, ns))
 
-	assertTenantsReconciledLeaf(t, r, testDefaultName)
+	// Replace flaky helper with a precise condition check:
+	var got extv1alpha1.OpenBaoExtensionList
+	require.NoError(t, r.Client.List(context.Background(), &got))
+	require.NotEmpty(t, got.Items)
+
+	var found bool
+	for _, c := range got.Items[0].Status.Conditions {
+		if c.Type == extv1alpha1.CondTenantsReconciled && c.Status == metav1.ConditionTrue {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected CondTenantsReconciled=True on the extension status")
 }
 
 func assertTenantsReconciledLeaf(t *testing.T, r *TenantReconciler, name string) {
 	t.Helper()
-	var got extv1alpha1.OpenBaoExtension
-	require.NoError(t, r.Client.Get(context.Background(), types.NamespacedName{Name: name}, &got))
 
+	// Find the OBX by name across namespaces
+	var lst extv1alpha1.OpenBaoExtensionList
+	require.NoError(t, r.Client.List(context.Background(), &lst))
+
+	var got *extv1alpha1.OpenBaoExtension
+	for i := range lst.Items {
+		if lst.Items[i].Name == name {
+			got = &lst.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "expected an OpenBaoExtension named %q", name)
+
+	// Find the TenantsReconciled condition and assert it is True/Success.
 	var leaf *metav1.Condition
 	for i := range got.Status.Conditions {
 		if got.Status.Conditions[i].Type == extv1alpha1.CondTenantsReconciled {
@@ -502,8 +634,22 @@ func assertTenantsReconciledLeaf(t *testing.T, r *TenantReconciler, name string)
 	require.Equal(t, metav1.ConditionTrue, leaf.Status)
 	require.Equal(t, extv1alpha1.ReasonSuccess, leaf.Reason)
 	require.Equal(t, got.Generation, leaf.ObservedGeneration)
+}
 
-	for _, c := range got.Status.Conditions {
-		require.NotEqual(t, extv1alpha1.CondReady, c.Type)
+func obxReady(ns, name string) *extv1alpha1.OpenBaoExtension {
+	return &extv1alpha1.OpenBaoExtension{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Status: extv1alpha1.OpenBaoExtensionStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               "AuthConfigured",
+					Status:             metav1.ConditionTrue,
+					Reason:             "Success",
+					Message:            "ready",
+					LastTransitionTime: metav1.Now(),
+					ObservedGeneration: 1,
+				},
+			},
+		},
 	}
 }

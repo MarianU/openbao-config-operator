@@ -111,7 +111,7 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 			name:          "missing",
 			expectReason:  "WaitingForDependencies",
 			expectStatus:  metav1.ConditionFalse,
-			expectRequeue: 5 * time.Minute,
+			expectRequeue: 30 * time.Second,
 			baoStatus:     200, baoBody: map[string]any{"token/": map[string]any{"type": "token"}},
 		},
 		{
