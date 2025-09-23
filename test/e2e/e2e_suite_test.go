@@ -63,7 +63,9 @@ var _ = BeforeSuite(func() {
 	// Enable controller-runtime logs in test output
 	ctrl.SetLogger(crzap.New(crzap.UseDevMode(true)))
 
-	if _, err := fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: applying OpenBaoExtension from testdata/openbaoextension.yaml"); err != nil {
+	if _, err := fmt.Fprintln(
+		GinkgoWriter,
+		"[DEBUG] BeforeSuite: applying OpenBaoExtension from testdata/openbaoextension.yaml"); err != nil {
 		Expect(err).NotTo(HaveOccurred())
 	}
 	// Build k8s client with our API scheme
@@ -150,7 +152,8 @@ var _ = BeforeSuite(func() {
 			Fail(fmt.Sprintf("BeforeSuite create OpenBaoExtension failed: %v", err))
 		}
 	} else {
-		fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: OpenBaoExtension created")
+		_, _ = fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: OpenBaoExtension created")
+		Expect(err).NotTo(HaveOccurred())
 	}
 
 	// Wait for AuthConfigured=True
@@ -159,11 +162,11 @@ var _ = BeforeSuite(func() {
 		err := k8s.Get(context.Background(),
 			types.NamespacedName{Name: OBXName, Namespace: OBXNS}, &got)
 		if err != nil {
-			fmt.Fprintf(GinkgoWriter, "[DEBUG] BeforeSuite get error: %v\n", err)
+			_, _ = fmt.Fprintf(GinkgoWriter, "[DEBUG] BeforeSuite get error: %v\n", err)
 			g.Expect(err).NotTo(HaveOccurred())
 			return false
 		}
-		fmt.Fprintf(GinkgoWriter, "[DEBUG] BeforeSuite conditions=%v\n", got.Status.Conditions)
+		_, _ = fmt.Fprintf(GinkgoWriter, "[DEBUG] BeforeSuite conditions=%v\n", got.Status.Conditions)
 
 		// pass as soon as AuthConfigured=True is observed
 		for _, c := range got.Status.Conditions {
