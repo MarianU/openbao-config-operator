@@ -13,20 +13,21 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	"github.com/stakater-ab/mto-extension-openbao/internal/constants"
-
-	// internal utils
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	"github.com/stakater-ab/mto-extension-openbao/internal/constants"
 	utils "github.com/stakater-ab/mto-extension-openbao/internal/utils"
+	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
 )
 
 type TenantReconciler struct {
@@ -79,37 +80,44 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var extList extv1alpha1.OpenBaoExtensionList
 	_ = r.List(ctx, &extList)
 
-	// Best-effort: get (first) OpenBaoExtension to report status against.
+	// Best-effort: get (first) OpenBaoExtension to read status from.
 	ext := r.firstOpenBaoExtension(&extList)
 
-	// Mark TenantsReconciled as Reconciling while we work (if ext exists).
-	if ext != nil {
-		utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonReconciling, "Reconciling tenants.")
-		_ = r.patchStatus(ctx, ext)
+	// Hard gate: do not touch OpenBao or write status until AuthConfigured=True.
+	// This prevents racing ClusterAuth and eliminates a large class of conflicts.
+	if ext == nil || !hasCondTrue(ext, extv1alpha1.CondAuthConfigured) {
+		// Do NOT write any status here. Just requeue briefly.
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+
+	// We'll publish exactly one status update at the end.
+	finalStatus := metav1.ConditionTrue
+	finalReason := extv1alpha1.ReasonSuccess
+	finalMessage := "All tenants reconciled."
+	defer func() {
+		if ext == nil {
+			return
+		}
+		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
+		utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, finalStatus, finalReason, finalMessage)
+		_ = r.patchStatus(ctx, ext) // conflict-safe after we change patchStatus below
+	}()
 
 	ok, err := r.baoClient.CheckKVv2Mount(ctx, r.kvMount)
 	if err != nil {
 		log.Error(err, "utils mount check failed", "mount", r.kvMount)
-		if ext != nil {
-			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-			_ = r.patchStatus(ctx, ext)
-		}
+		finalStatus = metav1.ConditionFalse
+		finalReason = extv1alpha1.ReasonError
+		finalMessage = err.Error()
 		return ctrl.Result{}, err
 	}
 	if !ok {
 		err := fmt.Errorf("kv-v2 mount %q not present or not v2", r.kvMount)
 		log.Error(err, "precondition failed")
-		if ext != nil {
-			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-			_ = r.patchStatus(ctx, ext)
-		}
+		finalStatus = metav1.ConditionFalse
+		finalReason = extv1alpha1.ReasonError
+		finalMessage = err.Error()
 		return ctrl.Result{}, err
-	}
-
-	if ext != nil {
-		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
-		_ = r.patchStatus(ctx, ext)
 	}
 
 	type nsEntry struct {
@@ -126,35 +134,26 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 	if len(wanted) == 0 {
-		// Nothing to do for this tenant; consider it reconciled.
-		if ext != nil {
-			utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
-			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "No namespaces for tenant.")
-			_ = r.patchStatus(ctx, ext)
-		}
+		finalStatus = metav1.ConditionTrue
+		finalReason = extv1alpha1.ReasonSuccess
+		finalMessage = "No namespaces for tenant."
 		return ctrl.Result{}, nil
 	}
 
 	okAuth, err := r.baoClient.CheckAuthMount(ctx, r.authMount)
 	if err != nil {
 		log.Error(err, "utils auth-mount check failed", "authMount", r.authMount)
-		if ext != nil {
-			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-			_ = r.patchStatus(ctx, ext)
-		}
+		finalStatus = metav1.ConditionFalse
+		finalReason = extv1alpha1.ReasonError
+		finalMessage = err.Error()
 		return ctrl.Result{}, err
 	}
 	if !okAuth {
 		err := fmt.Errorf("kubernetes auth mount %q not found or wrong type; enable it or set OPENBAO_AUTH_MOUNT", r.authMount)
-		if ext != nil {
-			utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-			_ = r.patchStatus(ctx, ext)
-		}
+		finalStatus = metav1.ConditionFalse
+		finalReason = extv1alpha1.ReasonError
+		finalMessage = err.Error()
 		return ctrl.Result{}, err
-	}
-	if ext != nil {
-		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
-		_ = r.patchStatus(ctx, ext)
 	}
 
 	// compute editorCaps once
@@ -173,24 +172,18 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		roleName := utils.RoleName(ten, nsFull)
 		polBody := buildKVv2NamespacePolicy(r.kvMount, ten, r.env, nsFull, editorCaps)
 
+		// Create/update policy
 		if err := r.baoClient.UpsertPolicy(ctx, polName, polBody); err != nil {
 			log.Error(err, "failed to upsert policy", "policy", polName)
-			if ext != nil {
-				utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-				_ = r.patchStatus(ctx, ext)
-			}
+			finalStatus = metav1.ConditionFalse
+			finalReason = extv1alpha1.ReasonError
+			finalMessage = err.Error()
 			return ctrl.Result{}, err
 		}
-		if ext != nil {
-			utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
-			_ = r.patchStatus(ctx, ext)
-		}
 
-		// Defaults come from OpenBaoExtension.spec.rbac.token
+		// Defaults from OpenBaoExtension.spec.rbac.token (already fetched in extList)
 		var tokenTTL, tokenMaxTTL string
 		var tokenRenewable *bool
-
-		// Reuse extList fetched above
 		if len(extList.Items) > 0 {
 			ext0 := extList.Items[0]
 			tokenTTL = leaseString(ext0.Spec.RBAC.Token.TTL)
@@ -200,6 +193,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 		}
 
+		// Upsert kubernetes auth role
 		spec := baoclient.K8sRoleSpec{
 			Policies:                      []string{polName},
 			BoundServiceAccountNames:      []string{"default"},
@@ -208,27 +202,15 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			TokenMaxTTL:                   tokenMaxTTL,
 			Renewable:                     tokenRenewable,
 		}
-
 		if err := r.baoClient.UpsertK8sRole(ctx, r.authMount, roleName, spec); err != nil {
 			log.Error(err, "failed to upsert k8s auth role", "role", roleName)
-			if ext != nil {
-				utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-				_ = r.patchStatus(ctx, ext)
-			}
+			finalStatus = metav1.ConditionFalse
+			finalReason = extv1alpha1.ReasonError
+			finalMessage = err.Error()
 			return ctrl.Result{}, err
-		}
-		if ext != nil {
-			utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
-			_ = r.patchStatus(ctx, ext)
 		}
 
 		log.Info("ensured tenant namespace artifacts", "nsFull", nsFull, "policy", polName, "role", roleName)
-	}
-
-	if ext != nil {
-		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
-		utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "All tenants reconciled.")
-		_ = r.patchStatus(ctx, ext)
 	}
 
 	return ctrl.Result{}, nil
@@ -407,5 +389,29 @@ func (r *TenantReconciler) firstOpenBaoExtension(list *extv1alpha1.OpenBaoExtens
 }
 
 func (r *TenantReconciler) patchStatus(ctx context.Context, ext *extv1alpha1.OpenBaoExtension) error {
-	return r.Status().Update(ctx, ext)
+	key := types.NamespacedName{Namespace: ext.GetNamespace(), Name: ext.GetName()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cur extv1alpha1.OpenBaoExtension
+		if err := r.Get(ctx, key, &cur); err != nil {
+			return err
+		}
+		orig := cur.DeepCopy()
+
+		// Replace conditions from the ext passed in (which has our mutations)
+		cur.Status.Conditions = ext.Status.Conditions
+		// If you rely on a Ready rollup, recompute here (or keep it owned by ClusterAuth).
+		utils.RecomputeReadyInPlace(&cur)
+
+		return r.Status().Patch(ctx, &cur, client.MergeFrom(orig))
+	})
+}
+
+// hasCondTrue returns true if .status.conditions contains {Type: t, Status: True}.
+func hasCondTrue(ext *extv1alpha1.OpenBaoExtension, t string) bool {
+	for _, c := range ext.Status.Conditions {
+		if c.Type == t && c.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }

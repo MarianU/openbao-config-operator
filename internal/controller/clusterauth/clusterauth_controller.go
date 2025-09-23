@@ -2,6 +2,7 @@ package clusterauth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -9,9 +10,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -27,7 +30,7 @@ import (
 //+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaoextensions,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaoextensions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaoextensions/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 type ClusterAuthReconciler struct {
 	client.Client
@@ -51,25 +54,17 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	var obx extv1alpha1.OpenBaoExtension
 	if err := r.Get(ctx, req.NamespacedName, &obx); err != nil {
-		// deleted or not found; nothing to do
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	l.Info("reconciling OpenBaoExtension", "ns", req.Namespace, "name", req.Name)
 
-	// Default: pessimistic until proven OK
-	utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionUnknown, extv1alpha1.ReasonReconciling, "Reconciling")
-	utils.RecomputeReadyInPlace(&obx)
-	_ = r.patchStatus(ctx, &obx)
-
-	// Validate config
+	// Validate minimal spec early
 	if obx.Spec.Server.URL == "" ||
 		obx.Spec.Server.TokenSecretRef.Name == "" ||
 		obx.Spec.Server.TokenSecretRef.Key == "" {
-		utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError,
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonError,
 			"spec.server.url and tokenSecretRef{name,key} are required")
-		utils.RecomputeReadyInPlace(&obx)
-		_ = r.patchStatus(ctx, &obx)
 		return ctrl.Result{}, nil
 	}
 
@@ -79,58 +74,85 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Namespace: req.Namespace,
 		Name:      obx.Spec.Server.TokenSecretRef.Name,
 	}, &sec); err != nil {
-		utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-		utils.RecomputeReadyInPlace(&obx)
-		_ = r.patchStatus(ctx, &obx)
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-
 	raw, ok := sec.Data[obx.Spec.Server.TokenSecretRef.Key]
 	if !ok || len(raw) == 0 {
-		utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, "secret key empty or missing")
-		utils.RecomputeReadyInPlace(&obx)
-		_ = r.patchStatus(ctx, &obx)
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonError, "secret key empty or missing")
 		return ctrl.Result{}, nil
 	}
+
 	token := string(raw)
 	baseURL := strings.TrimRight(obx.Spec.Server.URL, "/")
-
-	utils.RemoveCondGen(&obx, extv1alpha1.CondAuthConfigured)
-	utils.RecomputeReadyInPlace(&obx)
-	_ = r.patchStatus(ctx, &obx)
-
-	// Use baoclient (no ad-hoc HTTP here)
 	cli := baoclient.NewHTTPClient(baseURL, token)
 
+	// Check mount
 	okMount, err := cli.CheckAuthMount(ctx, constants.DefaultAuthMount)
 	if err != nil {
 		l.Error(err, "bao sys/auth check failed")
-		utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
-		utils.RecomputeReadyInPlace(&obx)
-		_ = r.patchStatus(ctx, &obx)
-		// back off a bit
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
 		return ctrl.Result{RequeueAfter: authCheckErrorBackoff}, nil
 	}
 
+	// Enable if missing
+	if !okMount {
+		l.Info("auth mount missing; enabling", "mount", constants.DefaultAuthMount, "type", "kubernetes")
+		if err := enableKubernetesAuth(ctx, cli, constants.DefaultAuthMount); err != nil {
+			l.Error(err, "failed to enable kubernetes auth", "mount", constants.DefaultAuthMount)
+			msg := err.Error()
+			if isForbidden(err) {
+				msg = "permission denied enabling auth mount; token needs capabilities on sys/auth/* (create, update, read, sudo)"
+			}
+			_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, msg)
+			return ctrl.Result{RequeueAfter: authCheckErrorBackoff}, nil
+		}
+		// Re-check
+		ok, err := cli.CheckAuthMount(ctx, constants.DefaultAuthMount)
+		if err != nil {
+			l.Error(err, "bao sys/auth re-check failed after enable")
+			_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+			return ctrl.Result{RequeueAfter: authCheckErrorBackoff}, nil
+		}
+		okMount = ok
+	}
+
+	// Final condition update (single write)
 	if okMount {
-		utils.RemoveCondGen(&obx, extv1alpha1.CondAuthConfigured)
-		utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionTrue, extv1alpha1.ReasonSuccess, "auth/"+constants.DefaultAuthMount+" mount detected")
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionTrue, extv1alpha1.ReasonSuccess,
+			"auth/"+constants.DefaultAuthMount+" mount present")
 	} else {
-		utils.SetCondGen(&obx, extv1alpha1.CondAuthConfigured, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies, "auth/"+constants.DefaultAuthMount+" not mounted")
-	}
-	utils.RecomputeReadyInPlace(&obx)
-
-	if err := r.patchStatus(ctx, &obx); err != nil {
-		return ctrl.Result{}, err
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonWaitingDependencies,
+			"auth/"+constants.DefaultAuthMount+" not mounted")
 	}
 
-	// Recheck periodically
+	// keep self-healing
 	return ctrl.Result{RequeueAfter: authCheckInterval}, nil
 }
 
-func (r *ClusterAuthReconciler) patchStatus(ctx context.Context, obx *extv1alpha1.OpenBaoExtension) error {
-	// conservative: Update() on the status subresource (your RBAC already allows it)
-	return r.Status().Update(ctx, obx)
+// setAuthCond updates only the status.conditions with conflict-safe patching.
+// It re-fetches the latest object, mutates, and patches status with MergeFrom.
+// Ready is recomputed in-place via your utils helper.
+func (r *ClusterAuthReconciler) setAuthCond(
+	ctx context.Context,
+	key types.NamespacedName,
+	status metav1.ConditionStatus,
+	reason, msg string,
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cur extv1alpha1.OpenBaoExtension
+		if err := r.Get(ctx, key, &cur); err != nil {
+			return err
+		}
+		orig := cur.DeepCopy()
+
+		// Mutate condition
+		utils.SetCondGen(&cur, extv1alpha1.CondAuthConfigured, status, reason, msg)
+		utils.RecomputeReadyInPlace(&cur)
+
+		// Patch only status
+		return r.Status().Patch(ctx, &cur, client.MergeFrom(orig))
+	})
 }
 
 // SetupWithManager registers the controller.
@@ -141,7 +163,6 @@ func (r *ClusterAuthReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return nil
 		}
 		var list extv1alpha1.OpenBaoExtensionList
-		// list only OBX in the Secret's namespace
 		if err := r.Client.List(ctx, &list, client.InNamespace(sec.Namespace)); err != nil {
 			return nil
 		}
@@ -160,5 +181,35 @@ func (r *ClusterAuthReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&extv1alpha1.OpenBaoExtension{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecret)).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// --- helpers ---
+
+func enableKubernetesAuth(ctx context.Context, cli baoclient.Client, mount string) error {
+	type enabler interface {
+		EnableAuthMount(context.Context, string, string) error
+	}
+	if c, ok := any(cli).(enabler); ok {
+		return c.EnableAuthMount(ctx, mount, "kubernetes")
+	}
+	type ensurer interface {
+		EnsureAuthMount(context.Context, string, string) error
+	}
+	if c, ok := any(cli).(ensurer); ok {
+		return c.EnsureAuthMount(ctx, mount, "kubernetes")
+	}
+	return errors.New("baoclient: no EnableAuthMount/EnsureAuthMount available to enable auth mount")
+}
+
+func isForbidden(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "permission denied") ||
+		strings.Contains(msg, "forbidden") ||
+		strings.Contains(msg, "status 403") ||
+		strings.Contains(msg, "code 403")
 }

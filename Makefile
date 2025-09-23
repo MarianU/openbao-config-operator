@@ -147,12 +147,19 @@ test-e2e:
 		kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
 		exit 1; \
 	fi
+#	@# 2b) Apply OpenBaoExtension CR (ensures ClusterAuth reconciles)
+#	@kubectl apply -f hack/e2e/obx/openbaoextension.yaml
+#	@# Wait until the CR reports Ready, instead of racing
+#	@kubectl -n $(OPERATOR_NS) wait --for=condition=Ready --timeout=120s openbaoextension/obx || \
+#		{ echo "OpenBaoExtension not Ready in time"; exit 1; }
 	@# 3) Read limited token from Secret and run tests with env set
 	@TOKEN=$$(kubectl -n $(OPERATOR_NS) get secret $(TOKEN_SECRET) \
 		-o go-template='{{index .data "$(TOKEN_KEY)" | base64decode}}'); \
 	if [ -z "$$TOKEN" ]; then echo "ERROR: empty VAULT_TOKEN from secret $(TOKEN_SECRET)"; \
 	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; exit 1; fi; \
-	VAULT_ADDR=$(VAULT_ADDR_LOCAL) VAULT_TOKEN="$$TOKEN" \
+	VAULT_ADDR=$(VAULT_ADDR_LOCAL) VAULT_TOKEN="$$TOKEN" OPERATOR_NS=$(OPERATOR_NS) \
+	OPENBAO_NS=$(OPENBAO_NS) OPENBAO_SVC=openbao OPENBAO_SCHEME=http OPENBAO_PORT=8200 \
+	OPENBAO_TOKEN_SECRET=mto-openbao-token OPENBAO_TOKEN_KEY=token \
 		go test ./test/e2e/ -v -ginkgo.v; \
 	RC=$$?; \
 	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \

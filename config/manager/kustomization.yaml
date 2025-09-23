@@ -5,7 +5,7 @@ kind: Kustomization
 images:
 - name: controller
   newName: ghcr.io/stakater/mto-extension-openbao
-  newTag: v0.0.1-SNAPSHOT-PR-6-19bef77e
+  newTag: v0.0.1-snapshot-pr-8-a2532b47
 configMapGenerator:
 - literals:
   - VAULT_ADDR=http://openbao.openbao.svc.cluster.local:8200
