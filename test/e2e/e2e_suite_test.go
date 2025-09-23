@@ -19,7 +19,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"k8s.io/client-go/util/retry"
 	"os"
 	"testing"
 	"time"
@@ -31,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -63,8 +63,9 @@ var _ = BeforeSuite(func() {
 	// Enable controller-runtime logs in test output
 	ctrl.SetLogger(crzap.New(crzap.UseDevMode(true)))
 
-	fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: applying OpenBaoExtension from testdata/openbaoextension.yaml")
-
+	if _, err := fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: applying OpenBaoExtension from testdata/openbaoextension.yaml"); err != nil {
+		Expect(err).NotTo(HaveOccurred())
+	}
 	// Build k8s client with our API scheme
 	scheme := runtime.NewScheme()
 	Expect(extv1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -90,8 +91,10 @@ var _ = BeforeSuite(func() {
 		proto := getenv("OPENBAO_SCHEME", "http")
 		port := getenv("OPENBAO_PORT", "8200")
 		url = fmt.Sprintf("%s://%s.%s.svc:%s", proto, svc, baoNS, port)
-		fmt.Fprintf(GinkgoWriter, "[DEBUG] Computed Bao URL from env: %s (svc=%s ns=%s scheme=%s port=%s)\n",
-			url, svc, baoNS, proto, port)
+		if _, err := fmt.Fprintf(GinkgoWriter, "[DEBUG] Computed Bao URL from env: %s (svc=%s ns=%s scheme=%s port=%s)\n",
+			url, svc, baoNS, proto, port); err != nil {
+			Expect(err).NotTo(HaveOccurred())
+		}
 	}
 	obx.Spec.Server.URL = url
 
@@ -101,8 +104,10 @@ var _ = BeforeSuite(func() {
 	obx.Spec.Server.TokenSecretRef.Name = secName
 	obx.Spec.Server.TokenSecretRef.Key = secKey
 
-	fmt.Fprintf(GinkgoWriter, "[DEBUG] Using token secret: %s/%s (key=%s)\n",
-		ns, secName, secKey)
+	if _, err := fmt.Fprintf(GinkgoWriter, "[DEBUG] Using token secret: %s/%s (key=%s)\n",
+		ns, secName, secKey); err != nil {
+		Expect(err).NotTo(HaveOccurred())
+	}
 
 	// Force namespace; keep name from file if present, else default
 	if obx.Name == "" {
@@ -111,17 +116,21 @@ var _ = BeforeSuite(func() {
 	obx.Namespace = ns
 	OBXName, OBXNS = obx.Name, obx.Namespace
 
-	fmt.Fprintf(GinkgoWriter,
+	if _, err := fmt.Fprintf(GinkgoWriter,
 		"[DEBUG] BeforeSuite: ns=%s name=%s url=%s tokenSecret=%s/%s\n",
 		OBXNS, OBXName, obx.Spec.Server.URL,
 		obx.Spec.Server.TokenSecretRef.Name, obx.Spec.Server.TokenSecretRef.Key,
-	)
+	); err != nil {
+		Expect(err).NotTo(HaveOccurred())
+	}
 
 	// Create or patch CR (retry on conflicts caused by controller status updates)
 	ctx := context.Background()
 	if err := k8s.Create(ctx, &obx); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: CR exists; patching spec with retry")
+			if _, err := fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: CR exists; patching spec with retry"); err != nil {
+				Expect(err).NotTo(HaveOccurred())
+			}
 			key := types.NamespacedName{Name: OBXName, Namespace: OBXNS}
 			err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
 				var cur extv1alpha1.OpenBaoExtension
@@ -134,7 +143,9 @@ var _ = BeforeSuite(func() {
 				return k8s.Patch(ctx, &cur, client.MergeFrom(orig))
 			})
 			Expect(err).NotTo(HaveOccurred(), "conflict updating OpenBaoExtension spec")
-			fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: spec patched")
+			if _, err := fmt.Fprintln(GinkgoWriter, "[DEBUG] BeforeSuite: spec patched"); err != nil {
+				Expect(err).NotTo(HaveOccurred())
+			}
 		} else {
 			Fail(fmt.Sprintf("BeforeSuite create OpenBaoExtension failed: %v", err))
 		}

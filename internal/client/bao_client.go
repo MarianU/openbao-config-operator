@@ -229,8 +229,15 @@ func (c *httpClient) EnableAuthMount(ctx context.Context, mount string, typ stri
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("failed to read response body: %v\n", err)
+		return nil
+	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
