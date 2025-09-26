@@ -76,6 +76,7 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 TEST_CLUSTER_NAME ?= e2e-test-cluster
+ACTION ?= cluster
 
 .PHONY: all
 all: build
@@ -260,16 +261,11 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: load-image
-load-image: kind ## Load local image into Kind cluster if it exists locally, otherwise it will be pulled
-	@if $(CONTAINER_TOOL) images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^$(IMG)$$"; then \
-		echo "Found local image $(IMG), loading into Kind cluster $(TEST_CLUSTER_NAME)"; \
-		$(KIND) load docker-image $(IMG) --name $(TEST_CLUSTER_NAME); \
-	else \
-		echo "Local image $(IMG) not found, cluster will pull from registry"; \
-	fi
+load-image: ## Load local image into Kind cluster if it exists locally, otherwise it will be pulled
+	$(MAKE) cluster ACTION=load-image
 
 .PHONY: deploy
-deploy: kustomize cluster load-image pull-secret tenant-crd-install openbao-install openbao-provision-creds install
+deploy: kustomize setup-cluster tenant-crd-install openbao-install openbao-provision-creds install
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG) && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
@@ -281,25 +277,27 @@ deploy: kustomize cluster load-image pull-secret tenant-crd-install openbao-inst
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
-# todo: should follow standardized approach.
 .PHONY: cluster
-cluster: kind
-	@if ! $(KIND) get clusters | grep -q "^$(TEST_CLUSTER_NAME)"; then \
-		echo "Creating kind cluster '$(TEST_CLUSTER_NAME)'"; \
-		$(KIND) create cluster --name $(TEST_CLUSTER_NAME); \
-	else \
-		echo "Kind cluster '$(TEST_CLUSTER_NAME)' already exists"; \
-	fi
+cluster: ## Setup Kind cluster with specified action (default: cluster). Usage: make cluster ACTION=<action>
+	curl -sSL https://raw.githubusercontent.com/stakater/.github/refs/heads/main/.github/scripts/setup-kind-cluster.sh | \
+	TEST_CLUSTER_NAME=$(TEST_CLUSTER_NAME) \
+	IMG=$(IMG) \
+	CONTAINER_TOOL=$(CONTAINER_TOOL) \
+	KIND_VERSION=$(KIND_VERSION) \
+	LOCALBIN=$(LOCALBIN) \
+	OPERATOR_NAMESPACE=$(OPERATOR_NS) \
+	PULL_SECRET_NAME=saap-dockerconfigjson \
+	GHCR_USERNAME=$(GHCR_USERNAME) \
+	GHCR_TOKEN=$(GHCR_TOKEN) \
+	bash -s $(ACTION)
 
 .PHONY: pull-secret
-pull-secret:
-	echo "Creating pull secret in namespace '$(OPERATOR_NS)'"; \
-	$(KUBECTL) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KUBECTL) apply -f - ;\
-	$(KUBECTL) -n $(OPERATOR_NS) create secret docker-registry saap-dockerconfigjson \
-		--docker-server=ghcr.io \
-		--docker-username=${GHCR_USERNAME} \
-		--docker-password=${GHCR_TOKEN} \
-		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+pull-secret: ## Create pull secret for private registry
+	$(MAKE) cluster ACTION=pull-secret
+
+.PHONY: setup-cluster
+setup-cluster: ## Setup complete Kind cluster with image loading and pull secret
+	$(MAKE) cluster ACTION=all
 
 ##@ Dependencies
 
