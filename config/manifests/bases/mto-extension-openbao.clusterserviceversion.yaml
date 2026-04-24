@@ -8,7 +8,14 @@ metadata:
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
-  customresourcedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: An OpenBao ACL policy managed by the MTO extension operator. Authors
+        a policy document in OpenBao's sys/policies/acl/ path.
+      displayName: Policy
+      kind: Policy
+      name: policies.security.mto.stakater.com
+      version: v1alpha1
   description: MTO Extension for OpenBao
   displayName: MTO Extension OpenBao
   icon:

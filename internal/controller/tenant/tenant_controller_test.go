@@ -69,6 +69,13 @@ func (f *fakeBao) GetPolicy(ctx context.Context, name string) (string, error) {
 	}
 	return r, nil
 }
+func (f *fakeBao) DeletePolicy(ctx context.Context, name string) error {
+	delete(f.upsertedPolicies, name)
+	return nil
+}
+func (f *fakeBao) ReadPath(ctx context.Context, path string) (map[string]any, error) {
+	return nil, nil
+}
 
 func (f *fakeBao) UpsertK8sRole(ctx context.Context, authMount, roleName string, spec baoclient.K8sRoleSpec) error {
 	f.upsertedRoles[roleName] = spec

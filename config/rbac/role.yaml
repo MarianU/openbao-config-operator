@@ -28,16 +28,28 @@ rules:
   - security.mto.stakater.com
   resources:
   - openbaoextensions/finalizers
+  - policies/finalizers
   verbs:
   - update
 - apiGroups:
   - security.mto.stakater.com
   resources:
   - openbaoextensions/status
+  - policies/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - security.mto.stakater.com
+  resources:
+  - policies
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - tenantoperator.stakater.com
   resources:

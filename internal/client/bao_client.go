@@ -39,9 +39,15 @@ type Client interface {
 
 	UpsertPolicy(ctx context.Context, name, rules string) error
 	GetPolicy(ctx context.Context, name string) (string, error)
+	DeletePolicy(ctx context.Context, name string) error
 
 	UpsertK8sRole(ctx context.Context, authMount, roleName string, spec K8sRoleSpec) error
 	GetK8sRole(ctx context.Context, authMount, roleName string) (*K8sRole, error)
+
+	// ReadPath performs a generic GET against /v1/<path> and returns the
+	// response's data field (or the flat body if not wrapped).
+	// Returns (nil, nil) on 404 to match ErrBaoNotFound upstream.
+	ReadPath(ctx context.Context, path string) (map[string]any, error)
 }
 
 type K8sRoleSpec struct {
@@ -112,7 +118,7 @@ func (c *httpClient) do(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("bao %s %s: status %d: %s", req.Method, req.URL.Path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return b, nil
 }
@@ -277,12 +283,79 @@ func (c *httpClient) GetPolicy(ctx context.Context, name string) (string, error)
 	var out struct {
 		Data struct {
 			Rules string `json:"rules"`
+			// OpenBao sometimes returns the body under "policy" instead of "rules".
+			Policy string `json:"policy"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
 		return "", err
 	}
-	return out.Data.Rules, nil
+	if out.Data.Rules != "" {
+		return out.Data.Rules, nil
+	}
+	return out.Data.Policy, nil
+}
+
+// DeletePolicy removes an ACL policy. Idempotent: a 404 from the server is
+// treated as success (the policy is already gone).
+func (c *httpClient) DeletePolicy(ctx context.Context, name string) error {
+	req, err := c.authReq(ctx, http.MethodDelete, pathPolicyPrefix+name, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
+}
+
+// ReadPath performs a generic GET against /v1/<path>. Accepts both wrapped
+// ({"data":{...}}) and flat response shapes. Returns (nil, nil) on 404.
+func (c *httpClient) ReadPath(ctx context.Context, path string) (map[string]any, error) {
+	path = strings.TrimLeft(path, "/")
+	req, err := c.authReq(ctx, http.MethodGet, "/v1/"+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
+	}
+
+	var wrapped struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(b, &wrapped); err == nil && wrapped.Data != nil {
+		return wrapped.Data, nil
+	}
+	var flat map[string]any
+	if err := json.Unmarshal(b, &flat); err != nil {
+		return nil, err
+	}
+	return flat, nil
 }
 
 // --- Kubernetes auth roles ---

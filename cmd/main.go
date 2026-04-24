@@ -37,8 +37,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	vcov1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/vco/v1alpha1"
 	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
 	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
+	vcocontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/vco"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,6 +52,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(obxv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(vcov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(mtov1beta3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -183,6 +186,16 @@ func main() {
 	}
 	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to setup Tenant controller")
+		os.Exit(1)
+	}
+
+	policyReconciler, err := vcocontroller.NewPolicyReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create PolicyReconciler")
+		os.Exit(1)
+	}
+	if err := policyReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup Policy controller")
 		os.Exit(1)
 	}
 
