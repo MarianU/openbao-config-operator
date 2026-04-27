@@ -5,24 +5,32 @@
 // Apache-2.0 — see THIRD_PARTY_NOTICES.md at repo root.
 //
 // Modified:
-//   - spec.authentication removed (operator uses OpenBaoExtension's token).
-//   - spec.connection removed (same reason).
-//   - spec.type defaulted to "acl"; legacy /sys/policy/<name> path not supported.
-//   - PrepareInternalValues: accessor templating deferred to Story 6; currently rejects
-//     CRs whose spec.policy contains ${auth/<mount>/@accessor}.
-//   - IsEquivalentToDesiredState simplified: always compares {"policy": body}
-//     since we only target sys/policies/acl/ (the modern endpoint).
-//   - GetPath simplified: always sys/policies/acl/<name> (our bao client builds the URL).
-//   - Fixed upstream copy-paste bug on line 37 (ConditionsAware assertion pointed at
-//     PKISecretEngineRole instead of Policy).
-//   - GetKubeAuthConfiguration / GetVaultConnection return nil — our operator
-//     uses a single token from OpenBaoExtension.
+//   - spec.authentication and spec.connection removed (operator uses
+//     OpenBaoExtension's single token).
+//   - GetKubeAuthConfiguration / GetVaultConnection methods removed; they
+//     return nil and are not part of our slimmer VaultObject interface.
+//   - spec.type removed (only "acl" is supported and GetPath always emits
+//     sys/policies/acl/<name>; the field was decoration).
+//   - Any "${...}" placeholder in spec.policy is rejected by IsValid. HCL
+//     policy bodies do not legitimately use shell-style interpolation; the
+//     deny is broad because every form we have seen (auth/identity/pki) is
+//     a VCO-style placeholder this controller does not resolve. Lives in
+//     IsValid (spec-level invalid → stable error, no requeue) rather than
+//     PrepareInternalValues (would requeue every 30s on user error).
+//   - IsEquivalentToDesiredState whitespace-tolerant — drops naive DeepEqual
+//     to avoid a 5-minute write-storm when bao normalizes the policy body.
+//   - spec.name pattern anchored with ^…$ — OpenAPI v3 `pattern` does
+//     substring match by default; upstream's unanchored regex accepts
+//     "Bad_Name1" because the substring "a" matches.
+//   - Fixed upstream copy-paste bug in the ConditionsAware type-assertion
+//     declaration (upstream's `var _ vaultutils.ConditionsAware =
+//     &PKISecretEngineRole{}` was wrong; should reference Policy).
 package v1alpha1
 
 import (
 	"context"
 	"fmt"
-	"reflect"
+	"regexp"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,26 +39,29 @@ import (
 	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject"
 )
 
+// vcoPlaceholderRe matches `${<word>/...}` — a VCO mount-style placeholder.
+// The trailing slash after the mount name is what distinguishes these from
+// bao's own ACL templating (`${identity.entity.name}`, dotted paths).
+var vcoPlaceholderRe = regexp.MustCompile(`\$\{[a-z][a-z0-9_-]*/`)
+
 var _ vaultobject.VaultObject = &Policy{}
 var _ vaultobject.ConditionsAware = &Policy{}
 
-func (d *Policy) GetVaultConnection() *vaultobject.VaultConnection {
-	// Stripped field; our operator uses OpenBaoExtension's connection.
-	return nil
-}
-
-func (d *Policy) GetKubeAuthConfiguration() *vaultobject.KubeAuthConfiguration {
-	// Stripped field; our operator uses OpenBaoExtension's token.
-	return nil
-}
-
 // BaoName returns the policy name as it will be written to OpenBao.
 // If spec.name is set it takes precedence; otherwise metadata.name is used.
+//
+// Defense in depth: the kubebuilder Pattern marker on spec.name and DNS-1123
+// rules on metadata.name already enforce a lowercased, trimmed shape at
+// admission. Normalizing again here means a stale CRD on the cluster, an
+// envtest with markers stripped, or direct Go construction in a unit test
+// can't slip a "Foo " through and produce a bao-side name that doesn't
+// round-trip through GetPolicy.
 func (d *Policy) BaoName() string {
-	if d.Spec.Name != "" {
-		return d.Spec.Name
+	raw := d.Spec.Name
+	if raw == "" {
+		raw = d.Name
 	}
-	return d.Name
+	return strings.ToLower(strings.TrimSpace(raw))
 }
 
 func (d *Policy) GetPath() string {
@@ -63,8 +74,20 @@ func (d *Policy) GetPayload() map[string]interface{} {
 	}
 }
 
+// IsEquivalentToDesiredState compares the desired payload against the
+// current bao-side payload, tolerant to whitespace normalization OpenBao
+// applies on round-trip. A naive reflect.DeepEqual here causes a
+// write-storm: if the server strips a trailing newline, every periodic
+// reconcile sees "drift" and re-PUTs the policy.
 func (d *Policy) IsEquivalentToDesiredState(payload map[string]interface{}) bool {
-	return reflect.DeepEqual(d.GetPayload(), payload)
+	desired := strings.TrimSpace(d.Spec.Policy)
+	current := ""
+	if v, ok := payload["policy"]; ok {
+		if s, ok := v.(string); ok {
+			current = strings.TrimSpace(s)
+		}
+	}
+	return desired == current
 }
 
 func (d *Policy) IsInitialized() bool {
@@ -75,14 +98,10 @@ func (d *Policy) IsDeletable() bool {
 	return true
 }
 
-// PrepareInternalValues rejects CRs that use VCO's ${auth/<mount>/@accessor}
-// templating syntax. Our bao client does not yet expose the sys/auth listing
-// required to resolve these placeholders; support is tracked for Story 6.
+// PrepareInternalValues is a no-op for Policy. Spec validation lives in
+// IsValid (correctly classified as a spec problem, not a server-side
+// problem) so the base does not waste reconciles requeueing on user error.
 func (d *Policy) PrepareInternalValues(ctx context.Context, object client.Object) error {
-	if strings.Contains(d.Spec.Policy, "${auth/") {
-		return fmt.Errorf("accessor templating (${auth/<mount>/@accessor}) not supported in this release; " +
-			"hardcode the accessor UUID or track support via Story 6")
-	}
 	return nil
 }
 
@@ -90,7 +109,31 @@ func (d *Policy) PrepareTLSConfig(ctx context.Context, object client.Object) err
 	return nil
 }
 
+// IsValid runs spec-level validation that is too rich for kubebuilder
+// markers. Failures classify as ReasonInvalid (no requeue) so the user
+// sees a stable error in CR status rather than a flapping retry.
 func (r *Policy) IsValid() (bool, error) {
+	// Defense in depth: kubebuilder MinLength=1 already rejects empty
+	// spec.policy at admission, but a stale CRD on the cluster or a fake
+	// k8s client in unit tests can bypass that. The shared reconciler
+	// treats an empty bao read as "missing" and would otherwise enter an
+	// infinite create loop.
+	if strings.TrimSpace(r.Spec.Policy) == "" {
+		return false, fmt.Errorf("spec.policy must not be empty")
+	}
+	// Deny VCO-style mount placeholders specifically — `${<mount>/...}`
+	// where the slash distinguishes them from bao's own ACL templating
+	// (`${identity.entity.name}`, `{{identity.entity.id}}`) which uses
+	// dotted paths and is valid policy text. Any `${<word>/` is a VCO
+	// placeholder this controller does not resolve; pass-through would
+	// either be rejected at write time or produce a broken ACL at
+	// evaluation time.
+	if vcoPlaceholderRe.MatchString(r.Spec.Policy) {
+		return false, fmt.Errorf(
+			`spec.policy contains a mount-prefix placeholder ("${<mount>/...}"); ` +
+				`this controller does not resolve them. Substitute the literal value — ` +
+				`e.g. for an auth accessor: bao auth list -format=json | jq -r '.["<mount>/"].accessor'.`)
+	}
 	return true, nil
 }
 
@@ -101,16 +144,13 @@ type PolicySpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Policy string `json:"policy"`
 
-	// Type of the policy. Only "acl" is supported.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum={"acl"}
-	// +kubebuilder:default:="acl"
-	Type string `json:"type,omitempty"`
-
 	// Name of the policy as stored in OpenBao. Takes precedence over
 	// metadata.name when set. Must match OpenBao's policy naming rules.
+	// Pattern is anchored — OpenAPI v3's `pattern` keyword does substring
+	// match by default, so an unanchored regex would accept "Bad_Name1"
+	// because the substring "a" matches.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern:=`[a-z0-9]([-a-z0-9]*[a-z0-9])?`
+	// +kubebuilder:validation:Pattern:=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name,omitempty"`
 }
 
@@ -121,6 +161,16 @@ type PolicyStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// BaoWritten records whether this CR has ever successfully written to
+	// OpenBao. Once set true it is never cleared. The shared reconciler
+	// uses it on the deletion path to decide whether to call BaoDelete:
+	// without a durable signal we have to fall back to "is Ready=True
+	// right now", which incorrectly skips cleanup when Ready flipped
+	// True→False (e.g. token lost capability) before the user deleted
+	// the CR, leaving an orphan.
+	// +optional
+	BaoWritten bool `json:"baoWritten,omitempty"`
 }
 
 func (m *Policy) GetConditions() []metav1.Condition {
@@ -130,6 +180,9 @@ func (m *Policy) GetConditions() []metav1.Condition {
 func (m *Policy) SetConditions(conditions []metav1.Condition) {
 	m.Status.Conditions = conditions
 }
+
+func (m *Policy) IsBaoWritten() bool { return m.Status.BaoWritten }
+func (m *Policy) MarkBaoWritten()    { m.Status.BaoWritten = true }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

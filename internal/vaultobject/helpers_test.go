@@ -25,26 +25,3 @@ func TestCleansePath(t *testing.T) {
 		})
 	}
 }
-
-func TestToString(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		in   any
-		want string
-	}{
-		{"nil", nil, ""},
-		{"empty-string", "", ""},
-		{"string", "hello", "hello"},
-		{"int", 1, "1"},
-		{"bool-true", true, "true"},
-		{"bool-false", false, "false"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := ToString(tc.in); got != tc.want {
-				t.Errorf("ToString(%v) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}

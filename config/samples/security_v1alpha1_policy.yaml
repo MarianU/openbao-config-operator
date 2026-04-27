@@ -4,7 +4,6 @@ metadata:
   name: secret-reader
   namespace: mto-extension-openbao-system
 spec:
-  # spec.type defaults to "acl" and can be omitted.
   # spec.name defaults to metadata.name; set it if the bao-side policy name
   # must differ from the Kubernetes resource name.
   policy: |

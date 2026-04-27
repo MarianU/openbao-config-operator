@@ -62,7 +62,6 @@ var _ = Describe("Policy CR → OpenBao", Ordered, func() {
 			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OBXNS},
 			Spec: vcov1alpha1.PolicySpec{
 				Policy: initBody,
-				Type:   "acl",
 			},
 		}
 		Expect(k8s.Create(ctx, cr)).To(Succeed())
@@ -137,7 +136,6 @@ var _ = Describe("Policy CR → OpenBao", Ordered, func() {
 			ObjectMeta: metav1.ObjectMeta{Name: tmplName, Namespace: OBXNS},
 			Spec: vcov1alpha1.PolicySpec{
 				Policy: `path "x" { allowed_parameters = { "accessor" = ["${auth/kubernetes/@accessor}"] } }`,
-				Type:   "acl",
 			},
 		}
 		Expect(k8s.Create(ctx, cr)).To(Succeed())
@@ -147,14 +145,17 @@ var _ = Describe("Policy CR → OpenBao", Ordered, func() {
 			})
 		})
 
-		By("expecting Ready=False with the Story 6 hint in the Message")
+		By("expecting Ready=False with a user-facing placeholder-rejection message")
 		Eventually(func(g Gomega) {
 			var got vcov1alpha1.Policy
 			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OBXNS, Name: tmplName}, &got)).To(Succeed())
 			cond := findCond(got.Status.Conditions, "Ready")
 			g.Expect(cond).NotTo(BeNil(), "Ready condition should be set")
 			g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(strings.ToLower(cond.Message)).To(ContainSubstring("story 6"))
+			g.Expect(cond.Message).To(ContainSubstring("placeholder"))
+			g.Expect(cond.Message).To(ContainSubstring("bao auth list"))
+			// Must not leak internal roadmap jargon to end users.
+			g.Expect(strings.ToLower(cond.Message)).NotTo(ContainSubstring("story 6"))
 		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 
 		By("expecting no bao-side policy was written")

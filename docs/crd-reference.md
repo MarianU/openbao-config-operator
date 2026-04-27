@@ -39,8 +39,7 @@ spec:
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `spec.policy` | string (HCL) | yes | — | Policy body in OpenBao's HCL syntax. |
-| `spec.type` | `acl` | no | `acl` | Policy type. Only `acl` is supported. |
-| `spec.name` | string | no | `metadata.name` | Name used on the bao side. Takes precedence over `metadata.name` when set; must match `[a-z0-9]([-a-z0-9]*[a-z0-9])?`. |
+| `spec.name` | string | no | `metadata.name` | Name used on the bao side. Takes precedence over `metadata.name` when set; must match `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
 
 VCO's `spec.authentication` and `spec.connection` fields are **not** present — our operator uses a single token from `OpenBaoExtension.spec.server.tokenSecretRef` for all primitives.
 
@@ -58,10 +57,15 @@ One condition: `Ready`. Reason values the controller sets:
 
 ### Operational notes
 
-- **Accessor templating deferred.** VCO's upstream `${auth/<mount>/@accessor}` substitution in `spec.policy` is not yet implemented. A CR containing the placeholder is rejected with `Ready=False` and a message pointing at Story 6 of the roadmap. Hardcode the accessor UUID for now (`bao auth list -format=json | jq -r '.["kubernetes/"].accessor'`).
+- **Accessor placeholder substitution unsupported.** A CR whose `spec.policy` contains `${auth/<mount>/@accessor}` is rejected with `Ready=False`; the condition message names the placeholder and shows how to find the literal UUID. Hardcode it for now:
+
+  ```bash
+  bao auth list -format=json | jq -r '.["kubernetes/"].accessor'
+  ```
+
 - **Drift correction.** The controller re-checks the bao-side body every 5 minutes. An out-of-band edit (`bao policy write`) is overwritten on the next tick.
 - **Force-delete footgun.** `kubectl delete --grace-period=0 --force` bypasses the finalizer and leaves the bao-side policy orphaned. Clean up with a direct HTTP DELETE to `sys/policies/acl/<name>` via a port-forward, or with the `bao` CLI if installed.
-- **Policy-name collision.** Two `Policy` CRs with the same bao-side name (same `spec.name`, or same `metadata.name` with no `spec.name`) both reconcile the same bao object and drift-flap. Roadmap's Story 2+ introduces per-primitive `IdentifierConflict` detection.
+- **Bao-name collision protection.** Bao policy names are global; the `Policy` CRD is namespace-scoped. Two `Policy` CRs in different k8s namespaces that target the same bao policy name (same `metadata.name` with no `spec.name`, or same `spec.name`) are detected at reconcile time. The older `CreationTimestamp` wins; on tie, lex order of `<namespace>/<name>` decides. The losing CR surfaces `Ready=False, Reason=NameCollision` with a message naming the winning CR; no overwrite happens.
 
 ### RBAC
 

@@ -43,17 +43,14 @@ spec:
                 description: |-
                   Name of the policy as stored in OpenBao. Takes precedence over
                   metadata.name when set. Must match OpenBao's policy naming rules.
-                pattern: '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
+                  Pattern is anchored — OpenAPI v3's `pattern` keyword does substring
+                  match by default, so an unanchored regex would accept "Bad_Name1"
+                  because the substring "a" matches.
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
               policy:
                 description: Policy is an OpenBao policy body expressed in HCL.
                 minLength: 1
-                type: string
-              type:
-                default: acl
-                description: Type of the policy. Only "acl" is supported.
-                enum:
-                - acl
                 type: string
             required:
             - policy
@@ -61,6 +58,16 @@ spec:
           status:
             description: PolicyStatus defines the observed state of Policy.
             properties:
+              baoWritten:
+                description: |-
+                  BaoWritten records whether this CR has ever successfully written to
+                  OpenBao. Once set true it is never cleared. The shared reconciler
+                  uses it on the deletion path to decide whether to call BaoDelete:
+                  without a durable signal we have to fall back to "is Ready=True
+                  right now", which incorrectly skips cleanup when Ready flipped
+                  True→False (e.g. token lost capability) before the user deleted
+                  the CR, leaving an orphan.
+                type: boolean
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

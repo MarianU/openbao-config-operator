@@ -1,37 +1,31 @@
+// Package client is the wrapper (facade) layer over hashicorp/vault/api.
+//
+// Callers (ClusterAuth, Tenant, the VCO-origin primitive controllers) depend
+// only on the Client interface below. This file wires each method to the
+// corresponding vault/api call, so callers never have to know we use the
+// SDK internally. The wrapper exists to (1) keep callers SDK-agnostic so
+// the implementation is swappable, (2) translate SDK error shapes into the
+// project-local *StatusError / ErrNotFound contract every controller
+// already classifies on, and (3) centralize idempotency quirks like the
+// "path is already in use" 400 from sys/auth. OpenBao is wire-compatible
+// with Vault, so all of these calls work unchanged against an OpenBao
+// server.
 package client
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+
+	vault "github.com/hashicorp/vault/api"
 )
 
-// ---- Local constants (client package scope) ----
-
-const (
-	// API paths
-	pathSysAuth        = "/v1/sys/auth"
-	pathSysMounts      = "/v1/sys/mounts"
-	pathPolicyPrefix   = "/v1/sys/policies/acl/"
-	pathAuthRoleFormat = "/v1/auth/%s/role/%s"
-
-	// HTTP headers / values
-	hdrVaultToken  = "X-Vault-Token"
-	hdrContentType = "Content-Type"
-	ctJSON         = "application/json"
-
-	// API type strings (server-side conventions)
-	authTypeKubernetes = "kubernetes"
-	kvType             = "kv"
-	kvVersionV2        = "2"
-)
-
-// ---- Public interface ----
-
+// All Get* methods report a missing object the same way: they return
+// ErrNotFound (with the zero value for the data return). Callers classify
+// with errors.Is(err, client.ErrNotFound). Other errors retain their
+// structured form (*StatusError, network errors, etc.).
 type Client interface {
 	CheckKVv2Mount(ctx context.Context, mount string) (bool, error)
 	CheckAuthMount(ctx context.Context, mount string) (bool, error)
@@ -43,19 +37,18 @@ type Client interface {
 
 	UpsertK8sRole(ctx context.Context, authMount, roleName string, spec K8sRoleSpec) error
 	GetK8sRole(ctx context.Context, authMount, roleName string) (*K8sRole, error)
-
-	// ReadPath performs a generic GET against /v1/<path> and returns the
-	// response's data field (or the flat body if not wrapped).
-	// Returns (nil, nil) on 404 to match ErrBaoNotFound upstream.
-	ReadPath(ctx context.Context, path string) (map[string]any, error)
 }
+
+// ErrNotFound is the sentinel returned by every Get* when the object does
+// not exist on the bao side. Callers use errors.Is to match.
+var ErrNotFound = errors.New("bao object not found")
 
 type K8sRoleSpec struct {
 	Policies                      []string
 	BoundServiceAccountNames      []string
 	BoundServiceAccountNamespaces []string
-	TokenTTL                      string // e.g. "1h"
-	TokenMaxTTL                   string // e.g. "4h"
+	TokenTTL                      string
+	TokenMaxTTL                   string
 	Renewable                     *bool
 }
 
@@ -69,355 +62,231 @@ type K8sRole struct {
 	Renewable                     *bool
 }
 
-// ---- HTTP client (Vault/OpenBao HTTP API) ----
-
-type httpClient struct {
-	base  string // e.g. https://openbao.example:8200
-	token string
-	hc    *http.Client
+// StatusError wraps an SDK error that carries an HTTP status code. The shared
+// reconcile base classifies bao errors by status (403 → Forbidden,
+// 404 → NotFound) via errors.As; consolidating the translation here keeps
+// callers free of fragile string-matching against error messages, which
+// would misclassify e.g. a 500 whose body contains "upstream service not found".
+type StatusError struct {
+	StatusCode int
+	Inner      error
 }
 
-func NewHTTPClient(baseURL, token string) Client {
-	return &httpClient{
-		base:  strings.TrimRight(baseURL, "/"),
-		token: token,
-		hc:    &http.Client{},
-	}
-}
+func (e *StatusError) Error() string { return e.Inner.Error() }
+func (e *StatusError) Unwrap() error { return e.Inner }
 
-func (c *httpClient) authReq(ctx context.Context, method, path string, body any) (*http.Request, error) {
-	var r io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		r = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, r)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(hdrVaultToken, c.token)
-	if body != nil {
-		req.Header.Set(hdrContentType, ctJSON)
-	}
-	return req, nil
-}
-
-func (c *httpClient) do(req *http.Request) ([]byte, error) {
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = resp.Body.Close() // errcheck: explicitly ignore close error
-	}()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("bao %s %s: status %d: %s", req.Method, req.URL.Path, resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	return b, nil
-}
-
-// CheckAuthMount returns true if an auth mount with the given path exists and is type "kubernetes".
-func (c *httpClient) CheckAuthMount(ctx context.Context, mount string) (bool, error) {
-	// Normalize the target key once (accept with/without trailing slash)
-	want := strings.Trim(mount, "/")
-
-	req, err := c.authReq(ctx, http.MethodGet, pathSysAuth, nil)
-	if err != nil {
-		return false, err
-	}
-	data, err := c.do(req)
-	if err != nil {
-		return false, err
-	}
-
-	type mnt struct {
-		Type string `json:"type"`
-	}
-
-	// The response can be either wrapped ({ "data": { ... } }) or flat (map[string]mount).
-	// Try wrapped first.
-	var wrapped struct {
-		Data map[string]mnt `json:"data"`
-	}
-	var maps map[string]mnt
-
-	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Data != nil {
-		maps = wrapped.Data
-	} else {
-		// Fallback: flat map
-		var flat map[string]mnt
-		if err2 := json.Unmarshal(data, &flat); err2 != nil {
-			return false, err // return the original unmarshal error for context
-		}
-		maps = flat
-	}
-
-	// First try direct lookup using both key variants.
-	if m, ok := maps[want+"/"]; ok && m.Type == authTypeKubernetes {
-		return true, nil
-	}
-	if m, ok := maps[want]; ok && m.Type == authTypeKubernetes {
-		return true, nil
-	}
-
-	// As a final guard, scan and normalize keys; some servers differ on trailing slash handling.
-	for k, m := range maps {
-		if strings.Trim(k, "/") == want && m.Type == authTypeKubernetes {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// --- Mounts: verify KV v2 ---
-
-// GET /v1/sys/mounts and check that <mount>/ exists with type=kv and options.version=2.
-func (c *httpClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, error) {
-	mount = strings.Trim(mount, "/") + "/"
-	req, err := c.authReq(ctx, http.MethodGet, pathSysMounts, nil)
-	if err != nil {
-		return false, err
-	}
-	data, err := c.do(req)
-	if err != nil {
-		return false, err
-	}
-	var resp struct {
-		Data map[string]struct {
-			Type    string            `json:"type"`
-			Options map[string]string `json:"options"`
-		} `json:"data"`
-	}
-	// OpenBao/Vault returns a flat object; try both shapes to be safe.
-	if err := json.Unmarshal(data, &resp); err != nil {
-		var flat map[string]struct {
-			Type    string            `json:"type"`
-			Options map[string]string `json:"options"`
-		}
-		if err2 := json.Unmarshal(data, &flat); err2 != nil {
-			return false, err
-		}
-		resp.Data = flat
-	}
-	m, ok := resp.Data[mount]
-	if !ok {
-		return false, nil
-	}
-	return m.Type == kvType && m.Options != nil && m.Options["version"] == kvVersionV2, nil
-}
-
-// EnableAuthMount enables an auth method at /sys/auth/<mount> with the given type.
-// Succeeds idempotently: if the server returns 400 with "already in use", this returns nil.
-func (c *httpClient) EnableAuthMount(ctx context.Context, mount string, typ string) error {
-	mount = strings.Trim(mount, "/")
-	if mount == "" {
-		return fmt.Errorf("mount path is empty")
-	}
-	if typ == "" {
-		return fmt.Errorf("auth type is empty")
-	}
-
-	body := map[string]any{"type": typ}
-	req, err := c.authReq(ctx, "POST", "/v1/sys/auth/"+mount, body)
-	if err != nil {
-		return err
-	}
-
-	// We need access to status code and body to treat specific 4xx as success.
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("failed to read response body: %v\n", err)
+// wrapStatus translates SDK-specific *vault.ResponseError into our local
+// StatusError. Non-status errors (network, context-cancelled, etc.) pass
+// through unchanged.
+func wrapStatus(err error) error {
+	if err == nil {
 		return nil
 	}
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+	var rerr *vault.ResponseError
+	if errors.As(err, &rerr) {
+		return &StatusError{StatusCode: rerr.StatusCode, Inner: err}
 	}
-	msg := strings.ToLower(string(b))
-	// Vault/OpenBao commonly returns 400 with a message like "path is already in use" when the mount exists.
-	if resp.StatusCode == http.StatusBadRequest &&
-		(strings.Contains(msg, "already in use") || strings.Contains(msg, "path is already in use")) {
-		return nil
-	}
-
-	return fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
-}
-
-// --- Policies ---
-
-// PUT /v1/sys/policies/acl/:name  with {"policy": "<rules>"}
-func (c *httpClient) UpsertPolicy(ctx context.Context, name, rules string) error {
-	body := map[string]string{"policy": rules}
-	req, err := c.authReq(ctx, http.MethodPut, pathPolicyPrefix+name, body)
-	if err != nil {
-		return err
-	}
-	_, err = c.do(req)
 	return err
 }
 
-func (c *httpClient) GetPolicy(ctx context.Context, name string) (string, error) {
-	req, err := c.authReq(ctx, http.MethodGet, pathPolicyPrefix+name, nil)
-	if err != nil {
-		return "", err
-	}
-	b, err := c.do(req)
-	if err != nil {
-		return "", err
-	}
-	var out struct {
-		Data struct {
-			Rules string `json:"rules"`
-			// OpenBao sometimes returns the body under "policy" instead of "rules".
-			Policy string `json:"policy"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(b, &out); err != nil {
-		return "", err
-	}
-	if out.Data.Rules != "" {
-		return out.Data.Rules, nil
-	}
-	return out.Data.Policy, nil
+// ---- SDK-backed implementation. ----
+
+type sdkClient struct {
+	v *vault.Client
 }
 
-// DeletePolicy removes an ACL policy. Idempotent: a 404 from the server is
-// treated as success (the policy is already gone).
-func (c *httpClient) DeletePolicy(ctx context.Context, name string) error {
-	req, err := c.authReq(ctx, http.MethodDelete, pathPolicyPrefix+name, nil)
-	if err != nil {
-		return err
+// NewHTTPClient constructs a Client backed by hashicorp/vault/api. It
+// returns an error rather than a degraded client so misconfiguration
+// (empty address, malformed config) surfaces at construction time instead
+// of as repeated reconcile-time failures with no diagnostic for the
+// operator process itself.
+func NewHTTPClient(addr, token string) (Client, error) {
+	if strings.TrimSpace(addr) == "" {
+		return nil, fmt.Errorf("bao client: address is empty")
 	}
-	resp, err := c.hc.Do(req)
+	cfg := vault.DefaultConfig()
+	cfg.Address = strings.TrimRight(addr, "/")
+	v, err := vault.NewClient(cfg)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("bao client: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
+	v.SetToken(token)
+	return &sdkClient{v: v}, nil
+}
+
+// underlying is a package-private accessor used by tests in this package.
+// Exposing the raw *vault.Client externally would let callers bypass the
+// wrapper's status-classification and idempotency contracts, defeating
+// the abstraction; the lowercase name keeps the escape hatch in-package
+// where compile-time checks catch misuse.
+func (c *sdkClient) underlying() *vault.Client { return c.v }
+
+// ---- Mounts ----
+
+func (c *sdkClient) CheckKVv2Mount(ctx context.Context, mount string) (bool, error) {
+	mount = strings.Trim(mount, "/") + "/"
+	mounts, err := c.v.Sys().ListMountsWithContext(ctx)
 	if err != nil {
-		return err
+		return false, wrapStatus(err)
 	}
-	if resp.StatusCode == http.StatusNotFound {
+	m, ok := mounts[mount]
+	if !ok {
+		return false, nil
+	}
+	return m.Type == "kv" && m.Options["version"] == "2", nil
+}
+
+func (c *sdkClient) CheckAuthMount(ctx context.Context, mount string) (bool, error) {
+	mount = strings.Trim(mount, "/") + "/"
+	auths, err := c.v.Sys().ListAuthWithContext(ctx)
+	if err != nil {
+		return false, wrapStatus(err)
+	}
+	m, ok := auths[mount]
+	if !ok {
+		return false, nil
+	}
+	return m.Type == "kubernetes", nil
+}
+
+func (c *sdkClient) EnableAuthMount(ctx context.Context, mount, typ string) error {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return errors.New("mount path is empty")
+	}
+	if typ == "" {
+		return errors.New("auth type is empty")
+	}
+	err := c.v.Sys().EnableAuthWithOptionsWithContext(ctx, mount, &vault.EnableAuthOptions{Type: typ})
+	if err != nil && isAlreadyInUse(err) {
 		return nil
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	return wrapStatus(err)
+}
+
+// ---- Policies ----
+
+func (c *sdkClient) UpsertPolicy(ctx context.Context, name, rules string) error {
+	return wrapStatus(c.v.Sys().PutPolicyWithContext(ctx, name, rules))
+}
+
+func (c *sdkClient) GetPolicy(ctx context.Context, name string) (string, error) {
+	// vault/api swallows 404 internally and returns ("", nil) for missing
+	// policies. We translate that to ErrNotFound so callers get a uniform
+	// missing signal across the interface. An empty-but-present policy is
+	// indistinguishable from missing here; callers that care must guard
+	// against ever writing an empty body (see Policy.IsValid).
+	body, err := c.v.Sys().GetPolicyWithContext(ctx, name)
+	if err != nil {
+		return "", wrapStatus(err)
+	}
+	if body == "" {
+		return "", ErrNotFound
+	}
+	return body, nil
+}
+
+func (c *sdkClient) DeletePolicy(ctx context.Context, name string) error {
+	err := c.v.Sys().DeletePolicyWithContext(ctx, name)
+	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
+	wrapped := wrapStatus(err)
+	// Idempotent delete: 404 = already gone.
+	var se *StatusError
+	if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return wrapped
 }
 
-// ReadPath performs a generic GET against /v1/<path>. Accepts both wrapped
-// ({"data":{...}}) and flat response shapes. Returns (nil, nil) on 404.
-func (c *httpClient) ReadPath(ctx context.Context, path string) (map[string]any, error) {
-	path = strings.TrimLeft(path, "/")
-	req, err := c.authReq(ctx, http.MethodGet, "/v1/"+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("bao %s %s: %s", req.Method, req.URL.Path, strings.TrimSpace(string(b)))
-	}
+// ---- Kubernetes auth roles ----
 
-	var wrapped struct {
-		Data map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal(b, &wrapped); err == nil && wrapped.Data != nil {
-		return wrapped.Data, nil
-	}
-	var flat map[string]any
-	if err := json.Unmarshal(b, &flat); err != nil {
-		return nil, err
-	}
-	return flat, nil
-}
-
-// --- Kubernetes auth roles ---
-
-// POST /v1/auth/<mount>/role/<roleName>
-// Fields: token_policies, bound_service_account_names, bound_service_account_namespaces, token_ttl, token_max_ttl, token_renewable
-func (c *httpClient) UpsertK8sRole(ctx context.Context, authMount, roleName string, spec K8sRoleSpec) error {
-	authMount = strings.Trim(authMount, "/")
-	body := map[string]any{
+func (c *sdkClient) UpsertK8sRole(ctx context.Context, authMount, roleName string, spec K8sRoleSpec) error {
+	path := fmt.Sprintf("auth/%s/role/%s", strings.Trim(authMount, "/"), roleName)
+	data := map[string]any{
 		"token_policies":                   spec.Policies,
 		"bound_service_account_names":      spec.BoundServiceAccountNames,
 		"bound_service_account_namespaces": spec.BoundServiceAccountNamespaces,
 	}
 	if spec.TokenTTL != "" {
-		body["token_ttl"] = spec.TokenTTL
+		data["token_ttl"] = spec.TokenTTL
 	}
 	if spec.TokenMaxTTL != "" {
-		body["token_max_ttl"] = spec.TokenMaxTTL
+		data["token_max_ttl"] = spec.TokenMaxTTL
 	}
 	if spec.Renewable != nil {
-		body["token_renewable"] = *spec.Renewable
+		data["token_renewable"] = *spec.Renewable
 	}
-
-	req, err := c.authReq(ctx, http.MethodPost, fmt.Sprintf(pathAuthRoleFormat, authMount, roleName), body)
-	if err != nil {
-		return err
-	}
-	_, err = c.do(req)
-	return err
+	_, err := c.v.Logical().WriteWithContext(ctx, path, data)
+	return wrapStatus(err)
 }
 
-func (c *httpClient) GetK8sRole(ctx context.Context, authMount, roleName string) (*K8sRole, error) {
-	authMount = strings.Trim(authMount, "/")
-	req, err := c.authReq(ctx, http.MethodGet, fmt.Sprintf(pathAuthRoleFormat, authMount, roleName), nil)
+func (c *sdkClient) GetK8sRole(ctx context.Context, authMount, roleName string) (*K8sRole, error) {
+	path := fmt.Sprintf("auth/%s/role/%s", strings.Trim(authMount, "/"), roleName)
+	sec, err := c.v.Logical().ReadWithContext(ctx, path)
 	if err != nil {
-		return nil, err
+		return nil, wrapStatus(err)
 	}
-	b, err := c.do(req)
-	if err != nil {
-		return nil, err
-	}
-	var out struct {
-		Data struct {
-			Name      string   `json:"name"`
-			Policies  []string `json:"token_policies"`
-			BoundSANs []string `json:"bound_service_account_names"`
-			BoundNS   []string `json:"bound_service_account_namespaces"`
-			TokenTTL  string   `json:"token_ttl"`
-			TokenMax  string   `json:"token_max_ttl"`
-			Renewable *bool    `json:"token_renewable"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, err
+	if sec == nil || sec.Data == nil {
+		return nil, ErrNotFound
 	}
 	return &K8sRole{
-		Name:                          out.Data.Name,
-		Policies:                      out.Data.Policies,
-		BoundServiceAccountNames:      out.Data.BoundSANs,
-		BoundServiceAccountNamespaces: out.Data.BoundNS,
-		TokenTTL:                      out.Data.TokenTTL,
-		TokenMaxTTL:                   out.Data.TokenMax,
-		Renewable:                     out.Data.Renewable,
+		Name:                          roleName,
+		Policies:                      asStringSlice(sec.Data["token_policies"]),
+		BoundServiceAccountNames:      asStringSlice(sec.Data["bound_service_account_names"]),
+		BoundServiceAccountNamespaces: asStringSlice(sec.Data["bound_service_account_namespaces"]),
+		TokenTTL:                      asString(sec.Data["token_ttl"]),
+		TokenMaxTTL:                   asString(sec.Data["token_max_ttl"]),
+		Renewable:                     asBoolPtr(sec.Data["token_renewable"]),
 	}, nil
+}
+
+// ---- helpers ----
+
+// isAlreadyInUse stays string-based: bao returns 400 with this message text
+// for an idempotent re-enable, not a distinct status code, so we have to
+// peek at the message body either way.
+func isAlreadyInUse(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already in use") || strings.Contains(msg, "path is already in use")
+}
+
+func asStringSlice(v any) []string {
+	if v == nil {
+		return nil
+	}
+	if ss, ok := v.([]string); ok {
+		return ss
+	}
+	if is, ok := v.([]any); ok {
+		out := make([]string, 0, len(is))
+		for _, it := range is {
+			if s, ok := it.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func asString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+func asBoolPtr(v any) *bool {
+	if v == nil {
+		return nil
+	}
+	if b, ok := v.(bool); ok {
+		return &b
+	}
+	return nil
 }

@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
-	"reflect"
 
 	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -29,7 +28,6 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -159,18 +157,6 @@ func main() {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
-
-	t := &obxv1alpha1.OpenBaoExtension{}
-	gvk, err := apiutil.GVKForObject(t, mgr.GetScheme())
-	setupLog.Info("GVK probe",
-		"err", err,
-		"gvk", gvk.String(),
-		"type", reflect.TypeOf(t).Elem().String(),
-		"pkgPath", reflect.TypeOf(t).Elem().PkgPath(),
-	)
-
-	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoExtension{}, mgr.GetScheme())
-	//setupLog.Info("GVK probe", "gvk", gvk.String(), "err", err)
 
 	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterAuth")

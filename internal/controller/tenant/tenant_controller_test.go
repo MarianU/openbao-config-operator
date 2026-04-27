@@ -15,10 +15,8 @@ import (
 	mtocommon "github.com/stakater-ab/tenant-operator/api/common"
 	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -65,7 +63,7 @@ func (f *fakeBao) UpsertPolicy(ctx context.Context, name, rules string) error {
 func (f *fakeBao) GetPolicy(ctx context.Context, name string) (string, error) {
 	r, ok := f.upsertedPolicies[name]
 	if !ok {
-		return "", apierrors.NewNotFound(schema.GroupResource{Group: "bao.test", Resource: "policy"}, name)
+		return "", baoclient.ErrNotFound
 	}
 	return r, nil
 }
@@ -73,10 +71,6 @@ func (f *fakeBao) DeletePolicy(ctx context.Context, name string) error {
 	delete(f.upsertedPolicies, name)
 	return nil
 }
-func (f *fakeBao) ReadPath(ctx context.Context, path string) (map[string]any, error) {
-	return nil, nil
-}
-
 func (f *fakeBao) UpsertK8sRole(ctx context.Context, authMount, roleName string, spec baoclient.K8sRoleSpec) error {
 	f.upsertedRoles[roleName] = spec
 	return nil
@@ -84,7 +78,7 @@ func (f *fakeBao) UpsertK8sRole(ctx context.Context, authMount, roleName string,
 func (f *fakeBao) GetK8sRole(ctx context.Context, authMount, roleName string) (*baoclient.K8sRole, error) {
 	spec, ok := f.upsertedRoles[roleName]
 	if !ok {
-		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "bao.test", Resource: "role"}, roleName)
+		return nil, baoclient.ErrNotFound
 	}
 	return &baoclient.K8sRole{
 		Name:                          roleName,
@@ -95,6 +89,37 @@ func (f *fakeBao) GetK8sRole(ctx context.Context, authMount, roleName string) (*
 		TokenMaxTTL:                   spec.TokenMaxTTL,
 		Renewable:                     spec.Renewable,
 	}, nil
+}
+
+// ---- NewTenantReconciler fatal startup ----
+
+// The Tenant controller reads bao credentials at construction time and
+// fails fast if they're missing or invalid. Operators saw delayed
+// reconcile-time failures before this guard; the test pins both error
+// paths so a future refactor can't quietly degrade back to "fail late".
+func TestNewTenantReconciler_FailsFast(t *testing.T) {
+	cases := []struct {
+		name        string
+		addr, token string
+		wantErr     string
+	}{
+		{"both missing", "", "", "VAULT_ADDR/VAULT_TOKEN"},
+		{"only addr missing", "", "tok", "VAULT_ADDR/VAULT_TOKEN"},
+		{"only token missing", "http://x", "", "VAULT_ADDR/VAULT_TOKEN"},
+		{"addr only whitespace", "  \t", "tok", "address is empty"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VAULT_ADDR", tc.addr)
+			t.Setenv("VAULT_TOKEN", tc.token)
+			t.Setenv("BAO_ADDR", "")
+			t.Setenv("BAO_TOKEN", "")
+			r, err := NewTenantReconciler(nil)
+			require.Error(t, err)
+			require.Nil(t, r, "no reconciler should be returned on error")
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
 
 // ---- Tests ----

@@ -54,11 +54,15 @@ func NewTenantReconciler(mgr ctrl.Manager) (*TenantReconciler, error) {
 		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN)")
 	}
 
+	bao, err := baoclient.NewHTTPClient(addr, token)
+	if err != nil {
+		return nil, err
+	}
 	return &TenantReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Log:       ctrl.Log.WithName("controller").WithName("Tenant"),
-		baoClient: baoclient.NewHTTPClient(addr, token),
+		baoClient: bao,
 		kvMount:   constants.DefaultKVMount,
 		authMount: constants.DefaultAuthMount,
 		env:       constants.DefaultEnv,
@@ -78,7 +82,14 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	ten := t.GetName()
 
 	var extList extv1alpha1.OpenBaoExtensionList
-	_ = r.List(ctx, &extList)
+	if err := r.List(ctx, &extList); err != nil && !apierrors.IsNotFound(err) {
+		// A transient List failure (apiserver hiccup, RBAC misconfig) makes
+		// the controller silently take the hard-gate branch below and
+		// requeue forever with no status or audit trail. Log so the failure
+		// is debuggable; we still fall through to the gate so a partial
+		// list doesn't surface as success.
+		log.Error(err, "list OpenBaoExtension failed; tenant reconcile will hard-gate")
+	}
 
 	// Best-effort: get (first) OpenBaoExtension to read status from.
 	ext := r.firstOpenBaoExtension(&extList)
@@ -100,7 +111,14 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		utils.RemoveCondGen(ext, extv1alpha1.CondTenantsReconciled)
 		utils.SetCondGen(ext, extv1alpha1.CondTenantsReconciled, finalStatus, finalReason, finalMessage)
-		_ = r.patchStatus(ctx, ext) // conflict-safe after we change patchStatus below
+		// Mirror the shared base's setReady pattern: discard the error
+		// (status writes must not gate the reconcile result), but log
+		// non-NotFound failures so silent regressions are debuggable.
+		// IsNotFound is the benign deletion-race case.
+		if err := r.patchStatus(ctx, ext); err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to write TenantsReconciled status",
+				"openbaoextension", ext.Namespace+"/"+ext.Name, "reason", finalReason)
+		}
 	}()
 
 	ok, err := r.baoClient.CheckKVv2Mount(ctx, r.kvMount)

@@ -165,3 +165,39 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 		})
 	}
 }
+
+// Server URL "/" passes the early non-empty check at clusterauth_controller.go:63
+// but reduces to "" after TrimRight, which fails NewHTTPClient. The reconciler
+// must surface this as AuthConfigured=False/Error and back off, not return an
+// error to the manager that would loop without status visibility.
+func Test_Reconcile_NewHTTPClientFailureSurfacesAsStatus(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "bao-token", Namespace: "ns"},
+		Data:       map[string][]byte{"token": []byte("s.x")},
+	}
+	cr := makeCR("ns", "ex", func(c *obxv1alpha1.OpenBaoExtension) {
+		c.Spec.Server.URL = "/" // becomes "" after TrimRight, fails NewHTTPClient
+	})
+
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cr, secret).
+		WithStatusSubresource(cr).
+		Build()
+
+	r := &ClusterAuthReconciler{Client: fc, Scheme: scheme}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "ex"}})
+	require.NoError(t, err, "constructor failures must not bubble up to the manager — status is the contract")
+	require.Equal(t, 30*time.Second, res.RequeueAfter, "should back off, not hot-loop")
+
+	var got obxv1alpha1.OpenBaoExtension
+	require.NoError(t, fc.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "ex"}, &got))
+	cond := getCond(t, &got, "AuthConfigured")
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, "Error", cond.Reason)
+	require.Contains(t, cond.Message, "address is empty",
+		"the constructor's failure reason must reach the user via status.message")
+}
