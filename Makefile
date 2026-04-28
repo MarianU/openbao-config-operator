@@ -7,6 +7,9 @@ VERSION ?= 0.0.1
 OPERATOR_NAME ?= mto-extension-openbao
 CATALOG_DIR_PATH ?= catalog
 DOCKER_REPO_BASE ?= ghcr.io/stakater
+ifeq ($(strip $(DOCKER_REPO_BASE)),)
+DOCKER_REPO_BASE := ghcr.io/stakater
+endif
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
