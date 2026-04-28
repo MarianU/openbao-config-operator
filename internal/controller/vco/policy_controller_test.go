@@ -25,21 +25,37 @@ import (
 
 // ---- fake bao ----
 
+// fakeBao implements baoclient.Client with in-memory policy and k8s-role
+// state plus error-injection hooks. Shared between Policy and
+// KubernetesAuthEngineRole tests; the role-side state is keyed by
+// "<authMount>/<roleName>" so two roles on different mounts don't
+// collide on name alone.
 type fakeBao struct {
-	policies map[string]string // name -> body
+	policies map[string]string                // name -> body
+	roles    map[string]baoclient.K8sRoleSpec // <authMount>/<roleName> -> spec
 
 	// Error injection.
 	upsertErr error
 	getErr    error
 	deleteErr error
 
+	roleUpsertErr error
+	roleGetErr    error
+	roleDeleteErr error
+
 	// Call counters.
-	upserts, gets, deletes int
+	upserts, gets, deletes             int
+	roleUpserts, roleGets, roleDeletes int
 }
 
 func newFakeBao() *fakeBao {
-	return &fakeBao{policies: map[string]string{}}
+	return &fakeBao{
+		policies: map[string]string{},
+		roles:    map[string]baoclient.K8sRoleSpec{},
+	}
 }
+
+func roleKey(authMount, roleName string) string { return authMount + "/" + roleName }
 
 func (f *fakeBao) CheckKVv2Mount(ctx context.Context, mount string) (bool, error) { return true, nil }
 func (f *fakeBao) CheckAuthMount(ctx context.Context, mount string) (bool, error) { return true, nil }
@@ -72,11 +88,48 @@ func (f *fakeBao) DeletePolicy(ctx context.Context, name string) error {
 	delete(f.policies, name)
 	return nil
 }
-func (f *fakeBao) UpsertK8sRole(ctx context.Context, _, _ string, _ baoclient.K8sRoleSpec) error {
+func (f *fakeBao) UpsertK8sRole(ctx context.Context, authMount, roleName string, spec baoclient.K8sRoleSpec) error {
+	f.roleUpserts++
+	if f.roleUpsertErr != nil {
+		return f.roleUpsertErr
+	}
+	f.roles[roleKey(authMount, roleName)] = spec
 	return nil
 }
-func (f *fakeBao) GetK8sRole(ctx context.Context, _, _ string) (*baoclient.K8sRole, error) {
-	return nil, baoclient.ErrNotFound
+func (f *fakeBao) GetK8sRole(ctx context.Context, authMount, roleName string) (*baoclient.K8sRole, error) {
+	f.roleGets++
+	if f.roleGetErr != nil {
+		return nil, f.roleGetErr
+	}
+	spec, ok := f.roles[roleKey(authMount, roleName)]
+	if !ok {
+		return nil, baoclient.ErrNotFound
+	}
+	return &baoclient.K8sRole{
+		Name:                          roleName,
+		Policies:                      spec.Policies,
+		BoundServiceAccountNames:      spec.BoundServiceAccountNames,
+		BoundServiceAccountNamespaces: spec.BoundServiceAccountNamespaces,
+		Audience:                      spec.Audience,
+		AliasNameSource:               spec.AliasNameSource,
+		TokenBoundCIDRs:               spec.TokenBoundCIDRs,
+		TokenTTL:                      spec.TokenTTL,
+		TokenMaxTTL:                   spec.TokenMaxTTL,
+		TokenExplicitMaxTTL:           spec.TokenExplicitMaxTTL,
+		TokenNoDefaultPolicy:          spec.TokenNoDefaultPolicy,
+		TokenNumUses:                  spec.TokenNumUses,
+		TokenPeriod:                   spec.TokenPeriod,
+		TokenType:                     spec.TokenType,
+		Renewable:                     spec.Renewable,
+	}, nil
+}
+func (f *fakeBao) DeleteK8sRole(ctx context.Context, authMount, roleName string) error {
+	f.roleDeletes++
+	if f.roleDeleteErr != nil {
+		return f.roleDeleteErr
+	}
+	delete(f.roles, roleKey(authMount, roleName))
+	return nil
 }
 
 // ---- helpers ----

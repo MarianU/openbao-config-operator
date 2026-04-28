@@ -90,6 +90,10 @@ func (f *fakeBao) GetK8sRole(ctx context.Context, authMount, roleName string) (*
 		Renewable:                     spec.Renewable,
 	}, nil
 }
+func (f *fakeBao) DeleteK8sRole(ctx context.Context, _, roleName string) error {
+	delete(f.upsertedRoles, roleName)
+	return nil
+}
 
 // ---- NewTenantReconciler fatal startup ----
 

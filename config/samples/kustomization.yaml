@@ -1,4 +1,6 @@
 ## Append samples of your project ##
 resources:
 - security_v1alpha1_policy.yaml
+- security_v1alpha1_kubernetesauthenginerole.yaml
+- security_v1alpha1_kubernetesauthenginerole_selector.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

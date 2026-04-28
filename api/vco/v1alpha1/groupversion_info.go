@@ -1,5 +1,5 @@
-// Package v1alpha1 holds VCO-origin primitive CRDs under the
-// security.mto.stakater.com/v1alpha1 group. See docs/plans/PLAN-vco-cherrypick-roadmap.md.
+// Package v1alpha1 holds VCO-wrapped primitive CRDs under the
+// security.mto.stakater.com/v1alpha1 group. See docs/plans/PLAN-vco-wrap-roadmap.md.
 //
 // +kubebuilder:object:generate=true
 // +groupName=security.mto.stakater.com

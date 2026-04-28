@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - bases/security.mto.stakater.com_openbaoextensions.yaml
   - bases/security.mto.stakater.com_policies.yaml
+  - bases/security.mto.stakater.com_kubernetesauthengineroles.yaml

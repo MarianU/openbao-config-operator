@@ -131,10 +131,20 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil // no requeue; user must fix spec
 	}
 
-	// Prepare any server-dependent values (e.g. accessor substitution).
-	// Failures here are controller-side (k8s lookups, in-process state
+	// Prepare any server-dependent values (e.g. accessor substitution,
+	// label-selector resolution, secret-ref dereferencing). Failures
+	// here are controller-side (k8s lookups, in-process state
 	// resolution), not bao failures — classify as ReasonInternalError so
 	// dashboards don't conflate them with bao outages.
+	//
+	// The kube client is exposed to PrepareInternalValues via the
+	// reconcile context under the untyped "kubeClient" key. Primitives
+	// that need to query the apiserver during preparation read it back
+	// without an interface signature change; primitives that don't need
+	// it ignore the value and pay nothing. Untyped string key follows
+	// the upstream VCO contract; staticcheck flags it on the line below.
+	//nolint:staticcheck // untyped context key matches upstream VCO contract
+	ctx = context.WithValue(ctx, "kubeClient", r.Client)
 	if err := obj.PrepareInternalValues(ctx, obj); err != nil {
 		_ = r.setReady(ctx, req.NamespacedName, metav1.ConditionFalse, ReasonInternalError, err.Error())
 		return ctrl.Result{RequeueAfter: ErrorBackoff}, nil

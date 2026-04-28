@@ -185,6 +185,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	keerReconciler, err := vcocontroller.NewKubernetesAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create KubernetesAuthEngineRoleReconciler")
+		os.Exit(1)
+	}
+	if err := keerReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup KubernetesAuthEngineRole controller")
+		os.Exit(1)
+	}
+
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")

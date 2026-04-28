@@ -14,9 +14,11 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	vault "github.com/hashicorp/vault/api"
@@ -37,12 +39,18 @@ type Client interface {
 
 	UpsertK8sRole(ctx context.Context, authMount, roleName string, spec K8sRoleSpec) error
 	GetK8sRole(ctx context.Context, authMount, roleName string) (*K8sRole, error)
+	DeleteK8sRole(ctx context.Context, authMount, roleName string) error
 }
 
 // ErrNotFound is the sentinel returned by every Get* when the object does
 // not exist on the bao side. Callers use errors.Is to match.
 var ErrNotFound = errors.New("bao object not found")
 
+// K8sRoleSpec is the write payload for a Kubernetes auth role. Fields use
+// pointer / empty-string sentinels for "unset" so UpsertK8sRole can omit
+// keys that the caller did not set — bao distinguishes between "field
+// absent" (use mount default) and "field present with zero value" (override
+// with that value, e.g. token_num_uses=0 means unlimited).
 type K8sRoleSpec struct {
 	Policies                      []string
 	BoundServiceAccountNames      []string
@@ -50,6 +58,18 @@ type K8sRoleSpec struct {
 	TokenTTL                      string
 	TokenMaxTTL                   string
 	Renewable                     *bool
+
+	// Fields below were added for the KubernetesAuthEngineRole CRD; the
+	// Tenant controller leaves them at zero values and they are omitted
+	// from the bao request, preserving its historical request shape.
+	Audience             string
+	AliasNameSource      string
+	TokenBoundCIDRs      []string
+	TokenExplicitMaxTTL  string
+	TokenNoDefaultPolicy *bool
+	TokenNumUses         *int
+	TokenPeriod          string
+	TokenType            string
 }
 
 type K8sRole struct {
@@ -60,6 +80,15 @@ type K8sRole struct {
 	TokenTTL                      string
 	TokenMaxTTL                   string
 	Renewable                     *bool
+
+	Audience             string
+	AliasNameSource      string
+	TokenBoundCIDRs      []string
+	TokenExplicitMaxTTL  string
+	TokenNoDefaultPolicy *bool
+	TokenNumUses         *int
+	TokenPeriod          string
+	TokenType            string
 }
 
 // StatusError wraps an SDK error that carries an HTTP status code. The shared
@@ -218,6 +247,30 @@ func (c *sdkClient) UpsertK8sRole(ctx context.Context, authMount, roleName strin
 	if spec.Renewable != nil {
 		data["token_renewable"] = *spec.Renewable
 	}
+	if spec.Audience != "" {
+		data["audience"] = spec.Audience
+	}
+	if spec.AliasNameSource != "" {
+		data["alias_name_source"] = spec.AliasNameSource
+	}
+	if len(spec.TokenBoundCIDRs) > 0 {
+		data["token_bound_cidrs"] = spec.TokenBoundCIDRs
+	}
+	if spec.TokenExplicitMaxTTL != "" {
+		data["token_explicit_max_ttl"] = spec.TokenExplicitMaxTTL
+	}
+	if spec.TokenNoDefaultPolicy != nil {
+		data["token_no_default_policy"] = *spec.TokenNoDefaultPolicy
+	}
+	if spec.TokenNumUses != nil {
+		data["token_num_uses"] = *spec.TokenNumUses
+	}
+	if spec.TokenPeriod != "" {
+		data["token_period"] = spec.TokenPeriod
+	}
+	if spec.TokenType != "" {
+		data["token_type"] = spec.TokenType
+	}
 	_, err := c.v.Logical().WriteWithContext(ctx, path, data)
 	return wrapStatus(err)
 }
@@ -239,7 +292,30 @@ func (c *sdkClient) GetK8sRole(ctx context.Context, authMount, roleName string) 
 		TokenTTL:                      asString(sec.Data["token_ttl"]),
 		TokenMaxTTL:                   asString(sec.Data["token_max_ttl"]),
 		Renewable:                     asBoolPtr(sec.Data["token_renewable"]),
+		Audience:                      asString(sec.Data["audience"]),
+		AliasNameSource:               asString(sec.Data["alias_name_source"]),
+		TokenBoundCIDRs:               asStringSlice(sec.Data["token_bound_cidrs"]),
+		TokenExplicitMaxTTL:           asString(sec.Data["token_explicit_max_ttl"]),
+		TokenNoDefaultPolicy:          asBoolPtr(sec.Data["token_no_default_policy"]),
+		TokenNumUses:                  asIntPtr(sec.Data["token_num_uses"]),
+		TokenPeriod:                   asString(sec.Data["token_period"]),
+		TokenType:                     asString(sec.Data["token_type"]),
 	}, nil
+}
+
+func (c *sdkClient) DeleteK8sRole(ctx context.Context, authMount, roleName string) error {
+	path := fmt.Sprintf("auth/%s/role/%s", strings.Trim(authMount, "/"), roleName)
+	_, err := c.v.Logical().DeleteWithContext(ctx, path)
+	if err == nil {
+		return nil
+	}
+	wrapped := wrapStatus(err)
+	// Idempotent delete: 404 = already gone. Mirrors DeletePolicy.
+	var se *StatusError
+	if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return wrapped
 }
 
 // ---- helpers ----
@@ -287,6 +363,37 @@ func asBoolPtr(v any) *bool {
 	}
 	if b, ok := v.(bool); ok {
 		return &b
+	}
+	return nil
+}
+
+// asIntPtr coerces a vault/api response value into *int. vault/api returns
+// JSON numbers as json.Number; the helper also accepts native int / int64 /
+// float64 because httptest-based unit tests construct response bodies with
+// plain Go literals. Returns nil on missing or unrecognized shape so the
+// caller can treat "not present" identically to "not parseable".
+func asIntPtr(v any) *int {
+	if v == nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			n := int(i)
+			return &n
+		}
+	case int:
+		return &x
+	case int64:
+		n := int(x)
+		return &n
+	case float64:
+		n := int(x)
+		return &n
+	case string:
+		if i, err := strconv.Atoi(x); err == nil {
+			return &i
+		}
 	}
 	return nil
 }

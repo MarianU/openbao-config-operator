@@ -317,4 +317,256 @@ func TestUpsertK8sRole_OmitsUnsetOptionalFields(t *testing.T) {
 	require.False(t, hasTTL, "token_ttl must be omitted when unset")
 	require.False(t, hasMaxTTL, "token_max_ttl must be omitted when unset")
 	require.False(t, hasRenewable, "token_renewable must be omitted when unset")
+	for _, k := range []string{"audience", "alias_name_source", "token_bound_cidrs",
+		"token_explicit_max_ttl", "token_no_default_policy", "token_num_uses",
+		"token_period", "token_type"} {
+		_, has := gotBody[k]
+		require.False(t, has, "%s must be omitted when unset", k)
+	}
+}
+
+// Every new field added for the KubernetesAuthEngineRole CRD must round-trip
+// through the request body when set. Pinning each key/value here protects
+// against silent SDK renames or accidental drops in UpsertK8sRole.
+func TestUpsertK8sRole_NewFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(raw, &gotBody))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	noDefaultPolicy := true
+	numUses := 5
+	spec := K8sRoleSpec{
+		Policies:                 []string{"editor"},
+		BoundServiceAccountNames: []string{"default"},
+		Audience:                 "vault",
+		AliasNameSource:          "serviceaccount_name",
+		TokenBoundCIDRs:          []string{"10.0.0.0/8", "192.168.0.0/16"},
+		TokenExplicitMaxTTL:      "48h",
+		TokenNoDefaultPolicy:     &noDefaultPolicy,
+		TokenNumUses:             &numUses,
+		TokenPeriod:              "1h",
+		TokenType:                "service",
+	}
+	require.NoError(t, c.UpsertK8sRole(context.Background(), "kubernetes", "rich", spec))
+	require.Equal(t, "vault", gotBody["audience"])
+	require.Equal(t, "serviceaccount_name", gotBody["alias_name_source"])
+	require.Equal(t, []any{"10.0.0.0/8", "192.168.0.0/16"}, gotBody["token_bound_cidrs"])
+	require.Equal(t, "48h", gotBody["token_explicit_max_ttl"])
+	require.Equal(t, true, gotBody["token_no_default_policy"])
+	require.Equal(t, float64(5), gotBody["token_num_uses"]) // JSON numbers decode as float64
+	require.Equal(t, "1h", gotBody["token_period"])
+	require.Equal(t, "service", gotBody["token_type"])
+}
+
+// Pins the wire shape Tenant produces today. Two complementary guards:
+//
+//   - Every historical key must remain present with its historical
+//     value. Catches accidental removal or value-mutation of fields
+//     Tenant depends on.
+//   - No unexpected keys may appear. Catches silent over-emission —
+//     a future K8sRoleSpec field accidentally promoted to emit-by-
+//     default would otherwise enter Tenant's wire body without
+//     Tenant's knowledge, potentially overriding bao's mount default
+//     for that field on every tenant write.
+//
+// TestUpsertK8sRole_OmitsUnsetOptionalFields covers the same class of
+// over-emission failure but only for the optional-field names listed
+// there; this test is the catch-all that spots over-emission in
+// fields not yet listed (i.e. fields added to K8sRoleSpec after the
+// absence-list test was last updated).
+//
+// If a Tenant change INTENTIONALLY adopts a new K8sRoleSpec field,
+// add the new key to `want` below — the second loop's failure
+// message points to this comment.
+func TestUpsertK8sRole_TenantWireBody_HistoricalShapeIntact(t *testing.T) {
+	t.Parallel()
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(raw, &gotBody))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	renewable := true
+	// Mirror tenant_controller.go's K8sRoleSpec construction verbatim.
+	spec := K8sRoleSpec{
+		Policies:                      []string{"team-a-prod-editor"},
+		BoundServiceAccountNames:      []string{"default"},
+		BoundServiceAccountNamespaces: []string{"team-a-prod"},
+		TokenTTL:                      "3600s",
+		TokenMaxTTL:                   "7200s",
+		Renewable:                     &renewable,
+	}
+	require.NoError(t, c.UpsertK8sRole(context.Background(), "kubernetes", "team-a-prod", spec))
+	want := map[string]any{
+		"token_policies":                   []any{"team-a-prod-editor"},
+		"bound_service_account_names":      []any{"default"},
+		"bound_service_account_namespaces": []any{"team-a-prod"},
+		"token_ttl":                        "3600s",
+		"token_max_ttl":                    "7200s",
+		"token_renewable":                  true,
+	}
+
+	// Forward direction: every pinned key must remain with its value.
+	for key, expected := range want {
+		require.Contains(t, gotBody, key,
+			"Tenant's request body must still contain %q", key)
+		require.Equal(t, expected, gotBody[key],
+			"Tenant's value for %q must not change", key)
+	}
+
+	// Reverse direction: no key may appear that isn't in `want`.
+	// Catches silent over-emission from new K8sRoleSpec fields that
+	// don't follow the omit-when-empty convention. Failure means
+	// either: (a) Tenant has intentionally adopted a new field — add
+	// the key to `want` above; or (b) UpsertK8sRole is leaking a
+	// field's zero value — fix the emit predicate in bao_client.go.
+	for key := range gotBody {
+		require.Contains(t, want, key,
+			"unexpected key %q in Tenant's bao request body — "+
+				"if Tenant intentionally adopted this field add it to `want`; "+
+				"otherwise UpsertK8sRole is over-emitting and the emit "+
+				"predicate needs an omit-when-empty guard", key)
+	}
+}
+
+// ---- GetK8sRole: URL, method, body decoding, 404 ----
+
+// Pins the read-side wire shape: URL, HTTP method, and the JSON keys
+// the wrapper decodes back into K8sRole fields. vault/api unmarshals
+// JSON arrays as []interface{} and JSON numbers as json.Number, so
+// asStringSlice / asIntPtr have to coerce — without this httptest
+// coverage, a regression in those helpers would only surface against
+// a real bao server.
+func TestGetK8sRole_ReadsFieldsAtAuthRolePath(t *testing.T) {
+	t.Parallel()
+	var gotMethod, gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"token_policies": ["editor", "viewer"],
+				"bound_service_account_names": ["default", "deployer"],
+				"bound_service_account_namespaces": ["team-a-app", "team-a-api"],
+				"token_ttl": "1h",
+				"token_max_ttl": "24h",
+				"token_renewable": true,
+				"audience": "vault",
+				"alias_name_source": "serviceaccount_name",
+				"token_bound_cidrs": ["10.0.0.0/8"],
+				"token_explicit_max_ttl": "48h",
+				"token_no_default_policy": true,
+				"token_num_uses": 5,
+				"token_period": "1h",
+				"token_type": "service"
+			}
+		}`))
+	})
+
+	role, err := c.GetK8sRole(context.Background(), "kubernetes", "team-a")
+	require.NoError(t, err)
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.Equal(t, "/v1/auth/kubernetes/role/team-a", gotPath)
+
+	require.Equal(t, "team-a", role.Name)
+	require.Equal(t, []string{"editor", "viewer"}, role.Policies)
+	require.Equal(t, []string{"default", "deployer"}, role.BoundServiceAccountNames)
+	require.Equal(t, []string{"team-a-app", "team-a-api"}, role.BoundServiceAccountNamespaces)
+	require.Equal(t, "1h", role.TokenTTL)
+	require.Equal(t, "24h", role.TokenMaxTTL)
+	require.NotNil(t, role.Renewable)
+	require.True(t, *role.Renewable)
+	require.Equal(t, "vault", role.Audience)
+	require.Equal(t, "serviceaccount_name", role.AliasNameSource)
+	require.Equal(t, []string{"10.0.0.0/8"}, role.TokenBoundCIDRs)
+	require.Equal(t, "48h", role.TokenExplicitMaxTTL)
+	require.NotNil(t, role.TokenNoDefaultPolicy)
+	require.True(t, *role.TokenNoDefaultPolicy)
+	require.NotNil(t, role.TokenNumUses)
+	require.Equal(t, 5, *role.TokenNumUses)
+	require.Equal(t, "1h", role.TokenPeriod)
+	require.Equal(t, "service", role.TokenType)
+}
+
+func TestGetK8sRole_MissingReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	role, err := c.GetK8sRole(context.Background(), "kubernetes", "missing")
+	require.ErrorIs(t, err, ErrNotFound,
+		"missing role must surface as ErrNotFound for uniform classification at the controller boundary")
+	require.Nil(t, role)
+}
+
+func TestGetK8sRole_PropagatesNon404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
+	})
+	role, err := c.GetK8sRole(context.Background(), "kubernetes", "blocked")
+	require.Error(t, err)
+	require.Nil(t, role)
+	var se *StatusError
+	require.True(t, errors.As(err, &se), "403 should surface as *StatusError")
+	require.Equal(t, http.StatusForbidden, se.StatusCode)
+}
+
+// ---- DeleteK8sRole: URL + method + idempotency ----
+
+func TestDeleteK8sRole_RequestShape(t *testing.T) {
+	t.Parallel()
+	var gotMethod, gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.DeleteK8sRole(context.Background(), "kubernetes", "team-a"))
+	require.Equal(t, http.MethodDelete, gotMethod)
+	require.Equal(t, "/v1/auth/kubernetes/role/team-a", gotPath)
+}
+
+func TestDeleteK8sRole_Swallows404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteK8sRole(context.Background(), "kubernetes", "missing"),
+		"404 must be treated as success (idempotent delete; mirrors DeletePolicy)")
+}
+
+func TestDeleteK8sRole_PropagatesNon404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
+	})
+	err := c.DeleteK8sRole(context.Background(), "kubernetes", "blocked")
+	require.Error(t, err)
+	var se *StatusError
+	require.True(t, errors.As(err, &se), "403 should surface as *StatusError")
+	require.Equal(t, http.StatusForbidden, se.StatusCode)
+}
+
+// ---- asIntPtr coverage (added with the new TokenNumUses field) ----
+
+func TestAsIntPtr(t *testing.T) {
+	t.Parallel()
+	require.Nil(t, asIntPtr(nil))
+	require.Nil(t, asIntPtr("not-a-number"))
+	require.Nil(t, asIntPtr(struct{}{}))
+
+	five := 5
+	require.Equal(t, &five, asIntPtr(json.Number("5")))
+	require.Equal(t, &five, asIntPtr(int(5)))
+	require.Equal(t, &five, asIntPtr(int64(5)))
+	require.Equal(t, &five, asIntPtr(float64(5)))
+	require.Equal(t, &five, asIntPtr("5"))
 }

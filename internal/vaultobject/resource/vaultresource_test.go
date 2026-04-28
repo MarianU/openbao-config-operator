@@ -381,6 +381,95 @@ func TestSetReady_RetriesOnConflict(t *testing.T) {
 
 // Retained as a regression sentinel: the previous implementation logged
 // "may be orphaned" from a transient-condition heuristic. After replacing
+// kubeClientPeekingStub is a stub primitive whose PrepareInternalValues
+// captures whatever it sees in the reconcile ctx under the upstream-VCO
+// "kubeClient" key. Captures are written to package-level variables
+// rather than fields on the stub itself: the shared base's status-patch
+// path also uses NewInstance + Get to materialize the CR for the patch,
+// and Get from the fake client overwrites un-tagged fields, so per-
+// instance fields would be reset before the test reads them.
+type kubeClientPeekingStub struct {
+	stubCR
+}
+
+var (
+	peekedKubeClient client.Client
+	peekedOK         bool
+)
+
+func (k *kubeClientPeekingStub) PrepareInternalValues(ctx context.Context, _ client.Object) error {
+	//nolint:staticcheck // upstream-VCO key contract
+	peekedKubeClient, peekedOK = ctx.Value("kubeClient").(client.Client)
+	return nil
+}
+
+func (k *kubeClientPeekingStub) DeepCopyObject() runtime.Object {
+	if k == nil {
+		return nil
+	}
+	out := *k
+	out.Status.Conditions = append([]metav1.Condition(nil), k.Status.Conditions...)
+	return &out
+}
+
+// TestVaultResource_PrepareInternalValuesReceivesKubeClient guards the
+// invariant that the base injects r.Client into the reconcile ctx under
+// the "kubeClient" key before calling PrepareInternalValues. Primitives
+// that resolve k8s state during preparation (label-selector lookups,
+// secret-ref dereferencing) read it back from ctx; a refactor that set
+// the value on a different ctx variable would silently drop it and
+// every such primitive would fail its lookups at runtime.
+func TestVaultResource_PrepareInternalValuesReceivesKubeClient(t *testing.T) {
+	// Captures live on package-level variables; can't run in parallel
+	// with another test using the same stub. No other test does today.
+	peekedKubeClient = nil
+	peekedOK = false
+
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypes(stubGV, &kubeClientPeekingStub{})
+	metav1.AddToGroupVersion(scheme, stubGV)
+
+	stub := &kubeClientPeekingStub{
+		stubCR: stubCR{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "peek",
+				Namespace:  "default",
+				Finalizers: []string{"stub.finalizer"},
+			},
+		},
+	}
+
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stub).
+		WithStatusSubresource(&kubeClientPeekingStub{}).
+		Build()
+
+	r := &VaultResource[*kubeClientPeekingStub]{
+		Client:        cl,
+		Scheme:        scheme,
+		FinalizerName: "stub.finalizer",
+		Handlers: Handlers[*kubeClientPeekingStub]{
+			NewInstance: func() *kubeClientPeekingStub { return &kubeClientPeekingStub{} },
+			BaoGet: func(context.Context, *kubeClientPeekingStub) (map[string]any, error) {
+				return nil, ErrBaoNotFound
+			},
+			BaoWrite:  func(context.Context, *kubeClientPeekingStub) error { return nil },
+			BaoDelete: func(context.Context, *kubeClientPeekingStub) error { return nil },
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "default", Name: "peek"},
+	})
+	require.NoError(t, err)
+
+	require.True(t, peekedOK, `ctx.Value("kubeClient") must yield a client.Client`)
+	require.NotNil(t, peekedKubeClient, "captured kube client must not be nil")
+	require.Same(t, cl, peekedKubeClient,
+		"the injected kube client must be the same client the base was constructed with")
+}
+
 // it with status.baoWritten, the log line should NOT fire — the orphan
 // scenario is now handled by actually running BaoDelete.
 func TestHandleDelete_NoOrphanLogAfterStructuralFix(t *testing.T) {
