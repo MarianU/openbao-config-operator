@@ -3,6 +3,8 @@ package clusterauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -200,4 +203,43 @@ func Test_Reconcile_NewHTTPClientFailureSurfacesAsStatus(t *testing.T) {
 	require.Equal(t, "Error", cond.Reason)
 	require.Contains(t, cond.Message, "address is empty",
 		"the constructor's failure reason must reach the user via status.message")
+}
+
+// --- isForbidden classification ---
+
+// isForbidden must route through *baoclient.StatusError.StatusCode,
+// not substring-match the error message. Substring matching breaks
+// when bao's wording changes across versions or is wrapped by an
+// outer error. CLAUDE.md requires status classification through the
+// typed error.
+func TestIsForbidden_OnlyMatches403StatusError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("403 StatusError → true", func(t *testing.T) {
+		err := &baoclient.StatusError{
+			StatusCode: http.StatusForbidden,
+			Inner:      errors.New("permission denied"),
+		}
+		require.True(t, isForbidden(err))
+	})
+
+	t.Run("403 wrapped in fmt.Errorf → true (errors.As walks the chain)", func(t *testing.T) {
+		inner := &baoclient.StatusError{StatusCode: http.StatusForbidden, Inner: errors.New("denied")}
+		wrapped := fmt.Errorf("calling bao: %w", inner)
+		require.True(t, isForbidden(wrapped))
+	})
+
+	t.Run("non-403 StatusError → false", func(t *testing.T) {
+		err := &baoclient.StatusError{StatusCode: http.StatusNotFound, Inner: errors.New("nf")}
+		require.False(t, isForbidden(err))
+	})
+
+	t.Run("plain error containing 'permission denied' → false", func(t *testing.T) {
+		require.False(t, isForbidden(errors.New("permission denied: dial tcp")),
+			"substring match would have returned true; classification must be type-driven")
+	})
+
+	t.Run("nil → false", func(t *testing.T) {
+		require.False(t, isForbidden(nil))
+	})
 }

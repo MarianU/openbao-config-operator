@@ -570,3 +570,681 @@ func TestAsIntPtr(t *testing.T) {
 	require.Equal(t, &five, asIntPtr(float64(5)))
 	require.Equal(t, &five, asIntPtr("5"))
 }
+
+// ---- WithNamespace contract ----
+//
+// These tests verify the X-Vault-Namespace header is set when (and only when)
+// a non-empty namespace is passed via WithNamespace, across the three method
+// categories (mounts, policies, k8s roles). The header is the wire-level
+// signal OpenBao uses to scope a request to a namespace; getting it wrong is
+// a tenant-isolation bug, so the contract is asserted on every category.
+
+// captureNamespaceHandler returns an HTTP handler that records the value of
+// X-Vault-Namespace on each request and writes a minimal success response.
+// The captured slice is appended to in order so multi-call tests can assert
+// per-call header values.
+func captureNamespaceHandler(captured *[]string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		*captured = append(*captured, r.Header.Get("X-Vault-Namespace"))
+		w.Header().Set("Content-Type", "application/json")
+		// Different bao endpoints expect different success shapes; respond with
+		// a body broad enough to satisfy whichever method the test uses.
+		switch {
+		case r.URL.Path == "/v1/sys/mounts" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":{}}`))
+		case r.URL.Path == "/v1/sys/auth" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":{}}`))
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+}
+
+func TestWithNamespace_SetsHeaderOnPolicyWrite(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := newTestClient(t, captureNamespaceHandler(&seen))
+	require.NoError(t, c.UpsertPolicy(context.Background(), "p", "rules", WithNamespace("acme/")))
+	require.Len(t, seen, 1)
+	require.Equal(t, "acme/", seen[0])
+}
+
+func TestWithNamespace_AbsentByDefault(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := newTestClient(t, captureNamespaceHandler(&seen))
+	require.NoError(t, c.UpsertPolicy(context.Background(), "p", "rules"))
+	require.Len(t, seen, 1)
+	require.Equal(t, "", seen[0], "no opts must not set X-Vault-Namespace")
+}
+
+func TestWithNamespace_EmptyStringEquivalentToAbsent(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := newTestClient(t, captureNamespaceHandler(&seen))
+	require.NoError(t, c.UpsertPolicy(context.Background(), "p", "rules", WithNamespace("")))
+	require.Len(t, seen, 1)
+	require.Equal(t, "", seen[0],
+		`WithNamespace("") must not emit a stray empty X-Vault-Namespace`)
+}
+
+func TestWithNamespace_AppliesToK8sRoleWrite(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := newTestClient(t, captureNamespaceHandler(&seen))
+	err := c.UpsertK8sRole(context.Background(), "kubernetes", "role-a", K8sRoleSpec{
+		Policies:                 []string{"p"},
+		BoundServiceAccountNames: []string{"default"},
+	}, WithNamespace("acme/"))
+	require.NoError(t, err)
+	require.Len(t, seen, 1)
+	require.Equal(t, "acme/", seen[0])
+}
+
+func TestWithNamespace_AppliesToGetPolicy(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("X-Vault-Namespace"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"policy":"path \"x\" {}"}}`))
+	})
+	body, err := c.GetPolicy(context.Background(), "p", WithNamespace("globex/"))
+	require.NoError(t, err)
+	require.NotEmpty(t, body)
+	require.Len(t, seen, 1)
+	require.Equal(t, "globex/", seen[0])
+}
+
+func TestWithNamespace_AppliesToDeletePolicy(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := newTestClient(t, captureNamespaceHandler(&seen))
+	require.NoError(t, c.DeletePolicy(context.Background(), "p", WithNamespace("acme/")))
+	require.Len(t, seen, 1)
+	require.Equal(t, "acme/", seen[0])
+}
+
+// ---- mount lifecycle (sys/mounts/<path>) ----
+
+func TestEnableSecretEngine_PostsExpectedRequestShape(t *testing.T) {
+	t.Parallel()
+	var seenMethod, seenPath, seenBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	err := c.EnableSecretEngine(context.Background(), "secret",
+		SecretEngineMountSpec{
+			Type:        "kv",
+			Description: "tenant kv-v2",
+			Options:     map[string]string{"version": "2"},
+		})
+	require.NoError(t, err)
+	require.Equal(t, http.MethodPost, seenMethod)
+	require.Equal(t, "/v1/sys/mounts/secret", seenPath)
+	require.Contains(t, seenBody, `"type":"kv"`)
+	require.Contains(t, seenBody, `"description":"tenant kv-v2"`)
+	require.Contains(t, seenBody, `"version":"2"`)
+}
+
+func TestEnableSecretEngine_AlreadyInUseTreatedAsSuccess(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["path is already in use at secret/"]}`, http.StatusBadRequest)
+	})
+	err := c.EnableSecretEngine(context.Background(), "secret",
+		SecretEngineMountSpec{Type: "kv", Options: map[string]string{"version": "2"}})
+	require.NoError(t, err, `idempotent enable: 400 "already in use" must be treated as success`)
+}
+
+func TestEnableSecretEngine_PropagatesOtherErrors(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
+	})
+	err := c.EnableSecretEngine(context.Background(), "secret",
+		SecretEngineMountSpec{Type: "kv"})
+	require.Error(t, err)
+	var se *StatusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusForbidden, se.StatusCode)
+}
+
+func TestEnableSecretEngine_RejectsEmptyMount(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {})
+	require.Error(t, c.EnableSecretEngine(context.Background(), "",
+		SecretEngineMountSpec{Type: "kv"}), "empty mount must be rejected before any request")
+}
+
+func TestEnableSecretEngine_RejectsEmptyType(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {})
+	require.Error(t, c.EnableSecretEngine(context.Background(), "secret",
+		SecretEngineMountSpec{Type: ""}), "empty type must be rejected before any request")
+}
+
+func TestGetSecretEngineMount_ReturnsTypeAndOptionsOnHit(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/sys/mounts", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"secret/": {
+					"type": "kv",
+					"description": "tenant kv-v2",
+					"options": {"version": "2"}
+				}
+			}
+		}`))
+	})
+	got, err := c.GetSecretEngineMount(context.Background(), "secret")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "kv", got.Type)
+	require.Equal(t, "tenant kv-v2", got.Description)
+	require.Equal(t, "2", got.Options["version"])
+}
+
+func TestGetSecretEngineMount_MissingReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	})
+	_, err := c.GetSecretEngineMount(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound,
+		"absent mount must surface as ErrNotFound for uniform classification")
+}
+
+func TestDisableSecretEngineMount_Swallows404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/sys/mounts/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DisableSecretEngineMount(context.Background(), "missing"))
+}
+
+func TestDisableSecretEngineMount_PropagatesNon404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
+	})
+	err := c.DisableSecretEngineMount(context.Background(), "blocked")
+	require.Error(t, err)
+	var se *StatusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusForbidden, se.StatusCode)
+}
+
+// ---- auth-mount read + delete (sys/auth/<path>) ----
+
+func TestGetAuthMount_ReturnsTypeOnHit(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/sys/auth", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"kubernetes/": {"type": "kubernetes", "description": "k8s auth"}
+			}
+		}`))
+	})
+	got, err := c.GetAuthMount(context.Background(), "kubernetes")
+	require.NoError(t, err)
+	require.Equal(t, "kubernetes", got.Type)
+	require.Equal(t, "k8s auth", got.Description)
+}
+
+func TestGetAuthMount_MissingReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	})
+	_, err := c.GetAuthMount(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDisableAuthMount_Swallows404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/sys/auth/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DisableAuthMount(context.Background(), "missing"))
+}
+
+// ---- bao-namespace lifecycle (sys/namespaces/<name>) ----
+
+func TestCreateNamespace_PostsExpectedPath(t *testing.T) {
+	t.Parallel()
+	var seenMethod, seenPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.CreateNamespace(context.Background(), "acme"))
+	require.Equal(t, http.MethodPut, seenMethod, "vault/api Logical().Write uses PUT")
+	require.Equal(t, "/v1/sys/namespaces/acme", seenPath)
+}
+
+func TestCreateNamespace_StripsLeadingTrailingSlashes(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.CreateNamespace(context.Background(), "/acme/"))
+	require.Equal(t, "/v1/sys/namespaces/acme", seenPath)
+}
+
+func TestCreateNamespace_RejectsEmptyName(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {})
+	require.Error(t, c.CreateNamespace(context.Background(), ""))
+}
+
+func TestCreateNamespace_PropagatesErrors(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
+	})
+	err := c.CreateNamespace(context.Background(), "acme")
+	require.Error(t, err)
+	var se *StatusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusForbidden, se.StatusCode)
+}
+
+func TestGetNamespace_ReturnsPathAndIDOnHit(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/sys/namespaces/acme", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"path": "acme/",
+				"id": "rGTk2"
+			}
+		}`))
+	})
+	got, err := c.GetNamespace(context.Background(), "acme")
+	require.NoError(t, err)
+	require.Equal(t, "acme/", got.Path)
+	require.Equal(t, "rGTk2", got.ID)
+}
+
+func TestGetNamespace_MissingReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.GetNamespace(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound,
+		"absent namespace must surface as ErrNotFound for uniform classification")
+}
+
+func TestDeleteNamespace_Swallows404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/sys/namespaces/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteNamespace(context.Background(), "missing"))
+}
+
+// Bao rejects DELETE on a namespace that contains live mounts/auth/policies
+// with a 400 + descriptive message. The wrapper must propagate this as a
+// *StatusError so the controller can keep its finalizer in place — the
+// "graceful block" behaviour from the operator-runtime concerns matrix.
+func TestDeleteNamespace_PropagatesNon404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["namespace contains nested namespaces"]}`, http.StatusBadRequest)
+	})
+	err := c.DeleteNamespace(context.Background(), "acme")
+	require.Error(t, err)
+	var se *StatusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusBadRequest, se.StatusCode)
+	require.Contains(t, err.Error(), "nested namespaces")
+}
+
+// X-Vault-Namespace plumbing for nested-namespace creation: creating
+// "acme/sub" goes via POST sys/namespaces/sub with X-Vault-Namespace=acme/.
+func TestNamespaceMethods_HonorWithNamespace(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		call func(c Client) error
+	}{
+		{"CreateNamespace", func(c Client) error {
+			return c.CreateNamespace(context.Background(), "sub", WithNamespace("acme/"))
+		}},
+		{"GetNamespace", func(c Client) error {
+			_, err := c.GetNamespace(context.Background(), "sub", WithNamespace("acme/"))
+			return err
+		}},
+		{"DeleteNamespace", func(c Client) error {
+			return c.DeleteNamespace(context.Background(), "sub", WithNamespace("acme/"))
+		}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var seenNS string
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				seenNS = r.Header.Get("X-Vault-Namespace")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+			})
+			_ = tc.call(c)
+			require.Equal(t, "acme/", seenNS, "X-Vault-Namespace must be plumbed to %s", tc.name)
+		})
+	}
+}
+
+// Asserts the X-Vault-Namespace plumbing reaches the new mount methods,
+// not just policies/roles. Story 4 ships namespace-aware mounts.
+func TestMountMethods_HonorWithNamespace(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		call func(c Client) error
+	}{
+		{"EnableSecretEngine", func(c Client) error {
+			return c.EnableSecretEngine(context.Background(), "secret",
+				SecretEngineMountSpec{Type: "kv"}, WithNamespace("acme/"))
+		}},
+		{"GetSecretEngineMount", func(c Client) error {
+			_, err := c.GetSecretEngineMount(context.Background(), "secret", WithNamespace("acme/"))
+			return err
+		}},
+		{"DisableSecretEngineMount", func(c Client) error {
+			return c.DisableSecretEngineMount(context.Background(), "secret", WithNamespace("acme/"))
+		}},
+		{"GetAuthMount", func(c Client) error {
+			_, err := c.GetAuthMount(context.Background(), "kubernetes", WithNamespace("acme/"))
+			return err
+		}},
+		{"DisableAuthMount", func(c Client) error {
+			return c.DisableAuthMount(context.Background(), "kubernetes", WithNamespace("acme/"))
+		}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var seenNS string
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				seenNS = r.Header.Get("X-Vault-Namespace")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+			})
+			_ = tc.call(c)
+			require.Equal(t, "acme/", seenNS, "X-Vault-Namespace must be plumbed to %s", tc.name)
+		})
+	}
+}
+
+func TestNamespaceFromOpts(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "", NamespaceFromOpts(nil), "no opts → empty namespace")
+	require.Equal(t, "", NamespaceFromOpts([]CallOption{}), "empty opts → empty namespace")
+	require.Equal(t, "", NamespaceFromOpts([]CallOption{WithNamespace("")}), `WithNamespace("") → empty namespace`)
+	require.Equal(t, "acme/", NamespaceFromOpts([]CallOption{WithNamespace("acme/")}))
+
+	// Last writer wins when multiple WithNamespace are passed; documents the
+	// behaviour rather than asserting it as a feature, since callers are
+	// expected to pass exactly one.
+	require.Equal(t, "globex/", NamespaceFromOpts([]CallOption{
+		WithNamespace("acme/"),
+		WithNamespace("globex/"),
+	}))
+}
+
+func TestWithNamespace_DifferentNamespacesPerCallOnSameClient(t *testing.T) {
+	t.Parallel()
+	// Asserts the safety property that motivates returning a derived
+	// vault.Client per call (via clientFor): two concurrent reconciles
+	// against the same shared baoclient must not contaminate each other's
+	// namespace state. If clientFor mistakenly mutated c.v, the second
+	// call's header would bleed back into the first.
+	var seen []string
+	c := newTestClient(t, captureNamespaceHandler(&seen))
+	require.NoError(t, c.UpsertPolicy(context.Background(), "p1", "rules", WithNamespace("acme/")))
+	require.NoError(t, c.UpsertPolicy(context.Background(), "p2", "rules", WithNamespace("globex/")))
+	require.NoError(t, c.UpsertPolicy(context.Background(), "p3", "rules"))
+	require.Equal(t, []string{"acme/", "globex/", ""}, seen)
+}
+
+// ---- TuneSecretEngine ----
+
+func TestTuneSecretEngine_PostsToTuneEndpointWithDescriptionAndOptions(t *testing.T) {
+	t.Parallel()
+	var gotPath, gotMethod string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.TuneSecretEngine(context.Background(), "secret",
+		SecretEngineMountSpec{Description: "kv-v2", Options: map[string]string{"version": "2"}}))
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/v1/sys/mounts/secret/tune", gotPath)
+	require.Equal(t, "kv-v2", gotBody["description"])
+	require.NotNil(t, gotBody["options"])
+}
+
+// ---- GenerateRootPKI ----
+
+func TestGenerateRootPKI_PostsCommonName_ParsesSerial(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"serial_number": "ab:cd:ef",
+				"certificate":   "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n",
+			},
+		})
+	})
+	resp, err := c.GenerateRootPKI(context.Background(), "pki", PKIRootGenerateInput{
+		CommonName: "Test CA",
+		TTL:        "8760h",
+		KeyType:    "rsa",
+		KeyBits:    2048,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki/root/generate/internal", gotPath)
+	require.Equal(t, "Test CA", gotBody["common_name"])
+	require.Equal(t, "8760h", gotBody["ttl"])
+	require.Equal(t, "rsa", gotBody["key_type"])
+	require.Equal(t, "ab:cd:ef", resp.SerialNumber)
+}
+
+func TestGenerateRootPKI_RejectsEmptyCommonName(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao when CN is empty")
+	})
+	_, err := c.GenerateRootPKI(context.Background(), "pki", PKIRootGenerateInput{})
+	require.ErrorContains(t, err, "common_name")
+}
+
+// ---- ReadPKICA ----
+
+func TestReadPKICA_ReturnsCert(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/pki/cert/ca", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"certificate":   "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n",
+				"serial_number": "ab:cd",
+			},
+		})
+	})
+	resp, err := c.ReadPKICA(context.Background(), "pki")
+	require.NoError(t, err)
+	require.Contains(t, resp.Certificate, "BEGIN CERTIFICATE")
+	require.Equal(t, "ab:cd", resp.SerialNumber)
+}
+
+func TestReadPKICA_400NoDefaultIssuer_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["no default issuer currently configured"]}`, http.StatusBadRequest)
+	})
+	_, err := c.ReadPKICA(context.Background(), "pki")
+	require.ErrorIs(t, err, ErrNotFound,
+		"bao 2.x emits 400 + 'no default issuer' for empty mounts; "+
+			"the wrapper must coalesce to ErrNotFound so the controller's create path fires")
+}
+
+func TestReadPKICA_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadPKICA(context.Background(), "pki")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// ---- WritePKIURLs / ReadPKIURLs ----
+
+func TestWritePKIURLs_PostsAllThreeArrays(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.WritePKIURLs(context.Background(), "pki", PKIURLsInput{
+		IssuingCertificates:   []string{"https://example.com/ca"},
+		CRLDistributionPoints: []string{"https://example.com/crl"},
+		OCSPServers:           []string{"https://example.com/ocsp"},
+	}))
+	require.Equal(t, "/v1/pki/config/urls", gotPath)
+	require.NotNil(t, gotBody["issuing_certificates"])
+	require.NotNil(t, gotBody["crl_distribution_points"])
+	require.NotNil(t, gotBody["ocsp_servers"])
+}
+
+func TestReadPKIURLs_DecodesAllThreeArrays(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/pki/config/urls", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issuing_certificates":    []any{"https://a.example.com/ca"},
+				"crl_distribution_points": []any{"https://a.example.com/crl"},
+				"ocsp_servers":            []any{},
+			},
+		})
+	})
+	urls, err := c.ReadPKIURLs(context.Background(), "pki")
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://a.example.com/ca"}, urls.IssuingCertificates)
+	require.Equal(t, []string{"https://a.example.com/crl"}, urls.CRLDistributionPoints)
+	require.Empty(t, urls.OCSPServers)
+}
+
+// ---- WritePKIRole / ReadPKIRole / DeletePKIRole ----
+
+func TestWritePKIRole_PostsRoleBody(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.WritePKIRole(context.Background(), "pki", "web", PKIRoleSpec{
+		AllowedDomains:  []string{"example.com"},
+		AllowSubdomains: true,
+		KeyType:         "rsa",
+		KeyBits:         2048,
+		TTL:             "720h",
+	}))
+	require.Equal(t, "/v1/pki/roles/web", gotPath)
+	require.Equal(t, "rsa", gotBody["key_type"])
+	require.Equal(t, true, gotBody["allow_subdomains"])
+	require.Equal(t, "720h", gotBody["ttl"])
+	// Zero-valued fields must NOT be sent — bao keeps its defaults.
+	_, hasServerFlag := gotBody["server_flag"]
+	require.False(t, hasServerFlag, "zero-valued fields elided from write body")
+}
+
+func TestReadPKIRole_DecodesAndNormalizesTTL(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/pki/roles/web", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"allowed_domains":  []any{"example.com"},
+				"allow_subdomains": true,
+				"server_flag":      true,
+				"client_flag":      true,
+				"key_type":         "rsa",
+				"key_bits":         2048,
+				"ttl":              2592000, // bao returns int seconds
+				"max_ttl":          0,
+			},
+		})
+	})
+	role, err := c.ReadPKIRole(context.Background(), "pki", "web")
+	require.NoError(t, err)
+	require.Equal(t, []string{"example.com"}, role.AllowedDomains)
+	require.True(t, role.AllowSubdomains)
+	require.Equal(t, "2592000s", role.TTL,
+		"int seconds normalized to <n>s string for spec-shape round-trip")
+	require.Equal(t, "", role.MaxTTL, "ttl=0 elided (matches spec zero-value)")
+}
+
+func TestReadPKIRole_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadPKIRole(context.Background(), "pki", "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeletePKIRole_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/pki/roles/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeletePKIRole(context.Background(), "pki", "missing"),
+		"404 = already gone, treated as idempotent success")
+}
+
+// ---- silence linter on imports used only by appended tests ----
+var _ = io.Discard

@@ -10,11 +10,63 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
+    - description: Cluster-level configuration for the MTO OpenBao extension operator.
+        Holds the OpenBao server connection, the token used for primitive reconciles,
+        per-tenant token policies (TTL/MaxTTL/renewable), tenancy mode (path vs namespace),
+        and safety toggles (allowDeletes). Reconciled by the ClusterAuth controller
+        (verifies the token, ensures the kubernetes auth mount exists) and read by
+        the Tenant controller for per-tenant config.
+      displayName: OpenBao Extension
+      kind: OpenBaoExtension
+      name: openbaoextensions.security.mto.stakater.com
+      version: v1alpha1
     - description: An OpenBao ACL policy managed by the MTO extension operator. Authors
-        a policy document in OpenBao's sys/policies/acl/ path.
-      displayName: Policy
-      kind: Policy
-      name: policies.security.mto.stakater.com
+        a policy document in OpenBao's sys/policies/acl/ path. Optionally scoped to
+        an OpenBao namespace via spec.openbaoNamespace (X-Vault-Namespace header).
+      displayName: OpenBao Policy
+      kind: OpenBaoPolicy
+      name: openbaopolicies.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao Kubernetes-auth role managed by the MTO extension operator.
+        Authors a role at auth/<spec.path>/role/<name> binding service accounts in
+        selected k8s namespaces (literal list or label selector) to OpenBao policies.
+        Optionally scoped to an OpenBao namespace via spec.openbaoNamespace.
+      displayName: OpenBao Kubernetes Auth Role
+      kind: OpenBaoKubernetesAuthRole
+      name: openbaokubernetesauthroles.security.mto.stakater.com
+      version: v1alpha1
+    - description: A bao-side secret-engine mount lifecycle managed by the MTO extension
+        operator. Discriminated-union spec selects engine kind (kvV2 / transit / pki)
+        and writes to sys/mounts/<path>. Optionally scoped to an OpenBao namespace
+        via spec.openbaoNamespace. Auth-method mounts are managed elsewhere.
+      displayName: OpenBao Secret Engine
+      kind: OpenBaoSecretEngine
+      name: openbaosecretengines.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao namespace lifecycle managed by the MTO extension operator.
+        Owns sys/namespaces/<name>. Nested namespaces are addressed via spec.openbaoNamespace
+        as the parent context. Delete is gracefully blocked until the bao namespace
+        is empty (no live mounts/auth/policies/children).
+      displayName: OpenBao Namespace
+      kind: OpenBaoNamespace
+      name: openbaonamespaces.security.mto.stakater.com
+      version: v1alpha1
+    - description: PKI mount configuration. Generates the root CA at <path>/root/generate/internal
+        and writes the URL distribution config at <path>/config/urls. Pairs with an
+        existing OpenBaoSecretEngine of kind=pki at the same path. IsDeletable=false
+        — deleting the CR releases the finalizer without touching bao, because disabling
+        a PKI mount loses the private key irreversibly.
+      displayName: OpenBao PKI Secret Engine Config
+      kind: OpenBaoPKISecretEngineConfig
+      name: openbaopkisecretengineconfigs.security.mto.stakater.com
+      version: v1alpha1
+    - description: PKI issuance role at <path>/roles/<name>. Defines what certs may
+        be issued from a PKI mount (allowed domains, key type/bits, EKU flags, TTL).
+        Requires the mount to have a CA — typically configured via OpenBaoPKISecretEngineConfig
+        at the same path. IsDeletable=true; CR delete removes the bao role.
+      displayName: OpenBao PKI Secret Engine Role
+      kind: OpenBaoPKISecretEngineRole
+      name: openbaopkisecretengineroles.security.mto.stakater.com
       version: v1alpha1
   description: MTO Extension for OpenBao
   displayName: MTO Extension OpenBao

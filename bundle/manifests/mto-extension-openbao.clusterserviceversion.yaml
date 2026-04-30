@@ -1,0 +1,610 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoKubernetesAuthRole",
+          "metadata": {
+            "name": "mto-extension-openbao-prod-deployers",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "path": "kubernetes",
+            "policies": [
+              "prod-deploy-policy"
+            ],
+            "targetNamespaces": {
+              "targetNamespaces": [
+                "prod-app-1",
+                "prod-app-2"
+              ]
+            },
+            "targetServiceAccounts": [
+              "deployer"
+            ],
+            "tokenMaxTTL": "2h",
+            "tokenTTL": "1h",
+            "tokenType": "service"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoKubernetesAuthRole",
+          "metadata": {
+            "name": "mto-extension-openbao-team-a-readers",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "audience": "vault",
+            "path": "kubernetes",
+            "policies": [
+              "team-a-secret-reader"
+            ],
+            "targetNamespaces": {
+              "targetNamespaceSelector": {
+                "matchLabels": {
+                  "stakater.com/tenant": "team-a"
+                }
+              }
+            },
+            "targetServiceAccounts": [
+              "default"
+            ],
+            "tokenMaxTTL": "24h",
+            "tokenTTL": "1h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoKubernetesAuthRole",
+          "metadata": {
+            "name": "prod-deployers",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "path": "kubernetes",
+            "policies": [
+              "prod-deploy-policy"
+            ],
+            "targetNamespaces": {
+              "targetNamespaces": [
+                "prod-app-1",
+                "prod-app-2"
+              ]
+            },
+            "targetServiceAccounts": [
+              "deployer"
+            ],
+            "tokenMaxTTL": "2h",
+            "tokenTTL": "1h",
+            "tokenType": "service"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoKubernetesAuthRole",
+          "metadata": {
+            "name": "team-a-readers",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "audience": "vault",
+            "path": "kubernetes",
+            "policies": [
+              "team-a-secret-reader"
+            ],
+            "targetNamespaces": {
+              "targetNamespaceSelector": {
+                "matchLabels": {
+                  "stakater.com/tenant": "team-a"
+                }
+              }
+            },
+            "targetServiceAccounts": [
+              "default"
+            ],
+            "tokenMaxTTL": "24h",
+            "tokenTTL": "1h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoNamespace",
+          "metadata": {
+            "name": "acme",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": null
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoNamespace",
+          "metadata": {
+            "name": "acme-sub",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "name": "sub",
+            "openbaoNamespace": "acme/"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoNamespace",
+          "metadata": {
+            "name": "mto-extension-openbao-acme",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": null
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoNamespace",
+          "metadata": {
+            "name": "mto-extension-openbao-acme-sub",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "name": "sub",
+            "openbaoNamespace": "acme/"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineConfig",
+          "metadata": {
+            "name": "mto-extension-openbao-pki-root",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "commonName": "Demo Root CA",
+            "keyBits": 4096,
+            "keyType": "rsa",
+            "path": "pki",
+            "pkiType": "root",
+            "subject": {
+              "country": [
+                "US"
+              ],
+              "organization": [
+                "Stakater Demo"
+              ],
+              "ou": [
+                "Platform"
+              ]
+            },
+            "ttl": "87600h",
+            "urls": {
+              "crlDistributionPoints": [
+                "https://bao.example.com/v1/pki/crl"
+              ],
+              "issuingCertificates": [
+                "https://bao.example.com/v1/pki/ca"
+              ]
+            }
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineConfig",
+          "metadata": {
+            "name": "pki-root",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "commonName": "Demo Root CA",
+            "keyBits": 4096,
+            "keyType": "rsa",
+            "path": "pki",
+            "pkiType": "root",
+            "subject": {
+              "country": [
+                "US"
+              ],
+              "organization": [
+                "Stakater Demo"
+              ],
+              "ou": [
+                "Platform"
+              ]
+            },
+            "ttl": "87600h",
+            "urls": {
+              "crlDistributionPoints": [
+                "https://bao.example.com/v1/pki/crl"
+              ],
+              "issuingCertificates": [
+                "https://bao.example.com/v1/pki/ca"
+              ]
+            }
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineRole",
+          "metadata": {
+            "name": "mto-extension-openbao-web-server",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "allowSubdomains": true,
+            "allowedDomains": [
+              "*.demo.example.com"
+            ],
+            "keyBits": 2048,
+            "keyType": "rsa",
+            "maxTtl": "8760h",
+            "path": "pki",
+            "serverFlag": true,
+            "ttl": "720h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineRole",
+          "metadata": {
+            "name": "web-server",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "allowSubdomains": true,
+            "allowedDomains": [
+              "*.demo.example.com"
+            ],
+            "keyBits": 2048,
+            "keyType": "rsa",
+            "maxTtl": "8760h",
+            "path": "pki",
+            "serverFlag": true,
+            "ttl": "720h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPolicy",
+          "metadata": {
+            "name": "mto-extension-openbao-secret-reader",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "policy": "path \"secret/data/public/*\" {\n  capabilities = [\"read\", \"list\"]\n}\npath \"secret/metadata/public/*\" {\n  capabilities = [\"list\"]\n}\n"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPolicy",
+          "metadata": {
+            "name": "secret-reader",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "policy": "path \"secret/data/public/*\" {\n  capabilities = [\"read\", \"list\"]\n}\npath \"secret/metadata/public/*\" {\n  capabilities = [\"list\"]\n}\n"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoSecretEngine",
+          "metadata": {
+            "name": "mto-extension-openbao-secret-kv",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "description": "cluster-shared kv-v2 secret engine",
+            "kvV2": {},
+            "path": "secret"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoSecretEngine",
+          "metadata": {
+            "name": "secret-kv",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "description": "cluster-shared kv-v2 secret engine",
+            "kvV2": {},
+            "path": "secret"
+          }
+        }
+      ]
+    capabilities: Basic Install
+    createdAt: "2026-04-30T17:17:18Z"
+    operators.operatorframework.io/builder: operator-sdk-v1.41.1
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+  name: mto-extension-openbao.v0.0.1
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: Cluster-level configuration for the MTO OpenBao extension operator.
+        Holds the OpenBao server connection, the token used for primitive reconciles,
+        per-tenant token policies (TTL/MaxTTL/renewable), tenancy mode (path vs namespace),
+        and safety toggles (allowDeletes). Reconciled by the ClusterAuth controller
+        (verifies the token, ensures the kubernetes auth mount exists) and read by
+        the Tenant controller for per-tenant config.
+      displayName: OpenBao Extension
+      kind: OpenBaoExtension
+      name: openbaoextensions.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao Kubernetes-auth role managed by the MTO extension operator.
+        Authors a role at auth/<spec.path>/role/<name> binding service accounts in
+        selected k8s namespaces (literal list or label selector) to OpenBao policies.
+        Optionally scoped to an OpenBao namespace via spec.openbaoNamespace.
+      displayName: OpenBao Kubernetes Auth Role
+      kind: OpenBaoKubernetesAuthRole
+      name: openbaokubernetesauthroles.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao namespace lifecycle managed by the MTO extension operator.
+        Owns sys/namespaces/<name>. Nested namespaces are addressed via spec.openbaoNamespace
+        as the parent context. Delete is gracefully blocked until the bao namespace
+        is empty (no live mounts/auth/policies/children).
+      displayName: OpenBao Namespace
+      kind: OpenBaoNamespace
+      name: openbaonamespaces.security.mto.stakater.com
+      version: v1alpha1
+    - description: PKI mount configuration. Generates the root CA at <path>/root/generate/internal
+        and writes the URL distribution config at <path>/config/urls. Pairs with an
+        existing OpenBaoSecretEngine of kind=pki at the same path. IsDeletable=false
+        — deleting the CR releases the finalizer without touching bao, because disabling
+        a PKI mount loses the private key irreversibly.
+      displayName: OpenBao PKI Secret Engine Config
+      kind: OpenBaoPKISecretEngineConfig
+      name: openbaopkisecretengineconfigs.security.mto.stakater.com
+      version: v1alpha1
+    - description: PKI issuance role at <path>/roles/<name>. Defines what certs may
+        be issued from a PKI mount (allowed domains, key type/bits, EKU flags, TTL).
+        Requires the mount to have a CA — typically configured via OpenBaoPKISecretEngineConfig
+        at the same path. IsDeletable=true; CR delete removes the bao role.
+      displayName: OpenBao PKI Secret Engine Role
+      kind: OpenBaoPKISecretEngineRole
+      name: openbaopkisecretengineroles.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao ACL policy managed by the MTO extension operator. Authors
+        a policy document in OpenBao's sys/policies/acl/ path. Optionally scoped to
+        an OpenBao namespace via spec.openbaoNamespace (X-Vault-Namespace header).
+      displayName: OpenBao Policy
+      kind: OpenBaoPolicy
+      name: openbaopolicies.security.mto.stakater.com
+      version: v1alpha1
+    - description: A bao-side secret-engine mount lifecycle managed by the MTO extension
+        operator. Discriminated-union spec selects engine kind (kvV2 / transit / pki)
+        and writes to sys/mounts/<path>. Optionally scoped to an OpenBao namespace
+        via spec.openbaoNamespace. Auth-method mounts are managed elsewhere.
+      displayName: OpenBao Secret Engine
+      kind: OpenBaoSecretEngine
+      name: openbaosecretengines.security.mto.stakater.com
+      version: v1alpha1
+  description: MTO Extension for OpenBao
+  displayName: MTO Extension OpenBao
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      clusterPermissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - namespaces
+          - secrets
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - security.mto.stakater.com
+          resources:
+          - openbaoextensions
+          - openbaokubernetesauthroles
+          - openbaonamespaces
+          - openbaopolicies
+          - openbaosecretengines
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - security.mto.stakater.com
+          resources:
+          - openbaoextensions/finalizers
+          - openbaokubernetesauthroles/finalizers
+          - openbaonamespaces/finalizers
+          - openbaopkisecretengineconfigs/finalizers
+          - openbaopkisecretengineroles/finalizers
+          - openbaopolicies/finalizers
+          - openbaosecretengines/finalizers
+          verbs:
+          - update
+        - apiGroups:
+          - security.mto.stakater.com
+          resources:
+          - openbaoextensions/status
+          - openbaokubernetesauthroles/status
+          - openbaonamespaces/status
+          - openbaopkisecretengineconfigs/status
+          - openbaopkisecretengineroles/status
+          - openbaopolicies/status
+          - openbaosecretengines/status
+          verbs:
+          - get
+          - patch
+          - update
+        - apiGroups:
+          - security.mto.stakater.com
+          resources:
+          - openbaopkisecretengineconfigs
+          - openbaopkisecretengineroles
+          verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - tenantoperator.stakater.com
+          resources:
+          - tenants
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - tenantoperator.stakater.com
+          resources:
+          - tenants/status
+          verbs:
+          - get
+        - apiGroups:
+          - authentication.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        serviceAccountName: mto-extension-openbao-controller-manager
+      deployments:
+      - label:
+          app.kubernetes.io/managed-by: kustomize
+          app.kubernetes.io/name: mto-extension-openbao
+          control-plane: controller-manager
+        name: mto-extension-openbao-controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              control-plane: controller-manager
+          strategy: {}
+          template:
+            metadata:
+              annotations:
+                kubectl.kubernetes.io/default-container: manager
+              labels:
+                control-plane: controller-manager
+            spec:
+              containers:
+              - args:
+                - --metrics-bind-address=:8443
+                - --leader-elect
+                - --health-probe-bind-address=:8081
+                command:
+                - /manager
+                env:
+                - name: VAULT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      key: token
+                      name: mto-openbao-token
+                - name: VAULT_ADDR
+                  valueFrom:
+                    configMapKeyRef:
+                      key: VAULT_ADDR
+                      name: mto-extension-openbao-controller-manager-config-c22hgd88dg
+                image: ghcr.io/stakater/mto-extension-openbao:v0.0.1
+                imagePullPolicy: IfNotPresent
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: manager
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  limits:
+                    cpu: 500m
+                    memory: 128Mi
+                  requests:
+                    cpu: 10m
+                    memory: 64Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+              imagePullSecrets:
+              - name: saap-dockerconfigjson
+              securityContext:
+                runAsNonRoot: true
+              serviceAccountName: mto-extension-openbao-controller-manager
+              terminationGracePeriodSeconds: 10
+      permissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - coordination.k8s.io
+          resources:
+          - leases
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        serviceAccountName: mto-extension-openbao-controller-manager
+    strategy: deployment
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - Kubernetes
+  - OpenShift
+  - OpenBao
+  - MTO
+  - Tenancy
+  links:
+  - name: Mto Extension Openbao
+    url: https://mto-extension-openbao.domain
+  maintainers:
+  - email: hello@stakater.com
+    name: Stakater
+  maturity: alpha
+  provider:
+    name: Stakater
+    url: https://stakater.com
+  version: 0.0.1

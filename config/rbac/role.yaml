@@ -16,9 +16,14 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - kubernetesauthengineroles
-  - policies
+  - openbaoextensions
+  - openbaokubernetesauthroles
+  - openbaonamespaces
+  - openbaopolicies
+  - openbaosecretengines
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch
@@ -27,17 +32,25 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - kubernetesauthengineroles/finalizers
   - openbaoextensions/finalizers
-  - policies/finalizers
+  - openbaokubernetesauthroles/finalizers
+  - openbaonamespaces/finalizers
+  - openbaopkisecretengineconfigs/finalizers
+  - openbaopkisecretengineroles/finalizers
+  - openbaopolicies/finalizers
+  - openbaosecretengines/finalizers
   verbs:
   - update
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - kubernetesauthengineroles/status
   - openbaoextensions/status
-  - policies/status
+  - openbaokubernetesauthroles/status
+  - openbaonamespaces/status
+  - openbaopkisecretengineconfigs/status
+  - openbaopkisecretengineroles/status
+  - openbaopolicies/status
+  - openbaosecretengines/status
   verbs:
   - get
   - patch
@@ -45,10 +58,9 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaoextensions
+  - openbaopkisecretengineconfigs
+  - openbaopkisecretengineroles
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch

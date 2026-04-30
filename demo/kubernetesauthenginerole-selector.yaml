@@ -1,0 +1,18 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoKubernetesAuthRole
+metadata:
+  name: team-a-readers
+  namespace: mto-extension-openbao-system
+spec:
+  path: kubernetes
+  policies:
+    - team-a-secret-reader
+  targetServiceAccounts:
+    - default
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        stakater.com/tenant: team-a
+  audience: vault
+  tokenTTL: 1h
+  tokenMaxTTL: 24h

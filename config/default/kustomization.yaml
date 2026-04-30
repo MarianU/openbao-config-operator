@@ -15,7 +15,7 @@ namePrefix: mto-extension-openbao-
 #    someName: someValue
 
 resources:
-#- ../crd
+- ../crd
 - ../rbac
 - ../manager
 - ../samples

@@ -1,0 +1,20 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoNamespace
+metadata:
+  name: acme
+  namespace: mto-extension-openbao-system
+spec:
+  # spec.name defaults to metadata.name; set it if the bao-side name
+  # must differ from the Kubernetes resource name.
+  # spec.openbaoNamespace is the parent context. Empty (the default)
+  # creates the namespace at root. To create a nested namespace
+  # `acme/sub`, set spec.name=sub and spec.openbaoNamespace=acme/.
+---
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoNamespace
+metadata:
+  name: acme-sub
+  namespace: mto-extension-openbao-system
+spec:
+  name: sub
+  openbaoNamespace: acme/

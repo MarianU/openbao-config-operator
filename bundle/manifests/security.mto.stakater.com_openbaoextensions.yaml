@@ -1,0 +1,591 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  creationTimestamp: null
+  name: openbaoextensions.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoExtension
+    listKind: OpenBaoExtensionList
+    plural: openbaoextensions
+    shortNames:
+    - obx
+    singular: openbaoextension
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.tenancy.mode
+      name: Mode
+      type: string
+    - jsonPath: .spec.sso.mode
+      name: SSO
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              authManagement:
+                properties:
+                  kubernetes:
+                    default: ensure
+                    enum:
+                    - "off"
+                    - ensure
+                    type: string
+                  oidc:
+                    default: ensure
+                    enum:
+                    - "off"
+                    - ensure
+                    type: string
+                required:
+                - kubernetes
+                - oidc
+                type: object
+              engines:
+                items:
+                  properties:
+                    enabled:
+                      default: true
+                      type: boolean
+                    layoutRef:
+                      description: Reference to a layout template key, e.g., "kv".
+                      minLength: 1
+                      type: string
+                    name:
+                      description: Logical name of this engine config, e.g., "kv".
+                      minLength: 1
+                      type: string
+                    policies:
+                      properties:
+                        presets:
+                          description: List of Bao policy presets to materialize for
+                            this engine.
+                          items:
+                            enum:
+                            - admin
+                            - editor
+                            - viewer
+                            - none
+                            type: string
+                          minItems: 1
+                          type: array
+                      required:
+                      - presets
+                      type: object
+                    projection:
+                      properties:
+                        mode:
+                          default: external-secrets
+                          enum:
+                          - external-secrets
+                          - csi
+                          - none
+                          type: string
+                        secretStore:
+                          description: Required when mode=external-secrets; must be
+                            omitted otherwise.
+                          properties:
+                            name:
+                              minLength: 1
+                              type: string
+                            scope:
+                              default: namespace
+                              enum:
+                              - namespace
+                              - cluster
+                              type: string
+                          required:
+                          - name
+                          - scope
+                          type: object
+                      required:
+                      - mode
+                      type: object
+                    strategy:
+                      properties:
+                        mount:
+                          default:
+                            manage: adopt
+                            path: secret
+                          properties:
+                            manage:
+                              allOf:
+                              - enum:
+                                - "off"
+                                - adopt
+                                - ensure
+                              - enum:
+                                - "off"
+                                - adopt
+                                - ensure
+                              default: adopt
+                              type: string
+                            path:
+                              description: e.g., "secret" → /v1/secret (kv-v2)
+                              minLength: 1
+                              type: string
+                          required:
+                          - manage
+                          - path
+                          type: object
+                        scope:
+                          default: cluster
+                          enum:
+                          - cluster
+                          - tenant
+                          type: string
+                      required:
+                      - mount
+                      - scope
+                      type: object
+                    type:
+                      enum:
+                      - kv-v2
+                      type: string
+                  required:
+                  - enabled
+                  - layoutRef
+                  - name
+                  - policies
+                  - projection
+                  - strategy
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+              layout:
+                properties:
+                  templates:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Named templates. Example:
+                        kv: "secret/tenants/{{ .tenant }}/{{ .env }}/{{ .namespace }}/{{ .app }}/{{ .name }}"
+                    minProperties: 1
+                    type: object
+                required:
+                - templates
+                type: object
+              policyOverrides:
+                description: If capabilityOverrides.<tier> present ⇒ it replaces defaults
+                  for that tier.
+                properties:
+                  admin:
+                    properties:
+                      capabilities:
+                        description: Complete verb set for this tier (replaces defaults).
+                        items:
+                          description: OpenBao/Vault policy verbs.
+                          enum:
+                          - create
+                          - read
+                          - update
+                          - delete
+                          - list
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - capabilities
+                    type: object
+                  editor:
+                    properties:
+                      capabilities:
+                        description: Complete verb set for this tier (replaces defaults).
+                        items:
+                          description: OpenBao/Vault policy verbs.
+                          enum:
+                          - create
+                          - read
+                          - update
+                          - delete
+                          - list
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - capabilities
+                    type: object
+                  viewer:
+                    properties:
+                      capabilities:
+                        description: Complete verb set for this tier (replaces defaults).
+                        items:
+                          description: OpenBao/Vault policy verbs.
+                          enum:
+                          - create
+                          - read
+                          - update
+                          - delete
+                          - list
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - capabilities
+                    type: object
+                type: object
+              rbac:
+                properties:
+                  defaultCapability:
+                    default: editor
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
+                    type: string
+                  roleScope:
+                    default: namespace
+                    enum:
+                    - namespace
+                    - app
+                    type: string
+                  token:
+                    properties:
+                      maxTTL:
+                        default: 4h
+                        type: string
+                      renewable:
+                        type: boolean
+                      ttl:
+                        default: 1h
+                        type: string
+                    type: object
+                required:
+                - defaultCapability
+                - roleScope
+                - token
+                type: object
+              safety:
+                properties:
+                  allowDeletes:
+                    default: false
+                    description: In kv-v2, "delete" hides a version; "destroy" permanently
+                      deletes it.
+                    type: boolean
+                required:
+                - allowDeletes
+                type: object
+              scaffolding:
+                properties:
+                  annotations:
+                    properties:
+                      enable:
+                        default: mto.secrets/enable
+                        type: string
+                      env:
+                        default: mto.secrets/env
+                        type: string
+                      keys:
+                        default: mto.secrets/keys
+                        type: string
+                    required:
+                    - enable
+                    - env
+                    - keys
+                    type: object
+                  mode:
+                    default: on-annotation
+                    enum:
+                    - none
+                    - on-annotation
+                    type: string
+                required:
+                - annotations
+                - mode
+                type: object
+              server:
+                properties:
+                  tokenSecretRef:
+                    description: |-
+                      Secret with a "token" key (or configured key) containing a Bao token
+                      scoped to the operator's service account.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  url:
+                    format: uri
+                    type: string
+                required:
+                - tokenSecretRef
+                - url
+                type: object
+              sso:
+                properties:
+                  clusterRef:
+                    description: Present when mode=cluster.
+                    properties:
+                      name:
+                        description: |-
+                          Name of the cluster-wide SSO config resource your extension provides.
+                          (Opaque to this CRD; your operator resolves it.)
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  inline:
+                    additionalProperties:
+                      type: string
+                    description: Present when mode=inline. Opaque key/value bag to
+                      keep the CRD general.
+                    type: object
+                  mode:
+                    default: cluster
+                    enum:
+                    - cluster
+                    - secret
+                    - inline
+                    - disabled
+                    type: string
+                  roleResolution:
+                    description: Required except when mode=disabled.
+                    properties:
+                      claim:
+                        description: Claim to inspect (e.g., "groups").
+                        minLength: 1
+                        type: string
+                      fallback:
+                        default: deny
+                        enum:
+                        - owner
+                        - editor
+                        - viewer
+                        - deny
+                        type: string
+                      patterns:
+                        items:
+                          properties:
+                            match:
+                              description: Template-aware group matcher, e.g., "tenant-{{
+                                .tenant }}-owners".
+                              minLength: 1
+                              type: string
+                            role:
+                              enum:
+                              - owner
+                              - editor
+                              - viewer
+                              type: string
+                          required:
+                          - match
+                          - role
+                          type: object
+                        minItems: 1
+                        type: array
+                      tieBreakStrategy:
+                        default: highest
+                        enum:
+                        - highest
+                        - lowest
+                        - deny
+                        type: string
+                    required:
+                    - claim
+                    - fallback
+                    - patterns
+                    - tieBreakStrategy
+                    type: object
+                  secretRef:
+                    description: Present when mode=secret. Secret data/keys are defined
+                      by your extension.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                required:
+                - mode
+                type: object
+              tenancy:
+                properties:
+                  defaults:
+                    properties:
+                      env:
+                        default: prod
+                        minLength: 1
+                        type: string
+                    required:
+                    - env
+                    type: object
+                  mode:
+                    default: path
+                    enum:
+                    - path
+                    - namespace
+                    type: string
+                required:
+                - defaults
+                - mode
+                type: object
+              tenantRoleMapping:
+                description: If tenantRoleMapping.<role> = none ⇒ ignore any capabilityOverrides.<tier>
+                  for that tier.
+                properties:
+                  editor:
+                    default: editor
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
+                    type: string
+                  owner:
+                    default: admin
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
+                    type: string
+                  viewer:
+                    default: viewer
+                    enum:
+                    - admin
+                    - editor
+                    - viewer
+                    - none
+                    type: string
+                required:
+                - editor
+                - owner
+                - viewer
+                type: object
+            required:
+            - authManagement
+            - engines
+            - layout
+            - rbac
+            - safety
+            - scaffolding
+            - server
+            - sso
+            - tenancy
+            - tenantRoleMapping
+            type: object
+          status:
+            properties:
+              conditions:
+                description: |-
+                  Standard conditions: Ready, AuthConfigured, EnginesSynced, etc.
+                  Keep minimal; extend as implementation matures.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

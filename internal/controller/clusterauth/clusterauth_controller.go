@@ -2,6 +2,8 @@ package clusterauth
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -195,13 +197,20 @@ func (r *ClusterAuthReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // --- helpers ---
 
+// isForbidden returns true when err carries an HTTP 403 from bao,
+// regardless of the surrounding error chain. Routes through
+// baoclient's structured *StatusError via errors.As — substring
+// matching on the error message is brittle (bao's wording changes
+// across versions, and locale-aware tooling can re-render the body),
+// and CLAUDE.md requires status classification through the typed
+// error.
 func isForbidden(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "permission denied") ||
-		strings.Contains(msg, "forbidden") ||
-		strings.Contains(msg, "status 403") ||
-		strings.Contains(msg, "code 403")
+	var se *baoclient.StatusError
+	if errors.As(err, &se) {
+		return se.StatusCode == http.StatusForbidden
+	}
+	return false
 }

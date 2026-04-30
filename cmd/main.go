@@ -35,10 +35,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	vcov1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/vco/v1alpha1"
 	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
+	openbaokar "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaokubernetesauthrole"
+	openbaopkic "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretengineconfig"
+	openbaopkir "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretenginerole"
+	openbaose "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaosecretengine"
+	openbaonamespace "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaonamespace"
+	openbaopolicy "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopolicy"
 	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
-	vcocontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/vco"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,7 +54,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(obxv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(vcov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(mtov1beta3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -175,23 +178,63 @@ func main() {
 		os.Exit(1)
 	}
 
-	policyReconciler, err := vcocontroller.NewPolicyReconciler(mgr)
+	openBaoPolicyReconciler, err := openbaopolicy.NewOpenBaoPolicyReconciler(mgr)
 	if err != nil {
-		setupLog.Error(err, "unable to create PolicyReconciler")
+		setupLog.Error(err, "unable to create OpenBaoPolicyReconciler")
 		os.Exit(1)
 	}
-	if err := policyReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup Policy controller")
+	if err := openBaoPolicyReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoPolicy controller")
 		os.Exit(1)
 	}
 
-	keerReconciler, err := vcocontroller.NewKubernetesAuthEngineRoleReconciler(mgr)
+	openBaoKARReconciler, err := openbaokar.NewOpenBaoKubernetesAuthRoleReconciler(mgr)
 	if err != nil {
-		setupLog.Error(err, "unable to create KubernetesAuthEngineRoleReconciler")
+		setupLog.Error(err, "unable to create OpenBaoKubernetesAuthRoleReconciler")
 		os.Exit(1)
 	}
-	if err := keerReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup KubernetesAuthEngineRole controller")
+	if err := openBaoKARReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoKubernetesAuthRole controller")
+		os.Exit(1)
+	}
+
+	openBaoSecretEngineReconciler, err := openbaose.NewOpenBaoSecretEngineReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoSecretEngineReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoSecretEngineReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoSecretEngine controller")
+		os.Exit(1)
+	}
+
+	openBaoNamespaceReconciler, err := openbaonamespace.NewOpenBaoNamespaceReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoNamespaceReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoNamespaceReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoNamespace controller")
+		os.Exit(1)
+	}
+
+	openBaoPKIConfigReconciler, err := openbaopkic.NewOpenBaoPKISecretEngineConfigReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoPKISecretEngineConfigReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoPKIConfigReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoPKISecretEngineConfig controller")
+		os.Exit(1)
+	}
+
+	openBaoPKIRoleReconciler, err := openbaopkir.NewOpenBaoPKISecretEngineRoleReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoPKISecretEngineRoleReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoPKIRoleReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoPKISecretEngineRole controller")
 		os.Exit(1)
 	}
 

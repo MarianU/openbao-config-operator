@@ -27,4 +27,19 @@ go.work
 *.swo
 *~
 
+# Claude Code local state (transcripts, agent scratch, personal settings)
+.claude/
+
+# Cross-compiled manager binary used by Dockerfile.local for fast kind-cluster
+# rebuilds. Produced by `GOOS=linux GOARCH=arm64 go build -o manager-linux-...`.
+# Build artifact, not source.
+manager-linux-*-for-build
+
+# Working notes — implementation plans, checklists, exploratory designs,
+# architecture decision records. Only the user-facing reference
+# (docs/crd-reference.md) is tracked.
+docs/plans/
+docs/design/
+docs/adr/
+
 

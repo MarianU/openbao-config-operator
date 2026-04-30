@@ -1,6 +1,10 @@
 ## Append samples of your project ##
 resources:
-- security_v1alpha1_policy.yaml
-- security_v1alpha1_kubernetesauthenginerole.yaml
-- security_v1alpha1_kubernetesauthenginerole_selector.yaml
+- security_v1alpha1_openbaopolicy.yaml
+- security_v1alpha1_openbaokubernetesauthrole.yaml
+- security_v1alpha1_openbaokubernetesauthrole_selector.yaml
+- security_v1alpha1_openbaosecretengine.yaml
+- security_v1alpha1_openbaonamespace.yaml
+- security_v1alpha1_openbaopkisecretengineconfig.yaml
+- security_v1alpha1_openbaopkisecretenginerole.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

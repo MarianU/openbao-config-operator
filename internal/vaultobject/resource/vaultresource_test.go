@@ -36,8 +36,10 @@ type stubCR struct {
 }
 
 type stubStatus struct {
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	BaoWritten bool               `json:"baoWritten,omitempty"`
+	Conditions                  []metav1.Condition `json:"conditions,omitempty"`
+	BaoWritten                  bool               `json:"baoWritten,omitempty"`
+	LastWrittenBaoName          string             `json:"lastWrittenBaoName,omitempty"`
+	LastWrittenOpenBaoNamespace string             `json:"lastWrittenOpenBaoNamespace,omitempty"`
 }
 
 func (s *stubCR) GetPath() string                                            { return "stub/" + s.Name }
@@ -52,6 +54,14 @@ func (s *stubCR) GetConditions() []metav1.Condition                          { r
 func (s *stubCR) SetConditions(c []metav1.Condition)                         { s.Status.Conditions = c }
 func (s *stubCR) IsBaoWritten() bool                                         { return s.Status.BaoWritten }
 func (s *stubCR) MarkBaoWritten()                                            { s.Status.BaoWritten = true }
+func (s *stubCR) BaoName() string                                            { return s.Name }
+func (s *stubCR) OpenBaoNamespace() string                                   { return "" }
+func (s *stubCR) LastWrittenBaoName() string                                 { return s.Status.LastWrittenBaoName }
+func (s *stubCR) LastWrittenOpenBaoNamespace() string                        { return s.Status.LastWrittenOpenBaoNamespace }
+func (s *stubCR) SetLastWrittenBaoIdentity(name, namespace string) {
+	s.Status.LastWrittenBaoName = name
+	s.Status.LastWrittenOpenBaoNamespace = namespace
+}
 
 func (s *stubCR) DeepCopyObject() runtime.Object {
 	if s == nil {
@@ -111,7 +121,7 @@ func (r *recordingHandlers) handlers() Handlers[*stubCR] {
 	return Handlers[*stubCR]{
 		NewInstance: func() *stubCR { return &stubCR{} },
 		BaoGet:      func(context.Context, *stubCR) (map[string]any, error) { return nil, ErrBaoNotFound },
-		BaoWrite:    func(context.Context, *stubCR) error { return nil },
+		BaoWrite:    func(context.Context, *stubCR) (StatusMutator[*stubCR], error) { return nil, nil },
 		BaoDelete: func(context.Context, *stubCR) error {
 			r.deleteCalls++
 			return r.deleteErr
@@ -454,7 +464,9 @@ func TestVaultResource_PrepareInternalValuesReceivesKubeClient(t *testing.T) {
 			BaoGet: func(context.Context, *kubeClientPeekingStub) (map[string]any, error) {
 				return nil, ErrBaoNotFound
 			},
-			BaoWrite:  func(context.Context, *kubeClientPeekingStub) error { return nil },
+			BaoWrite: func(context.Context, *kubeClientPeekingStub) (StatusMutator[*kubeClientPeekingStub], error) {
+				return nil, nil
+			},
 			BaoDelete: func(context.Context, *kubeClientPeekingStub) error { return nil },
 		},
 	}
