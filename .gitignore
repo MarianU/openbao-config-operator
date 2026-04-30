@@ -42,4 +42,7 @@ docs/plans/
 docs/design/
 docs/adr/
 
+# Project-level Claude Code instructions (kept locally, not tracked).
+CLAUDE.md
+
 
