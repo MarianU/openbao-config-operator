@@ -36,12 +36,20 @@ import (
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
+	openbaoauthmethod "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoauthmethod"
+	openbaocertcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthengineconfig"
+	openbaocertrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthenginerole"
+	openbaogroup "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaogroup"
+	openbaogroupalias "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaogroupalias"
+	openbaoitr "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoidentitytokenrole"
+	openbaojwtcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaojwtoidcauthengineconfig"
+	openbaojwtrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaojwtoidcauthenginerole"
 	openbaokar "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaokubernetesauthrole"
+	openbaonamespace "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaonamespace"
 	openbaopkic "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretengineconfig"
 	openbaopkir "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretenginerole"
-	openbaose "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaosecretengine"
-	openbaonamespace "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaonamespace"
 	openbaopolicy "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopolicy"
+	openbaose "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaosecretengine"
 	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
 	// +kubebuilder:scaffold:imports
 )
@@ -235,6 +243,86 @@ func main() {
 	}
 	if err := openBaoPKIRoleReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to setup OpenBaoPKISecretEngineRole controller")
+		os.Exit(1)
+	}
+
+	openBaoGroupReconciler, err := openbaogroup.NewOpenBaoGroupReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoGroupReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoGroupReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoGroup controller")
+		os.Exit(1)
+	}
+
+	openBaoGroupAliasReconciler, err := openbaogroupalias.NewOpenBaoGroupAliasReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoGroupAliasReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoGroupAliasReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoGroupAlias controller")
+		os.Exit(1)
+	}
+
+	openBaoITRReconciler, err := openbaoitr.NewOpenBaoIdentityTokenRoleReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoIdentityTokenRoleReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoITRReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoIdentityTokenRole controller")
+		os.Exit(1)
+	}
+
+	openBaoAuthMethodReconciler, err := openbaoauthmethod.NewOpenBaoAuthMethodReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoAuthMethodReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoAuthMethodReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoAuthMethod controller")
+		os.Exit(1)
+	}
+
+	openBaoCertCfgReconciler, err := openbaocertcfg.NewOpenBaoCertAuthEngineConfigReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoCertAuthEngineConfigReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoCertCfgReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoCertAuthEngineConfig controller")
+		os.Exit(1)
+	}
+
+	openBaoCertRoleReconciler, err := openbaocertrole.NewOpenBaoCertAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoCertAuthEngineRoleReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoCertRoleReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoCertAuthEngineRole controller")
+		os.Exit(1)
+	}
+
+	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoJWTOIDCAuthEngineConfigReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoJWTCfgReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoJWTOIDCAuthEngineConfig controller")
+		os.Exit(1)
+	}
+
+	openBaoJWTRoleReconciler, err := openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		setupLog.Error(err, "unable to create OpenBaoJWTOIDCAuthEngineRoleReconciler")
+		os.Exit(1)
+	}
+	if err := openBaoJWTRoleReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup OpenBaoJWTOIDCAuthEngineRole controller")
 		os.Exit(1)
 	}
 

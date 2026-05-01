@@ -16,14 +16,17 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaoextensions
-  - openbaokubernetesauthroles
-  - openbaonamespaces
-  - openbaopolicies
-  - openbaosecretengines
+  - openbaoauthmethods
+  - openbaocertauthengineconfigs
+  - openbaocertauthengineroles
+  - openbaogroupaliases
+  - openbaogroups
+  - openbaoidentitytokenroles
+  - openbaojwtoidcauthengineconfigs
+  - openbaojwtoidcauthengineroles
+  - openbaopkisecretengineconfigs
+  - openbaopkisecretengineroles
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -32,7 +35,15 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
+  - openbaoauthmethods/finalizers
+  - openbaocertauthengineconfigs/finalizers
+  - openbaocertauthengineroles/finalizers
   - openbaoextensions/finalizers
+  - openbaogroupaliases/finalizers
+  - openbaogroups/finalizers
+  - openbaoidentitytokenroles/finalizers
+  - openbaojwtoidcauthengineconfigs/finalizers
+  - openbaojwtoidcauthengineroles/finalizers
   - openbaokubernetesauthroles/finalizers
   - openbaonamespaces/finalizers
   - openbaopkisecretengineconfigs/finalizers
@@ -44,7 +55,15 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
+  - openbaoauthmethods/status
+  - openbaocertauthengineconfigs/status
+  - openbaocertauthengineroles/status
   - openbaoextensions/status
+  - openbaogroupaliases/status
+  - openbaogroups/status
+  - openbaoidentitytokenroles/status
+  - openbaojwtoidcauthengineconfigs/status
+  - openbaojwtoidcauthengineroles/status
   - openbaokubernetesauthroles/status
   - openbaonamespaces/status
   - openbaopkisecretengineconfigs/status
@@ -58,9 +77,14 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaopkisecretengineconfigs
-  - openbaopkisecretengineroles
+  - openbaoextensions
+  - openbaokubernetesauthroles
+  - openbaonamespaces
+  - openbaopolicies
+  - openbaosecretengines
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch

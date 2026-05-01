@@ -1,0 +1,244 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: openbaocertauthengineroles.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoCertAuthEngineRole
+    listKind: OpenBaoCertAuthEngineRoleList
+    plural: openbaocertauthengineroles
+    shortNames:
+    - obcar
+    singular: openbaocertauthenginerole
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OpenBaoCertAuthEngineRole is the Schema for the
+          openbaocertauthengineroles API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenBaoCertAuthEngineRoleSpec defines the desired state.
+            properties:
+              allowedCommonNames:
+                description: AllowedCommonNames restricts presented certs by Subject
+                  CN.
+                items:
+                  type: string
+                type: array
+              allowedDnsSans:
+                description: AllowedDNSSANs restricts presented certs by DNS SAN.
+                items:
+                  type: string
+                type: array
+              allowedEmailSans:
+                description: AllowedEmailSANs restricts presented certs by email SAN.
+                items:
+                  type: string
+                type: array
+              allowedNames:
+                description: |-
+                  AllowedNames is a glob-pattern allow-list bao matches against
+                  the SAN-or-CN of the presented client cert. Empty means no
+                  filter on this dimension.
+                items:
+                  type: string
+                type: array
+              allowedOrganizations:
+                description: |-
+                  AllowedOrganizations restricts presented certs by Subject
+                  Organisation (O) attribute.
+                items:
+                  type: string
+                type: array
+              allowedUriSans:
+                description: AllowedURISANs restricts presented certs by URI SAN.
+                items:
+                  type: string
+                type: array
+              certificateRef:
+                description: |-
+                  CertificateRef points at a Kubernetes Secret containing the
+                  trusted CA bundle in PEM form. Required — bao rejects a cert
+                  auth role with no certificate.
+                properties:
+                  key:
+                    description: |-
+                      Key within the Secret that holds the PEM bundle. Defaults to
+                      "ca.crt" when empty.
+                    type: string
+                  name:
+                    description: Name of the Secret holding the trusted CA bundle.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the Secret. Defaults to this CR's namespace when
+                      empty.
+                    type: string
+                required:
+                - name
+                type: object
+              displayName:
+                description: DisplayName is bao's free-form label for the cert entry.
+                maxLength: 512
+                type: string
+              name:
+                description: |-
+                  Name is the bao-side role name (the cert entry name). Defaults
+                  to metadata.name.
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              openbaoNamespace:
+                description: OpenBaoNamespace targets a specific OpenBao namespace.
+                pattern: ^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$
+                type: string
+              path:
+                description: |-
+                  Path is the bao-side cert auth mount (e.g. "cert"). Pairs
+                  with an OpenBaoAuthMethod of type=cert at the same path.
+                maxLength: 128
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9_./-]*$
+                type: string
+              requiredExtensions:
+                description: |-
+                  RequiredExtensions narrows the cert by required X.509
+                  extension OIDs.
+                items:
+                  type: string
+                type: array
+              tokenBoundCidrs:
+                description: |-
+                  TokenBoundCIDRs restricts the source IPs of subsequent uses of
+                  the issued token.
+                items:
+                  type: string
+                type: array
+              tokenMaxTtl:
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+              tokenPeriod:
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+              tokenPolicies:
+                description: |-
+                  TokenPolicies is the list of bao policies granted on a
+                  successful login with this cert.
+                items:
+                  type: string
+                type: array
+              tokenTtl:
+                description: TokenTTL / TokenMaxTTL / TokenPeriod are bao duration
+                  strings.
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+            required:
+            - certificateRef
+            - path
+            type: object
+          status:
+            description: OpenBaoCertAuthEngineRoleStatus defines the observed state.
+            properties:
+              baoWritten:
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastWrittenBaoName:
+                type: string
+              lastWrittenOpenBaoNamespace:
+                type: string
+              lastWrittenPath:
+                type: string
+              resolvedCertificate:
+                description: |-
+                  ResolvedCertificate is the PEM bundle PrepareInternalValues
+                  pulled from spec.certificateRef. Surfaced for visibility +
+                  drift comparison; not user-settable directly.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

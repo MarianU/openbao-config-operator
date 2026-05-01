@@ -97,12 +97,12 @@ func TestPKIRole_IsEquivalentToDesiredState(t *testing.T) {
 
 	t.Run("matching state — order-insensitive on slices", func(t *testing.T) {
 		current := &baoclient.PKIRoleSpec{
-			AllowedDomains:   []string{"a.example.com", "b.example.com"},
-			AllowSubdomains:  true,
-			ServerFlag:       true,
-			KeyType:          "rsa",
-			KeyBits:          2048,
-			KeyUsage:         []string{"KeyEncipherment", "DigitalSignature"},
+			AllowedDomains:  []string{"a.example.com", "b.example.com"},
+			AllowSubdomains: true,
+			ServerFlag:      true,
+			KeyType:         "rsa",
+			KeyBits:         2048,
+			KeyUsage:        []string{"KeyEncipherment", "DigitalSignature"},
 		}
 		require.True(t, r.IsEquivalentToDesiredState(map[string]any{"role": current}))
 	})

@@ -1246,5 +1246,581 @@ func TestDeletePKIRole_IdempotentOn404(t *testing.T) {
 		"404 = already gone, treated as idempotent success")
 }
 
+// ---- WriteIdentityGroup / ReadIdentityGroup / DeleteIdentityGroup ----
+
+func TestWriteIdentityGroup_PostsAtIdentityGroupPath(t *testing.T) {
+	t.Parallel()
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"id":   "g-100",
+				"name": "team-a",
+			},
+		})
+	})
+	out, err := c.WriteIdentityGroup(context.Background(), IdentityGroupSpec{
+		Name:     "team-a",
+		Type:     "internal",
+		Policies: []string{"reader"},
+		Metadata: map[string]string{"owner": "platform"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.MethodPut, gotMethod, "vault/api Logical().Write uses PUT")
+	require.Equal(t, "/v1/identity/group", gotPath)
+	require.Equal(t, "team-a", gotBody["name"])
+	require.Equal(t, "internal", gotBody["type"])
+	require.Equal(t, []any{"reader"}, gotBody["policies"])
+	require.Equal(t, "g-100", out.ID)
+}
+
+// On id-update bao returns 204 (nil resp). The wrapper must round-trip
+// the spec values so the StatusMutator has them.
+func TestWriteIdentityGroup_NilResponse_RoundTripsSpec(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	out, err := c.WriteIdentityGroup(context.Background(), IdentityGroupSpec{
+		ID:       "g-existing",
+		Name:     "team-a",
+		Type:     "internal",
+		Policies: []string{"editor"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "g-existing", out.ID, "id must round-trip on no-content response")
+	require.Equal(t, "team-a", out.Name)
+}
+
+func TestWriteIdentityGroup_RejectsEmptyName(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao for empty name")
+	})
+	_, err := c.WriteIdentityGroup(context.Background(), IdentityGroupSpec{})
+	require.Error(t, err)
+}
+
+func TestReadIdentityGroup_DecodesGroup(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/identity/group/name/team-a", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"id":                "g-100",
+				"name":              "team-a",
+				"type":              "internal",
+				"policies":          []any{"reader", "editor"},
+				"member_group_ids":  []any{"g-other"},
+				"member_entity_ids": []any{"e-1", "e-2"},
+				"metadata":          map[string]any{"owner": "platform"},
+			},
+		})
+	})
+	g, err := c.ReadIdentityGroup(context.Background(), "team-a")
+	require.NoError(t, err)
+	require.Equal(t, "g-100", g.ID)
+	require.Equal(t, "internal", g.Type)
+	require.Equal(t, []string{"reader", "editor"}, g.Policies)
+	require.Equal(t, []string{"g-other"}, g.MemberGroupIDs)
+	require.Equal(t, []string{"e-1", "e-2"}, g.MemberEntityIDs)
+	require.Equal(t, "platform", g.Metadata["owner"])
+}
+
+func TestReadIdentityGroup_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadIdentityGroup(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteIdentityGroup_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/identity/group/name/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteIdentityGroup(context.Background(), "missing"))
+}
+
+// ---- Identity group aliases ----
+
+func TestWriteIdentityGroupAlias_PostsBodyShape(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"id":             "ga-1",
+				"name":           "alice@example.com",
+				"mount_accessor": "auth_oidc_abc",
+				"canonical_id":   "g-100",
+			},
+		})
+	})
+	out, err := c.WriteIdentityGroupAlias(context.Background(), IdentityGroupAliasSpec{
+		Name:          "alice@example.com",
+		MountAccessor: "auth_oidc_abc",
+		CanonicalID:   "g-100",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/v1/identity/group-alias", gotPath)
+	require.Equal(t, "alice@example.com", gotBody["name"])
+	require.Equal(t, "auth_oidc_abc", gotBody["mount_accessor"])
+	require.Equal(t, "g-100", gotBody["canonical_id"])
+	require.Equal(t, "ga-1", out.ID)
+}
+
+func TestWriteIdentityGroupAlias_RejectsEmpties(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao with empty fields")
+	})
+	_, err := c.WriteIdentityGroupAlias(context.Background(), IdentityGroupAliasSpec{Name: "x"})
+	require.Error(t, err)
+	_, err = c.WriteIdentityGroupAlias(context.Background(), IdentityGroupAliasSpec{MountAccessor: "y"})
+	require.Error(t, err)
+}
+
+func TestReadIdentityGroupAliasByID(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/identity/group-alias/id/ga-1", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"id":             "ga-1",
+				"name":           "alice@example.com",
+				"mount_accessor": "auth_oidc_abc",
+				"canonical_id":   "g-100",
+			},
+		})
+	})
+	g, err := c.ReadIdentityGroupAliasByID(context.Background(), "ga-1")
+	require.NoError(t, err)
+	require.Equal(t, "ga-1", g.ID)
+	require.Equal(t, "alice@example.com", g.Name)
+	require.Equal(t, "auth_oidc_abc", g.MountAccessor)
+	require.Equal(t, "g-100", g.CanonicalID)
+}
+
+func TestReadIdentityGroupAliasByID_404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadIdentityGroupAliasByID(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestFindIdentityGroupAlias_UsesKeyInfo(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// vault/api LIST uses GET with ?list=true
+		require.Equal(t, "/v1/identity/group-alias/id", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"keys": []any{"ga-1", "ga-2"},
+				"key_info": map[string]any{
+					"ga-1": map[string]any{
+						"name":           "other@example.com",
+						"mount_accessor": "auth_oidc_xyz",
+					},
+					"ga-2": map[string]any{
+						"name":           "alice@example.com",
+						"mount_accessor": "auth_oidc_abc",
+						"canonical_id":   "g-100",
+					},
+				},
+			},
+		})
+	})
+	out, err := c.FindIdentityGroupAlias(context.Background(), "alice@example.com", "auth_oidc_abc")
+	require.NoError(t, err)
+	require.Equal(t, "ga-2", out.ID)
+	require.Equal(t, "g-100", out.CanonicalID)
+}
+
+func TestFindIdentityGroupAlias_NotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"keys":     []any{},
+				"key_info": map[string]any{},
+			},
+		})
+	})
+	_, err := c.FindIdentityGroupAlias(context.Background(), "ghost", "auth_xyz")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteIdentityGroupAliasByID_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/identity/group-alias/id/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteIdentityGroupAliasByID(context.Background(), "missing"))
+}
+
+// ---- Identity OIDC token roles ----
+
+func TestWriteIdentityTokenRole_PostsAtIdentityOIDCRolePath(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.WriteIdentityTokenRole(context.Background(), "aws-tokens",
+		IdentityTokenRoleSpec{
+			Key:      "platform",
+			Template: `{"sub": "{{identity.entity.id}}"}`,
+			ClientID: "arn:aws:iam::123:role/X",
+			TTL:      "1h",
+		}))
+	require.Equal(t, "/v1/identity/oidc/role/aws-tokens", gotPath)
+	require.Equal(t, "platform", gotBody["key"])
+	require.Equal(t, "1h", gotBody["ttl"])
+	require.Contains(t, gotBody["template"].(string), "identity.entity.id")
+	require.Equal(t, "arn:aws:iam::123:role/X", gotBody["client_id"])
+}
+
+func TestWriteIdentityTokenRole_RejectsEmpties(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao with empty inputs")
+	})
+	require.Error(t, c.WriteIdentityTokenRole(context.Background(), "",
+		IdentityTokenRoleSpec{Key: "k"}))
+	require.Error(t, c.WriteIdentityTokenRole(context.Background(), "r",
+		IdentityTokenRoleSpec{}))
+}
+
+// TTL normalisation: bao returns int seconds; the wrapper renders as
+// <n>s for stable spec round-trip.
+func TestReadIdentityTokenRole_TTLNormalisation(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/identity/oidc/role/aws-tokens", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"key":       "platform",
+				"template":  "tmpl",
+				"client_id": "cid",
+				"ttl":       3600,
+			},
+		})
+	})
+	out, err := c.ReadIdentityTokenRole(context.Background(), "aws-tokens")
+	require.NoError(t, err)
+	require.Equal(t, "platform", out.Key)
+	require.Equal(t, "3600s", out.TTL)
+}
+
+func TestReadIdentityTokenRole_404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadIdentityTokenRole(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteIdentityTokenRole_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/identity/oidc/role/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteIdentityTokenRole(context.Background(), "missing"))
+}
+
+// ---- AuthMethod (sys/auth/<path>) ----
+
+func TestEnableAuthMethod_PostsAtSysAuthWithConfig(t *testing.T) {
+	t.Parallel()
+	var seenMethod, seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.EnableAuthMethod(context.Background(), "oidc",
+		AuthMethodMountSpec{
+			Type:        "oidc",
+			Description: "tenant oidc",
+			Config: AuthMethodConfig{
+				DefaultLeaseTTL: "1h",
+				MaxLeaseTTL:     "24h",
+			},
+		}))
+	require.Equal(t, http.MethodPost, seenMethod)
+	require.Equal(t, "/v1/sys/auth/oidc", seenPath)
+	require.Equal(t, "oidc", seenBody["type"])
+	require.Equal(t, "tenant oidc", seenBody["description"])
+	cfg, _ := seenBody["config"].(map[string]any)
+	require.Equal(t, "1h", cfg["default_lease_ttl"])
+	require.Equal(t, "24h", cfg["max_lease_ttl"])
+}
+
+// Idempotency: a re-POST returning 400 "already in use" is success.
+func TestEnableAuthMethod_AlreadyInUseTreatedAsSuccess(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["path is already in use at oidc/"]}`, http.StatusBadRequest)
+	})
+	require.NoError(t, c.EnableAuthMethod(context.Background(), "oidc",
+		AuthMethodMountSpec{Type: "oidc"}))
+}
+
+func TestEnableAuthMethod_RejectsEmpties(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {})
+	require.Error(t, c.EnableAuthMethod(context.Background(), "",
+		AuthMethodMountSpec{Type: "oidc"}))
+	require.Error(t, c.EnableAuthMethod(context.Background(), "oidc",
+		AuthMethodMountSpec{Type: ""}))
+}
+
+func TestTuneAuthMethod_PostsAtAuthTuneEndpoint(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.TuneAuthMethod(context.Background(), "oidc",
+		AuthMethodMountSpec{
+			Description: "updated",
+			Config: AuthMethodConfig{
+				DefaultLeaseTTL: "2h",
+			},
+		}))
+	require.Equal(t, "/v1/sys/mounts/auth/oidc/tune", seenPath)
+	require.Equal(t, "updated", seenBody["description"])
+	require.Equal(t, "2h", seenBody["default_lease_ttl"])
+}
+
+func TestGetAuthMethod_ReturnsTypeDescriptionAccessor(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/sys/auth", r.URL.Path)
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"oidc/": {
+					"type": "oidc",
+					"description": "tenant oidc",
+					"accessor": "auth_oidc_abc123",
+					"config": {
+						"default_lease_ttl": 3600,
+						"max_lease_ttl": 86400,
+						"listing_visibility": "unauth"
+					}
+				}
+			}
+		}`))
+	})
+	out, err := c.GetAuthMethod(context.Background(), "oidc")
+	require.NoError(t, err)
+	require.Equal(t, "oidc", out.Type)
+	require.Equal(t, "tenant oidc", out.Description)
+	require.Equal(t, "auth_oidc_abc123", out.Accessor)
+	require.Equal(t, "3600s", out.Config.DefaultLeaseTTL,
+		"int seconds normalised to <n>s for spec round-trip")
+	require.Equal(t, "86400s", out.Config.MaxLeaseTTL)
+	require.Equal(t, "unauth", out.Config.ListingVisibility)
+}
+
+func TestGetAuthMethod_MissingReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	})
+	_, err := c.GetAuthMethod(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// ---- Cert auth (auth/<mount>/config + auth/<mount>/certs/<name>) ----
+
+func TestWriteCertAuthConfig_PostsAtAuthConfigPath(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	disable := false
+	cache := 200
+	require.NoError(t, c.WriteCertAuthConfig(context.Background(), "cert",
+		CertAuthConfigSpec{
+			DisableBinding: &disable,
+			OCSPCacheSize:  &cache,
+		}))
+	require.Equal(t, "/v1/auth/cert/config", seenPath)
+	require.Equal(t, false, seenBody["disable_binding"])
+	require.Equal(t, float64(200), seenBody["ocsp_cache_size"])
+	_, hasFailOpen := seenBody["ocsp_fail_open"]
+	require.False(t, hasFailOpen, "unset fields elided from body")
+}
+
+func TestReadCertAuthConfig_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadCertAuthConfig(context.Background(), "cert")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestWriteCertAuthRole_PostsCertAndPolicies(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.WriteCertAuthRole(context.Background(), "cert", "team-a",
+		CertAuthRoleSpec{
+			Certificate:   "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n",
+			AllowedNames:  []string{"team-a.example.com"},
+			TokenPolicies: []string{"reader"},
+			TokenTTL:      "1h",
+		}))
+	require.Equal(t, "/v1/auth/cert/certs/team-a", seenPath)
+	require.Contains(t, seenBody["certificate"], "BEGIN CERTIFICATE")
+	require.Equal(t, []any{"team-a.example.com"}, seenBody["allowed_names"])
+	require.Equal(t, []any{"reader"}, seenBody["token_policies"])
+	require.Equal(t, "1h", seenBody["token_ttl"])
+}
+
+func TestWriteCertAuthRole_RejectsEmptyCertificate(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao with empty certificate")
+	})
+	require.Error(t, c.WriteCertAuthRole(context.Background(), "cert", "team-a",
+		CertAuthRoleSpec{}))
+}
+
+func TestReadCertAuthRole_TTLNormalisation(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/auth/cert/certs/team-a", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"certificate":    "PEM",
+				"token_ttl":      3600,
+				"token_policies": []any{"reader"},
+			},
+		})
+	})
+	out, err := c.ReadCertAuthRole(context.Background(), "cert", "team-a")
+	require.NoError(t, err)
+	require.Equal(t, "PEM", out.Certificate)
+	require.Equal(t, "3600s", out.TokenTTL)
+	require.Equal(t, []string{"reader"}, out.TokenPolicies)
+}
+
+func TestDeleteCertAuthRole_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteCertAuthRole(context.Background(), "cert", "missing"))
+}
+
+// ---- JWT/OIDC auth (auth/<mount>/config + auth/<mount>/role/<name>) ----
+
+func TestWriteJWTOIDCConfig_OIDCFields(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.WriteJWTOIDCConfig(context.Background(), "oidc",
+		JWTOIDCConfigSpec{
+			OIDCDiscoveryURL: "https://accounts.example.com",
+			OIDCClientID:     "bao-client",
+			OIDCClientSecret: "shhhh",
+			DefaultRole:      "tenant",
+		}))
+	require.Equal(t, "/v1/auth/oidc/config", seenPath)
+	require.Equal(t, "https://accounts.example.com", seenBody["oidc_discovery_url"])
+	require.Equal(t, "bao-client", seenBody["oidc_client_id"])
+	require.Equal(t, "shhhh", seenBody["oidc_client_secret"])
+	require.Equal(t, "tenant", seenBody["default_role"])
+}
+
+func TestWriteJWTOIDCRole_PostsAtRolePath(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.WriteJWTOIDCRole(context.Background(), "oidc", "tenant",
+		JWTOIDCRoleSpec{
+			RoleType:            "oidc",
+			UserClaim:           "email",
+			BoundAudiences:      []string{"bao-client"},
+			AllowedRedirectURIs: []string{"https://bao.example.com/ui/vault/auth/oidc/oidc/callback"},
+			TokenPolicies:       []string{"tenant"},
+		}))
+	require.Equal(t, "/v1/auth/oidc/role/tenant", seenPath)
+	require.Equal(t, "oidc", seenBody["role_type"])
+	require.Equal(t, "email", seenBody["user_claim"])
+	require.Equal(t, []any{"bao-client"}, seenBody["bound_audiences"])
+}
+
+func TestWriteJWTOIDCRole_RejectsEmptyRoleType(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao with empty role_type")
+	})
+	require.Error(t, c.WriteJWTOIDCRole(context.Background(), "oidc", "tenant",
+		JWTOIDCRoleSpec{}))
+}
+
+func TestDeleteJWTOIDCRole_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteJWTOIDCRole(context.Background(), "oidc", "missing"))
+}
+
 // ---- silence linter on imports used only by appended tests ----
 var _ = io.Discard

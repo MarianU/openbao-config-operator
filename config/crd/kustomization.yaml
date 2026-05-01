@@ -8,3 +8,11 @@ resources:
   - bases/security.mto.stakater.com_openbaonamespaces.yaml
   - bases/security.mto.stakater.com_openbaopkisecretengineconfigs.yaml
   - bases/security.mto.stakater.com_openbaopkisecretengineroles.yaml
+  - bases/security.mto.stakater.com_openbaogroups.yaml
+  - bases/security.mto.stakater.com_openbaogroupaliases.yaml
+  - bases/security.mto.stakater.com_openbaoidentitytokenroles.yaml
+  - bases/security.mto.stakater.com_openbaoauthmethods.yaml
+  - bases/security.mto.stakater.com_openbaocertauthengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaocertauthengineroles.yaml
+  - bases/security.mto.stakater.com_openbaojwtoidcauthengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaojwtoidcauthengineroles.yaml

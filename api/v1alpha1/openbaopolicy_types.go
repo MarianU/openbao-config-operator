@@ -1,6 +1,7 @@
 // Adapted from redhat-cop/vault-config-operator
-//   api/v1alpha1/policy_types.go @ 96082119ec2e84595cc85b87808c3a6bd7aca53b
-//   <https://github.com/redhat-cop/vault-config-operator>
+//
+//	api/v1alpha1/policy_types.go @ 96082119ec2e84595cc85b87808c3a6bd7aca53b
+//	<https://github.com/redhat-cop/vault-config-operator>
 //
 // Licensed under the Apache License, Version 2.0
 // <https://www.apache.org/licenses/LICENSE-2.0>.

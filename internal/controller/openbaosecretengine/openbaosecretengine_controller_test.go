@@ -183,6 +183,17 @@ func (f *fakeBao) DisableAuthMount(ctx context.Context, mount string, opts ...ba
 	delete(f.authMounts, mountKey(ns, mount))
 	return nil
 }
+
+// AuthMethod stubs — this controller does not exercise sys/auth tune.
+func (f *fakeBao) EnableAuthMethod(ctx context.Context, mount string, spec baoclient.AuthMethodMountSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) TuneAuthMethod(ctx context.Context, mount string, spec baoclient.AuthMethodMountSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) GetAuthMethod(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.AuthMethodMount, error) {
+	return nil, baoclient.ErrNotFound
+}
 func (f *fakeBao) CreateNamespace(ctx context.Context, name string, opts ...baoclient.CallOption) error {
 	return nil
 }
@@ -213,6 +224,38 @@ func (f *fakeBao) ReadPKIRole(ctx context.Context, mount, name string, opts ...b
 	return nil, baoclient.ErrNotFound
 }
 func (f *fakeBao) DeletePKIRole(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
+	return nil
+}
+
+// Identity stubs — this controller does not exercise the identity API.
+func (f *fakeBao) WriteIdentityGroup(ctx context.Context, spec baoclient.IdentityGroupSpec, opts ...baoclient.CallOption) (*baoclient.IdentityGroup, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) ReadIdentityGroup(ctx context.Context, name string, opts ...baoclient.CallOption) (*baoclient.IdentityGroup, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) DeleteIdentityGroup(ctx context.Context, name string, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) WriteIdentityGroupAlias(ctx context.Context, spec baoclient.IdentityGroupAliasSpec, opts ...baoclient.CallOption) (*baoclient.IdentityGroupAlias, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) ReadIdentityGroupAliasByID(ctx context.Context, id string, opts ...baoclient.CallOption) (*baoclient.IdentityGroupAlias, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) FindIdentityGroupAlias(ctx context.Context, name, mountAccessor string, opts ...baoclient.CallOption) (*baoclient.IdentityGroupAlias, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) DeleteIdentityGroupAliasByID(ctx context.Context, id string, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) WriteIdentityTokenRole(ctx context.Context, name string, spec baoclient.IdentityTokenRoleSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadIdentityTokenRole(ctx context.Context, name string, opts ...baoclient.CallOption) (*baoclient.IdentityTokenRoleSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) DeleteIdentityTokenRole(ctx context.Context, name string, opts ...baoclient.CallOption) error {
 	return nil
 }
 
@@ -529,4 +572,36 @@ func TestOpenBaoSecretEngine_DeleteSkipsBaoIfNeverWritten(t *testing.T) {
 	require.Equal(t, 0, fb.disableSecret, "BaoDelete must be skipped when status.baoWritten=false")
 	require.True(t, apierrors.IsNotFound(
 		r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: m.Name}, &v1alpha1.OpenBaoSecretEngine{})))
+}
+
+// Cert auth + JWT/OIDC stubs — this controller does not exercise them.
+func (f *fakeBao) WriteCertAuthConfig(ctx context.Context, mount string, spec baoclient.CertAuthConfigSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadCertAuthConfig(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.CertAuthConfigSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) WriteCertAuthRole(ctx context.Context, mount, name string, spec baoclient.CertAuthRoleSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadCertAuthRole(ctx context.Context, mount, name string, opts ...baoclient.CallOption) (*baoclient.CertAuthRoleSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) DeleteCertAuthRole(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) WriteJWTOIDCConfig(ctx context.Context, mount string, spec baoclient.JWTOIDCConfigSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadJWTOIDCConfig(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.JWTOIDCConfigSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) WriteJWTOIDCRole(ctx context.Context, mount, name string, spec baoclient.JWTOIDCRoleSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadJWTOIDCRole(ctx context.Context, mount, name string, opts ...baoclient.CallOption) (*baoclient.JWTOIDCRoleSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) DeleteJWTOIDCRole(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
+	return nil
 }

@@ -1,0 +1,199 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  creationTimestamp: null
+  name: openbaogroupaliases.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoGroupAlias
+    listKind: OpenBaoGroupAliasList
+    plural: openbaogroupaliases
+    shortNames:
+    - obga
+    singular: openbaogroupalias
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: OpenBaoGroupAlias is the Schema for the openbaogroupaliases API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenBaoGroupAliasSpec defines the desired state.
+            properties:
+              canonicalGroupRef:
+                description: |-
+                  CanonicalGroupRef points at an OpenBaoGroup CR whose
+                  status.GroupID is the alias's parent. Mutually exclusive
+                  with spec.canonicalId. Use this form when both objects are
+                  managed by this operator — it is robust to bao group
+                  re-creation (the OpenBaoGroup re-stamps a new id; the alias
+                  picks it up on next reconcile).
+                properties:
+                  name:
+                    description: Name of the OpenBaoGroup CR to bind to.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the OpenBaoGroup CR. Defaults to the alias CR's
+                      own namespace when empty.
+                    type: string
+                required:
+                - name
+                type: object
+              canonicalId:
+                description: |-
+                  CanonicalID is the literal bao group id this alias binds to.
+                  Mutually exclusive with spec.canonicalGroupRef. Use only when
+                  the parent group is managed out of band (e.g. created by an
+                  administrator with the bao CLI).
+                type: string
+              mountAccessor:
+                description: |-
+                  MountAccessor is the bao-side accessor of the auth mount this
+                  alias maps from. Look up with `bao auth list -format=json |
+                  jq -r '.["<mount>/"].accessor'`. Bao keys aliases by
+                  (name, mount_accessor); the same name on different mounts is
+                  a different alias.
+                minLength: 1
+                type: string
+              name:
+                description: |-
+                  Name is the alias name as it appears in the auth method
+                  (e.g. an OIDC subject claim, an LDAP CN, a JWT sub). Defaults
+                  to metadata.name. Aliases are not normalised — bao stores the
+                  value verbatim, so a CR claiming `Alice` must match the auth
+                  method's `Alice`, not `alice`.
+                maxLength: 512
+                type: string
+              openbaoNamespace:
+                description: OpenBaoNamespace targets a specific OpenBao namespace.
+                pattern: ^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$
+                type: string
+            required:
+            - mountAccessor
+            type: object
+          status:
+            description: OpenBaoGroupAliasStatus defines the observed state.
+            properties:
+              aliasId:
+                description: |-
+                  AliasID is the bao-side alias id stamped on first create. Bao
+                  keys aliases by id; without this stamped on status, a subsequent
+                  reconcile that lost spec.canonicalId or saw a renamed parent
+                  would create a duplicate alias instead of updating the existing
+                  one. Recovered via FindIdentityGroupAlias on backfill.
+                type: string
+              baoWritten:
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastWrittenBaoName:
+                type: string
+              lastWrittenMountAccessor:
+                description: |-
+                  LastWrittenMountAccessor captures the mount accessor the alias
+                  was last written under. mount_accessor is immutable on bao's
+                  side, so a spec edit that flips it has to delete the old
+                  alias before creating a new one. Stored on status so
+                  BaoDeleteIdentity can target the previous identity correctly.
+                type: string
+              lastWrittenOpenBaoNamespace:
+                type: string
+              resolvedCanonicalId:
+                description: |-
+                  ResolvedCanonicalID is the parent group id PrepareInternalValues
+                  computed (from spec.canonicalId or spec.canonicalGroupRef →
+                  OpenBaoGroup.status.groupId). Surfaced for visibility +
+                  drift comparison; not user-settable.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

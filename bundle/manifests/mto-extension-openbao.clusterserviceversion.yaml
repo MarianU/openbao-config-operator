@@ -6,6 +6,324 @@ metadata:
       [
         {
           "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoAuthMethod",
+          "metadata": {
+            "name": "mto-extension-openbao-tenant-oidc",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "config": {
+              "defaultLeaseTtl": "1h",
+              "maxLeaseTtl": "24h"
+            },
+            "description": "Tenant OIDC auth mount",
+            "path": "oidc",
+            "type": "oidc"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoAuthMethod",
+          "metadata": {
+            "name": "tenant-oidc",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "config": {
+              "defaultLeaseTtl": "1h",
+              "maxLeaseTtl": "24h"
+            },
+            "description": "Tenant OIDC auth mount",
+            "path": "oidc",
+            "type": "oidc"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoCertAuthEngineConfig",
+          "metadata": {
+            "name": "cert",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "enableIdentityAliasMetadata": true,
+            "ocspCacheSize": 200,
+            "path": "cert"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoCertAuthEngineConfig",
+          "metadata": {
+            "name": "mto-extension-openbao-cert",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "enableIdentityAliasMetadata": true,
+            "ocspCacheSize": 200,
+            "path": "cert"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoCertAuthEngineRole",
+          "metadata": {
+            "name": "mto-extension-openbao-team-a-mtls",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "allowedCommonNames": [
+              "team-a-client"
+            ],
+            "certificateRef": {
+              "key": "ca.crt",
+              "name": "team-a-ca"
+            },
+            "displayName": "team-a-mtls",
+            "path": "cert",
+            "tokenMaxTtl": "24h",
+            "tokenPolicies": [
+              "team-a-reader"
+            ],
+            "tokenTtl": "1h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoCertAuthEngineRole",
+          "metadata": {
+            "name": "team-a-mtls",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "allowedCommonNames": [
+              "team-a-client"
+            ],
+            "certificateRef": {
+              "key": "ca.crt",
+              "name": "team-a-ca"
+            },
+            "displayName": "team-a-mtls",
+            "path": "cert",
+            "tokenMaxTtl": "24h",
+            "tokenPolicies": [
+              "team-a-reader"
+            ],
+            "tokenTtl": "1h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroup",
+          "metadata": {
+            "name": "mto-extension-openbao-oidc-admins",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "policies": [
+              "oidc-admin"
+            ],
+            "type": "external"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroup",
+          "metadata": {
+            "name": "mto-extension-openbao-platform-admins",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "policies": [
+              "platform-admin"
+            ],
+            "type": "internal"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroup",
+          "metadata": {
+            "name": "oidc-admins",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "policies": [
+              "oidc-admin"
+            ],
+            "type": "external"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroup",
+          "metadata": {
+            "name": "platform-admins",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "policies": [
+              "platform-admin"
+            ],
+            "type": "internal"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroupAlias",
+          "metadata": {
+            "name": "alice-oidc-admin",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "canonicalGroupRef": {
+              "name": "oidc-admins"
+            },
+            "mountAccessor": "REPLACE_ME_WITH_OIDC_ACCESSOR",
+            "name": "alice@example.com"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroupAlias",
+          "metadata": {
+            "name": "mto-extension-openbao-alice-oidc-admin",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "canonicalGroupRef": {
+              "name": "oidc-admins"
+            },
+            "mountAccessor": "REPLACE_ME_WITH_OIDC_ACCESSOR",
+            "name": "alice@example.com"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoIdentityTokenRole",
+          "metadata": {
+            "name": "aws-tokens",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "clientId": "arn:aws:iam::123456789012:role/openbao-federated",
+            "key": "platform",
+            "template": "{\n  \"sub\": \"{{identity.entity.id}}\",\n  \"name\": \"{{identity.entity.name}}\"\n}\n",
+            "ttl": "1h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoIdentityTokenRole",
+          "metadata": {
+            "name": "mto-extension-openbao-aws-tokens",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "clientId": "arn:aws:iam::123456789012:role/openbao-federated",
+            "key": "platform",
+            "template": "{\n  \"sub\": \"{{identity.entity.id}}\",\n  \"name\": \"{{identity.entity.name}}\"\n}\n",
+            "ttl": "1h"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoJWTOIDCAuthEngineConfig",
+          "metadata": {
+            "name": "mto-extension-openbao-tenant-oidc",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "defaultRole": "tenant",
+            "oidcClientId": "bao-tenant-client",
+            "oidcClientSecretRef": {
+              "key": "oidcClientSecret",
+              "name": "oidc-client-secret"
+            },
+            "oidcDiscoveryUrl": "https://accounts.example.com",
+            "path": "oidc"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoJWTOIDCAuthEngineConfig",
+          "metadata": {
+            "name": "tenant-oidc",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "defaultRole": "tenant",
+            "oidcClientId": "bao-tenant-client",
+            "oidcClientSecretRef": {
+              "key": "oidcClientSecret",
+              "name": "oidc-client-secret"
+            },
+            "oidcDiscoveryUrl": "https://accounts.example.com",
+            "path": "oidc"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoJWTOIDCAuthEngineRole",
+          "metadata": {
+            "name": "mto-extension-openbao-tenant",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "allowedRedirectUris": [
+              "https://bao.example.com/ui/vault/auth/oidc/oidc/callback"
+            ],
+            "boundAudiences": [
+              "bao-tenant-client"
+            ],
+            "groupsClaim": "groups",
+            "oidcScopes": [
+              "profile",
+              "email",
+              "groups"
+            ],
+            "path": "oidc",
+            "roleType": "oidc",
+            "tokenMaxTtl": "24h",
+            "tokenPolicies": [
+              "tenant"
+            ],
+            "tokenTtl": "1h",
+            "userClaim": "email"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoJWTOIDCAuthEngineRole",
+          "metadata": {
+            "name": "tenant",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "allowedRedirectUris": [
+              "https://bao.example.com/ui/vault/auth/oidc/oidc/callback"
+            ],
+            "boundAudiences": [
+              "bao-tenant-client"
+            ],
+            "groupsClaim": "groups",
+            "oidcScopes": [
+              "profile",
+              "email",
+              "groups"
+            ],
+            "path": "oidc",
+            "roleType": "oidc",
+            "tokenMaxTtl": "24h",
+            "tokenPolicies": [
+              "tenant"
+            ],
+            "tokenTtl": "1h",
+            "userClaim": "email"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoKubernetesAuthRole",
           "metadata": {
             "name": "mto-extension-openbao-prod-deployers",
@@ -312,7 +630,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-04-30T17:17:18Z"
+    createdAt: "2026-04-30T19:54:07Z"
     operators.operatorframework.io/builder: operator-sdk-v1.41.1
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: mto-extension-openbao.v0.0.1
@@ -321,6 +639,34 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
+    - description: A bao-side auth-method mount lifecycle managed by the MTO extension
+        operator. Sibling of OpenBaoSecretEngine for sys/auth/<path>; type selects
+        the auth-method kind (cert, jwt, oidc, kubernetes, approle, userpass, ldap).
+        Stamps the mount accessor on status so downstream CRs (notably OpenBaoGroupAlias)
+        can bind to it without a `bao auth list` step. Optionally scoped to an OpenBao
+        namespace via spec.openbaoNamespace.
+      displayName: OpenBao Auth Method
+      kind: OpenBaoAuthMethod
+      name: openbaoauthmethods.security.mto.stakater.com
+      version: v1alpha1
+    - description: Cert auth-method mount-level configuration at auth/<path>/config.
+        OCSP settings, identity-alias metadata, and other mount-wide tunables for
+        a cert auth method. Pairs with an OpenBaoAuthMethod of type=cert at the same
+        path. IsDeletable=false — bao has no DELETE endpoint for this; CR delete releases
+        the finalizer without touching bao.
+      displayName: OpenBao Cert Auth Engine Config
+      kind: OpenBaoCertAuthEngineConfig
+      name: openbaocertauthengineconfigs.security.mto.stakater.com
+      version: v1alpha1
+    - description: Cert auth role registration at auth/<path>/certs/<name>. Owns the
+        trusted CA bundle (sourced from a Kubernetes Secret) plus the per-cert allow-list
+        (allowedNames, allowedDnsSans, etc.) and the policies bao grants on a successful
+        login. The Secret watch re-enqueues the CR on rotation so the bao-side cert
+        stays in sync.
+      displayName: OpenBao Cert Auth Engine Role
+      kind: OpenBaoCertAuthEngineRole
+      name: openbaocertauthengineroles.security.mto.stakater.com
+      version: v1alpha1
     - description: Cluster-level configuration for the MTO OpenBao extension operator.
         Holds the OpenBao server connection, the token used for primitive reconciles,
         per-tenant token policies (TTL/MaxTTL/renewable), tenancy mode (path vs namespace),
@@ -330,6 +676,51 @@ spec:
       displayName: OpenBao Extension
       kind: OpenBaoExtension
       name: openbaoextensions.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao identity group-alias managed by the MTO extension operator.
+        Maps a (name, mountAccessor) tuple from an external auth method (OIDC, JWT,
+        LDAP, …) into a parent type=external OpenBaoGroup. Bao writes at identity/group-alias
+        and stores aliases keyed by id; the controller stamps the bao-side id on status.aliasId.
+        canonicalGroupRef points at an OpenBaoGroup CR; canonicalId binds to a literal
+        bao group id when the parent is managed out of band.
+      displayName: OpenBao Group Alias
+      kind: OpenBaoGroupAlias
+      name: openbaogroupaliases.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao identity group managed by the MTO extension operator.
+        Owns identity/group/<name>. type=internal groups bundle policies + member
+        entities/groups directly; type=external groups receive members through OpenBaoGroupAlias
+        entries that map auth-method aliases into the group. Optionally scoped to
+        an OpenBao namespace via spec.openbaoNamespace.
+      displayName: OpenBao Group
+      kind: OpenBaoGroup
+      name: openbaogroups.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao identity OIDC token role managed by the MTO extension
+        operator. Owns identity/oidc/role/<name>. Mints OIDC ID tokens (signed by
+        a pre-existing identity/oidc/key/<key>) for federated auth — typical use case
+        is letting tenants pull AWS / GCP creds via OIDC trust. Optionally scoped
+        to an OpenBao namespace via spec.openbaoNamespace.
+      displayName: OpenBao Identity Token Role
+      kind: OpenBaoIdentityTokenRole
+      name: openbaoidentitytokenroles.security.mto.stakater.com
+      version: v1alpha1
+    - description: JWT/OIDC auth-method mount-level configuration at auth/<path>/config.
+        OIDC discovery URL or static JWKS, client id + client_secret (read from a
+        Kubernetes Secret), bound issuer, default role. Pairs with an OpenBaoAuthMethod
+        of type=jwt or type=oidc at the same path. IsDeletable=false — bao has no
+        DELETE; CR delete releases the finalizer without touching bao.
+      displayName: OpenBao JWT/OIDC Auth Engine Config
+      kind: OpenBaoJWTOIDCAuthEngineConfig
+      name: openbaojwtoidcauthengineconfigs.security.mto.stakater.com
+      version: v1alpha1
+    - description: JWT/OIDC role at auth/<path>/role/<name>. Maps inbound JWT/OIDC
+        claims (sub, email, groups, etc.) to the bao identity entity and grants a
+        list of bao policies on successful login. RoleType="oidc" requires allowedRedirectUris
+        for the OAuth2 callback URL set.
+      displayName: OpenBao JWT/OIDC Auth Engine Role
+      kind: OpenBaoJWTOIDCAuthEngineRole
+      name: openbaojwtoidcauthengineroles.security.mto.stakater.com
       version: v1alpha1
     - description: An OpenBao Kubernetes-auth role managed by the MTO extension operator.
         Authors a role at auth/<spec.path>/role/<name> binding service accounts in
@@ -400,14 +791,17 @@ spec:
         - apiGroups:
           - security.mto.stakater.com
           resources:
-          - openbaoextensions
-          - openbaokubernetesauthroles
-          - openbaonamespaces
-          - openbaopolicies
-          - openbaosecretengines
+          - openbaoauthmethods
+          - openbaocertauthengineconfigs
+          - openbaocertauthengineroles
+          - openbaogroupaliases
+          - openbaogroups
+          - openbaoidentitytokenroles
+          - openbaojwtoidcauthengineconfigs
+          - openbaojwtoidcauthengineroles
+          - openbaopkisecretengineconfigs
+          - openbaopkisecretengineroles
           verbs:
-          - create
-          - delete
           - get
           - list
           - patch
@@ -416,7 +810,15 @@ spec:
         - apiGroups:
           - security.mto.stakater.com
           resources:
+          - openbaoauthmethods/finalizers
+          - openbaocertauthengineconfigs/finalizers
+          - openbaocertauthengineroles/finalizers
           - openbaoextensions/finalizers
+          - openbaogroupaliases/finalizers
+          - openbaogroups/finalizers
+          - openbaoidentitytokenroles/finalizers
+          - openbaojwtoidcauthengineconfigs/finalizers
+          - openbaojwtoidcauthengineroles/finalizers
           - openbaokubernetesauthroles/finalizers
           - openbaonamespaces/finalizers
           - openbaopkisecretengineconfigs/finalizers
@@ -428,7 +830,15 @@ spec:
         - apiGroups:
           - security.mto.stakater.com
           resources:
+          - openbaoauthmethods/status
+          - openbaocertauthengineconfigs/status
+          - openbaocertauthengineroles/status
           - openbaoextensions/status
+          - openbaogroupaliases/status
+          - openbaogroups/status
+          - openbaoidentitytokenroles/status
+          - openbaojwtoidcauthengineconfigs/status
+          - openbaojwtoidcauthengineroles/status
           - openbaokubernetesauthroles/status
           - openbaonamespaces/status
           - openbaopkisecretengineconfigs/status
@@ -442,9 +852,14 @@ spec:
         - apiGroups:
           - security.mto.stakater.com
           resources:
-          - openbaopkisecretengineconfigs
-          - openbaopkisecretengineroles
+          - openbaoextensions
+          - openbaokubernetesauthroles
+          - openbaonamespaces
+          - openbaopolicies
+          - openbaosecretengines
           verbs:
+          - create
+          - delete
           - get
           - list
           - patch

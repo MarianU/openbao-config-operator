@@ -15,6 +15,14 @@ lands its primitive(s).
 | `OpenBaoNamespace` | `security.mto.stakater.com/v1alpha1` | Namespaced | Owns a bao namespace at `sys/namespaces/<name>`. Nested via `spec.openbaoNamespace` as the parent. Delete is gracefully blocked until the bao namespace is empty. |
 | `OpenBaoPKISecretEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Generates the root CA at `<path>/root/generate/internal` and writes URL config at `<path>/config/urls`. Pairs with an existing `OpenBaoSecretEngine` of kind=pki at the same path. **IsDeletable=false**: CR delete does not disable the bao mount (would destroy the private key). |
 | `OpenBaoPKISecretEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | PKI issuance role at `<path>/roles/<name>`. Defines what certs may be issued from a PKI mount (allowed domains, key type/bits, EKU flags, TTL). Requires the mount to have a CA configured. |
+| `OpenBaoGroup` | `security.mto.stakater.com/v1alpha1` | Namespaced | Identity group at `identity/group`. `type=internal` groups bundle policies plus member entities/groups directly; `type=external` groups receive members through `OpenBaoGroupAlias` entries that map auth-method aliases into the group. Optionally scoped via `spec.openbaoNamespace`. |
+| `OpenBaoGroupAlias` | `security.mto.stakater.com/v1alpha1` | Namespaced | Identity group-alias at `identity/group-alias`. Maps a `(name, mountAccessor)` tuple from an external auth method (OIDC, JWT, LDAP, …) into a parent `type=external` `OpenBaoGroup`. Bao keys aliases by id; the controller stamps the bao-side id on `status.aliasId` for stable round-trips. |
+| `OpenBaoIdentityTokenRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | OIDC token role at `identity/oidc/role/<name>`. Mints OIDC ID tokens signed by a pre-existing identity OIDC key for federated auth (typical use: tenants pull AWS / GCP creds via OIDC trust). Optionally scoped via `spec.openbaoNamespace`. |
+| `OpenBaoAuthMethod` | `security.mto.stakater.com/v1alpha1` | Namespaced | Bao auth-method mount lifecycle at `sys/auth/<path>`. Sibling of `OpenBaoSecretEngine` for auth mounts (cert / jwt / oidc / kubernetes / approle / userpass / ldap). Stamps the bao-side mount accessor on `status.mountAccessor` so downstream CRs (notably `OpenBaoGroupAlias`) can bind to it. |
+| `OpenBaoCertAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cert auth mount-level configuration at `auth/<path>/config`. OCSP cache + identity-alias-metadata tunables. Pairs with an `OpenBaoAuthMethod` of `type=cert` at the same path. `IsDeletable=false` — bao has no DELETE on `/config`. |
+| `OpenBaoCertAuthEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cert auth role at `auth/<path>/certs/<name>`. Owns the trusted CA bundle (sourced from a Kubernetes Secret) plus the per-cert allow-list (allowedNames, allowedDnsSans, etc.) and the policies bao grants on a successful login. The Secret watch re-enqueues the CR on rotation. |
+| `OpenBaoJWTOIDCAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | JWT/OIDC auth mount-level configuration at `auth/<path>/config`. OIDC discovery URL or static JWKS, client id + client_secret (read from a Kubernetes Secret), bound issuer, default role. Pairs with an `OpenBaoAuthMethod` of `type=jwt` or `type=oidc`. `IsDeletable=false`. |
+| `OpenBaoJWTOIDCAuthEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | JWT/OIDC role at `auth/<path>/role/<name>`. Maps inbound JWT/OIDC claims (sub, email, groups, etc.) to the bao identity entity and grants policies on successful login. `roleType=oidc` requires `allowedRedirectUris` for the OAuth2 callback URL set. |
 
 ---
 
@@ -390,3 +398,504 @@ Standard `Ready` condition. Reasons: `Reconciled`, `Invalid`, `NameCollision`, `
 - `security.mto.stakater.com/openbaopkisecretengineroles/status`: `get, update, patch`
 - `security.mto.stakater.com/openbaopkisecretengineroles/finalizers`: `update`
 - Bao token must have `update` / `read` / `delete` on `<mount>/roles/*`.
+
+---
+
+## `OpenBaoGroup`
+
+Reconciles a CR to an OpenBao identity group at `identity/group`. Bao
+upserts groups by `(id, name)`; reads at `identity/group/name/<name>`;
+deletes the same path. Groups bundle a list of policies that every
+member inherits.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaogroup.yaml](../config/samples/security_v1alpha1_openbaogroup.yaml).
+
+```yaml
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoGroup
+metadata:
+  name: platform-admins
+  namespace: mto-extension-openbao-system
+spec:
+  type: internal
+  policies:
+    - platform-admin
+```
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.name` | string | no | `metadata.name` | Bao-side group name. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
+| `spec.type` | enum | no | `internal` | `internal` (members held directly) or `external` (members come from `OpenBaoGroupAlias`). Immutable on bao's side. |
+| `spec.policies` | []string | no | — | Bao policy names attached to the group. |
+| `spec.memberGroupIds` | []string | no | — | Bao group ids. Only valid for `type=internal`. |
+| `spec.memberEntityIds` | []string | no | — | Bao entity ids. Only valid for `type=internal`. |
+| `spec.metadata` | map[string]string | no | — | Free-form key/value labels persisted on the bao group. |
+| `spec.openbaoNamespace` | string | no | `""` | X-Vault-Namespace target. |
+
+### Status
+
+| Field | Description |
+|---|---|
+| `status.conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError` / `InternalError`. |
+| `status.baoWritten` | True after first successful write. Gates `BaoDelete` on the deletion path. |
+| `status.lastWrittenBaoName` / `status.lastWrittenOpenBaoNamespace` | Identity tuple for rename cleanup. |
+| `status.groupId` | Bao-side group id. Stamped on first create; re-stamped if recreated. Other CRs (notably `OpenBaoGroupAlias`) reference this. |
+
+### Operational notes
+
+- **Type immutability.** Bao does not allow changing a group's `type`
+  in place. Editing `spec.type` on an existing group surfaces as
+  `Ready=False / Reason=InternalError` with a clear message; delete
+  and recreate to switch.
+- **Drift comparator.** Sorts `policies`, `memberGroupIds`,
+  `memberEntityIds` before compare. `type=external` groups skip
+  member-id fields because bao silently drops them server-side.
+- **External group members come through aliases.** Set members via
+  `OpenBaoGroupAlias` CRs whose `canonicalGroupRef` points back at
+  this group, not via `memberEntityIds`.
+- **Collision tuple.** `(BaoName, openbaoNamespace)`. Same name in
+  different bao namespaces is not a collision. Older
+  `CreationTimestamp` wins; on tie, lex order of `<k8s-ns>/<name>`.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaogroups`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaogroups/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaogroups/finalizers`: `update`
+- Bao token must have `update` / `read` / `delete` on `identity/group/*`.
+
+---
+
+## `OpenBaoGroupAlias`
+
+Reconciles a CR to an OpenBao identity group-alias at
+`identity/group-alias`. An alias maps a `(name, mountAccessor)` tuple
+from an external auth method (OIDC, JWT, LDAP, …) into a parent
+`type=external` `OpenBaoGroup`. Bao keys aliases by id; the controller
+stamps the bao-side id on `status.aliasId` so subsequent reads /
+updates / deletes target the same alias even after a CR re-create.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaogroupalias.yaml](../config/samples/security_v1alpha1_openbaogroupalias.yaml).
+
+```yaml
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoGroupAlias
+metadata:
+  name: alice-oidc-admin
+  namespace: mto-extension-openbao-system
+spec:
+  name: alice@example.com
+  mountAccessor: auth_oidc_abc123
+  canonicalGroupRef:
+    name: oidc-admins
+```
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.name` | string | no | `metadata.name` | Alias name as seen by the auth method (OIDC sub, LDAP CN, etc.). Stored verbatim — case-sensitive. |
+| `spec.mountAccessor` | string | yes | — | Bao accessor of the auth mount this alias maps from. Look up via `bao auth list -format=json`. |
+| `spec.canonicalGroupRef` | object | one of | — | `{ name, namespace }` reference to an `OpenBaoGroup` CR. Mutually exclusive with `canonicalId`. |
+| `spec.canonicalId` | string | one of | — | Literal bao group id when the parent is managed out of band. Mutually exclusive with `canonicalGroupRef`. |
+| `spec.openbaoNamespace` | string | no | `""` | X-Vault-Namespace target. |
+
+### Status
+
+| Field | Description |
+|---|---|
+| `status.conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError` / `InternalError` (parent group not yet ready). |
+| `status.baoWritten` | True after first successful write. |
+| `status.aliasId` | Bao-side alias id. Stamped on first create; recovered via `Backfill` when status is lost. |
+| `status.lastWrittenMountAccessor` | Mount accessor the alias was last written under. Used on `mountAccessor` rename cleanup. |
+| `status.resolvedCanonicalId` | Parent group id resolved from `canonicalGroupRef` or `canonicalId`. |
+
+### Operational notes
+
+- **Parent must be ready.** When `canonicalGroupRef` is used, the
+  controller waits until the referenced `OpenBaoGroup`'s
+  `status.groupId` is populated. Until then the alias surfaces
+  `Ready=False / Reason=InternalError` and requeues. The alias
+  controller watches `OpenBaoGroup` so it wakes up when the parent
+  ready transitions.
+- **Aliases are id-keyed.** Bao stores aliases by id, not by
+  `(name, mountAccessor)`. The controller stamps the bao id on
+  `status.aliasId`. If a CR is re-applied from manifest with no
+  status, `Backfill` finds the existing alias by `(name,
+  mountAccessor)` and re-stamps the id.
+- **Mount-accessor rename.** `mountAccessor` is immutable on bao's
+  side. Editing it deletes the old alias (using the previously
+  stamped id) and creates a new one — managed automatically by the
+  controller.
+- **Collision tuple.** `(BaoName, mountAccessor, openbaoNamespace)`.
+  Same alias name on a different mount or in a different bao
+  namespace is not a collision.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaogroupaliases`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaogroupaliases/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaogroupaliases/finalizers`: `update`
+- `security.mto.stakater.com/openbaogroups`: `get, list, watch` (for parent resolution + watch).
+- Bao token must have `update` / `read` / `delete` on
+  `identity/group-alias` and `list` on `identity/group-alias/id`
+  (used by `Backfill`).
+
+---
+
+## `OpenBaoIdentityTokenRole`
+
+Reconciles a CR to an OIDC token role at `identity/oidc/role/<name>`.
+The role binds a name to a pre-existing OIDC key
+(`identity/oidc/key/<key>`) and a JWT claims template. Used to mint
+OIDC ID tokens for federated auth — typical case is tenants pulling
+AWS / GCP creds via OIDC trust.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaoidentitytokenrole.yaml](../config/samples/security_v1alpha1_openbaoidentitytokenrole.yaml).
+
+```yaml
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoIdentityTokenRole
+metadata:
+  name: aws-tokens
+  namespace: mto-extension-openbao-system
+spec:
+  key: platform
+  clientId: arn:aws:iam::123456789012:role/openbao-federated
+  template: |
+    {
+      "sub": "{{identity.entity.id}}",
+      "name": "{{identity.entity.name}}"
+    }
+  ttl: 1h
+```
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.name` | string | no | `metadata.name` | Bao-side role name. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
+| `spec.key` | string | yes | — | Name of a pre-existing OIDC key at `identity/oidc/key/<key>`. The controller does not create OIDC keys. |
+| `spec.template` | string (JSON) | no | — | JWT claims template. Bao accepts plain JSON or base64-wrapped. |
+| `spec.clientId` | string | no | — | Audience claim ("aud") of issued tokens. |
+| `spec.ttl` | string | no | key default | Bao duration (`1h`, `3600s`, `30m`). |
+| `spec.openbaoNamespace` | string | no | `""` | X-Vault-Namespace target. |
+
+### Status
+
+| Field | Description |
+|---|---|
+| `status.conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError`. |
+| `status.baoWritten` | True after first successful write. |
+| `status.lastWrittenBaoName` / `status.lastWrittenOpenBaoNamespace` | Identity tuple for rename cleanup. |
+
+### Operational notes
+
+- **OIDC key must already exist.** The role write fails with a 4xx
+  if `spec.key` does not name an existing `identity/oidc/key/*`.
+  Create the key out of band: `bao write identity/oidc/key/<key>
+  allowed_client_ids="*"`.
+- **TTL drift comparator.** Bao stores TTL as int seconds; the
+  wrapper renders `<n>s` so a spec of `3600s` round-trips against
+  bao's `3600` without false drift.
+- **Empty TTL adopts the key default.** A spec leaving `ttl` unset
+  is equivalent to bao's key default — no drift signal regardless
+  of what bao echoes.
+- **Collision tuple.** `(BaoName, openbaoNamespace)`.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaoidentitytokenroles`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaoidentitytokenroles/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaoidentitytokenroles/finalizers`: `update`
+- Bao token must have `update` / `read` / `delete` on `identity/oidc/role/*`.
+
+---
+
+## `OpenBaoAuthMethod`
+
+Reconciles a CR to a bao auth-method mount at `sys/auth/<path>`.
+Sibling of `OpenBaoSecretEngine` for the auth side: same enable /
+tune / disable shape, different bao endpoint. Stamps the bao-side
+mount accessor on `status.mountAccessor` so downstream CRs (notably
+`OpenBaoGroupAlias`) can bind to it without a manual `bao auth list`
+step.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaoauthmethod.yaml](../config/samples/security_v1alpha1_openbaoauthmethod.yaml).
+
+```yaml
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoAuthMethod
+metadata:
+  name: tenant-oidc
+  namespace: mto-extension-openbao-system
+spec:
+  path: oidc
+  type: oidc
+  description: Tenant OIDC auth mount
+  config:
+    defaultLeaseTtl: 1h
+    maxLeaseTtl: 24h
+```
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.path` | string | yes | — | Bao-side mount path (e.g. `oidc`, `jwt`, `cert`). |
+| `spec.type` | enum | yes | — | Auth-method kind: `cert`, `jwt`, `oidc`, `kubernetes`, `approle`, `userpass`, `ldap`. Immutable on bao's side. |
+| `spec.description` | string | no | — | Free-form mount description. |
+| `spec.config.defaultLeaseTtl` | string | no | bao default | Bao duration. |
+| `spec.config.maxLeaseTtl` | string | no | bao default | Bao duration. |
+| `spec.config.listingVisibility` | enum | no | — | `unauth` or `hidden`. |
+| `spec.openbaoNamespace` | string | no | `""` | X-Vault-Namespace target. |
+
+### Status
+
+| Field | Description |
+|---|---|
+| `status.conditions[Ready]` | Standard reasons. |
+| `status.baoWritten` | True after first successful enable. |
+| `status.lastWrittenBaoName` / `status.lastWrittenOpenBaoNamespace` | Identity tuple for rename cleanup. |
+| `status.mountAccessor` | Bao-side mount accessor. Stamped on first reconcile and refreshed via `Backfill` on every no-drift read. |
+
+### Operational notes
+
+- **Type immutability.** Bao does not allow auth-method type to
+  change in place. Editing `spec.type` on an existing mount surfaces
+  as `Ready=False / Reason=InternalError`; delete and recreate to
+  switch.
+- **Enable vs tune.** The controller probes for an existing mount
+  before write — routes to enable on missing, tune on present. Bao's
+  POST `sys/auth` creates only; re-POST returns `400 "already in
+  use"` (the wrapper swallows that as idempotent success on the
+  first-write path).
+- **Accessor backfill.** `status.mountAccessor` is repopulated on
+  every no-drift read. A CR re-applied from manifest with no status
+  picks up the accessor from the first matching read.
+- **Collision tuple.** `(BaoPath, openbaoNamespace)`. Same path in
+  different bao namespaces is not a collision.
+- **kubernetes auth mount.** The operator's own `kubernetes` auth
+  mount is enabled by `clusterauth` at startup with the narrow
+  legacy `EnableAuthMount` API. Use `OpenBaoAuthMethod` for
+  arbitrary auth mounts that downstream primitives need.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaoauthmethods`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaoauthmethods/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaoauthmethods/finalizers`: `update`
+- Bao token must have `update` / `read` / `delete` on `sys/auth/*`
+  and `update` on `sys/mounts/auth/*/tune`.
+
+---
+
+## `OpenBaoCertAuthEngineConfig`
+
+Reconciles a CR to the mount-level cert auth config at
+`auth/<path>/config`. Pairs with an `OpenBaoAuthMethod` of
+`type=cert` at the same path. **IsDeletable=false**: bao has no
+DELETE endpoint here, so CR delete releases the finalizer without
+touching bao.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaocertauthengineconfig.yaml](../config/samples/security_v1alpha1_openbaocertauthengineconfig.yaml).
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.path` | string | yes | — | Cert auth mount path. |
+| `spec.disableBinding` | bool | no | bao default | Turns off cert binding to a specific identity alias. |
+| `spec.enableIdentityAliasMetadata` | bool | no | bao default | Copy cert subject + serial onto identity alias metadata. |
+| `spec.ocspCacheSize` | int | no | bao default | OCSP response-cache entries. |
+| `spec.ocspFailOpen` | bool | no | bao default | Treat unreachable OCSP as success. |
+| `spec.ocspQueryAllServers` | bool | no | bao default | Query all OCSP responders in parallel. |
+| `spec.openbaoNamespace` | string | no | `""` | X-Vault-Namespace target. |
+
+### Status
+
+Standard `Ready` condition + `lastWrittenBaoName` /
+`lastWrittenOpenBaoNamespace` for rename tracking.
+
+### Operational notes
+
+- **Drift comparator.** Pointer fields with `nil` desired adopt
+  bao's value (no drift). Pinning a value causes drift on diff.
+- **Collision tuple.** `(spec.path, openbaoNamespace)`.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaocertauthengineconfigs`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaocertauthengineconfigs/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaocertauthengineconfigs/finalizers`: `update`
+- Bao token: `update` / `read` on `auth/<mount>/config`.
+
+---
+
+## `OpenBaoCertAuthEngineRole`
+
+Reconciles a CR to a per-cert role at `auth/<path>/certs/<name>`.
+Owns the trusted CA bundle plus the allow-list (SAN/CN patterns)
+that gates which client certs successfully authenticate. The cert
+bundle is sourced from a Kubernetes Secret; a Secret rotation
+re-enqueues the CR via the Secret watch.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaocertauthenginerole.yaml](../config/samples/security_v1alpha1_openbaocertauthenginerole.yaml).
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.path` | string | yes | — | Cert auth mount path. |
+| `spec.name` | string | no | `metadata.name` | Bao-side cert entry name. |
+| `spec.certificateRef` | object | yes | — | `{ name, namespace, key }` reference to a Secret holding the PEM bundle. `key` defaults to `ca.crt`. |
+| `spec.displayName` | string | no | — | Free-form bao-side label. |
+| `spec.allowedNames` | []string | no | — | Glob allow-list against SAN-or-CN. |
+| `spec.allowedCommonNames` | []string | no | — | Restrict by Subject CN. |
+| `spec.allowedDnsSans` | []string | no | — | Restrict by DNS SAN. |
+| `spec.allowedEmailSans` | []string | no | — | Restrict by email SAN. |
+| `spec.allowedUriSans` | []string | no | — | Restrict by URI SAN. |
+| `spec.allowedOrganizations` | []string | no | — | Restrict by Subject O. |
+| `spec.requiredExtensions` | []string | no | — | Required X.509 extension OIDs. |
+| `spec.tokenPolicies` | []string | no | — | Bao policies granted on successful login. |
+| `spec.tokenTtl` / `spec.tokenMaxTtl` / `spec.tokenPeriod` | string | no | bao default | Bao duration strings. |
+| `spec.tokenBoundCidrs` | []string | no | — | Source-IP restriction for issued tokens. |
+
+### Status
+
+Standard plus `status.lastWrittenPath` and
+`status.resolvedCertificate` (the PEM body resolved from the
+Secret).
+
+### Operational notes
+
+- **Cert from a Secret.** The PEM bundle never appears in the CR
+  spec. The controller watches Secrets and re-enqueues on rotation.
+- **Drift comparator.** Slices sorted before compare. The cert
+  body is compared against the resolved value.
+- **Collision tuple.** `(spec.path, BaoName, openbaoNamespace)`.
+  Same role name on a different mount or in a different bao
+  namespace is not a collision.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaocertauthengineroles`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaocertauthengineroles/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaocertauthengineroles/finalizers`: `update`
+- `secrets`: `get, list, watch` (for cert-bundle resolution + rotation).
+- Bao token: `update` / `read` / `delete` on `auth/<mount>/certs/*`.
+
+---
+
+## `OpenBaoJWTOIDCAuthEngineConfig`
+
+Reconciles a CR to the mount-level config of a JWT or OIDC auth
+method at `auth/<path>/config`. Pairs with an `OpenBaoAuthMethod`
+of `type=jwt` or `type=oidc`. The OIDC client secret is read from a
+Kubernetes Secret; the cleartext value never appears in the CR
+spec. **IsDeletable=false**.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaojwtoidcauthengineconfig.yaml](../config/samples/security_v1alpha1_openbaojwtoidcauthengineconfig.yaml).
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.path` | string | yes | — | JWT/OIDC auth mount path. |
+| `spec.oidcDiscoveryUrl` | string | one-of | — | OIDC well-known discovery URL. One of `oidcDiscoveryUrl`, `jwksUrl`, `jwtValidationPubkeys` is required. |
+| `spec.oidcDiscoveryCaPem` | string | no | — | Optional CA bundle for the discovery URL's TLS. |
+| `spec.oidcClientId` | string | no | — | OAuth2 client_id. |
+| `spec.oidcClientSecretRef` | object | no | — | `{ name, namespace, key }` Secret reference; `key` defaults to `oidcClientSecret`. |
+| `spec.oidcResponseMode` | enum | no | bao default | `query` or `form_post`. |
+| `spec.oidcResponseTypes` | []string | no | — | OIDC response_type list. |
+| `spec.jwksUrl` | string | one-of | — | Static JWKS endpoint. |
+| `spec.jwksCaPem` | string | no | — | Optional CA bundle for JWKS TLS. |
+| `spec.jwtValidationPubkeys` | []string | one-of | — | Static PEM public keys. |
+| `spec.jwtSupportedAlgs` | []string | no | bao default | Restrict accepted JWT algorithms. |
+| `spec.boundIssuer` | string | no | — | Restrict accepted tokens by `iss` claim. |
+| `spec.defaultRole` | string | no | — | Falls back when login doesn't pick a role. |
+
+### Status
+
+Standard plus `status.resolvedClientSecret` (cleartext from the
+Secret; not user-settable).
+
+### Operational notes
+
+- **client_secret from a Secret.** Watched; rotations re-enqueue.
+- **One of three validation modes.** `IsValid` rejects a config
+  that gives bao no way to validate inbound tokens.
+- **Collision tuple.** `(spec.path, openbaoNamespace)`.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaojwtoidcauthengineconfigs`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaojwtoidcauthengineconfigs/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaojwtoidcauthengineconfigs/finalizers`: `update`
+- `secrets`: `get, list, watch`.
+- Bao token: `update` / `read` on `auth/<mount>/config`.
+
+---
+
+## `OpenBaoJWTOIDCAuthEngineRole`
+
+Reconciles a CR to a JWT/OIDC role at `auth/<path>/role/<name>`.
+Maps inbound JWT/OIDC claims (sub, email, groups, etc.) to bao
+identity + policies. `roleType=oidc` requires
+`allowedRedirectUris`.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaojwtoidcauthenginerole.yaml](../config/samples/security_v1alpha1_openbaojwtoidcauthenginerole.yaml).
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.path` | string | yes | — | JWT/OIDC auth mount path. |
+| `spec.name` | string | no | `metadata.name` | Bao role name. |
+| `spec.roleType` | enum | yes | — | `jwt` or `oidc`. |
+| `spec.userClaim` | string | yes | — | JWT claim used as identity entity name. |
+| `spec.boundAudiences` | []string | no | — | Required for JWT roles when no boundIssuer; OIDC defaults to client_id. |
+| `spec.boundSubject` | string | no | — | Restrict by `sub` claim. |
+| `spec.boundClaimsType` | enum | no | bao default | `string` or `glob`. |
+| `spec.groupsClaim` | string | no | — | JWT claim feeding bao identity groups. |
+| `spec.claimMappings` | map[string]string | no | — | JWT claim → identity metadata. |
+| `spec.oidcScopes` | []string | no | — | OIDC scopes requested on login. |
+| `spec.allowedRedirectUris` | []string | yes (oidc) | — | OAuth2 redirect_uri allow-list. |
+| `spec.tokenPolicies` | []string | no | — | Bao policies granted on success. |
+| `spec.tokenTtl` / `spec.tokenMaxTtl` | string | no | bao default | Bao duration strings. |
+| `spec.tokenBoundCidrs` | []string | no | — | Source-IP restriction. |
+
+### Status
+
+Standard plus `status.lastWrittenPath`.
+
+### Operational notes
+
+- **Drift comparator.** Slices sorted; map-shaped `claimMappings`
+  via DeepEqual; TTLs adopt bao defaults when spec is empty.
+- **Collision tuple.** `(spec.path, BaoName, openbaoNamespace)`.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaojwtoidcauthengineroles`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaojwtoidcauthengineroles/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaojwtoidcauthengineroles/finalizers`: `update`
+- Bao token: `update` / `read` / `delete` on `auth/<mount>/role/*`.

@@ -1,7 +1,8 @@
 // Adapted from redhat-cop/vault-config-operator
-//   api/v1alpha1/kubernetesauthenginerole_types.go @ 96082119ec2e84595cc85b87808c3a6bd7aca53b
-//   api/v1alpha1/utils/commons.go @ 96082119ec2e84595cc85b87808c3a6bd7aca53b (TargetNamespaceConfig)
-//   <https://github.com/redhat-cop/vault-config-operator>
+//
+//	api/v1alpha1/kubernetesauthenginerole_types.go @ 96082119ec2e84595cc85b87808c3a6bd7aca53b
+//	api/v1alpha1/utils/commons.go @ 96082119ec2e84595cc85b87808c3a6bd7aca53b (TargetNamespaceConfig)
+//	<https://github.com/redhat-cop/vault-config-operator>
 //
 // Licensed under the Apache License, Version 2.0
 // <https://www.apache.org/licenses/LICENSE-2.0>.

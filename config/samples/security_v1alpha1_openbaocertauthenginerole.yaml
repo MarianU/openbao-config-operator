@@ -1,0 +1,25 @@
+# Registers a trusted CA at /v1/auth/cert/certs/team-a-mtls. The CA
+# bundle is read from the referenced Secret on every reconcile, so a
+# Secret rotation re-enqueues this CR automatically.
+#
+# Apply order (one-time setup):
+#   1. OpenBaoAuthMethod (path=cert, type=cert) enables the mount.
+#   2. OpenBaoCertAuthEngineConfig tunes the mount (optional).
+#   3. OpenBaoCertAuthEngineRole (this CR) registers a trusted CA.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoCertAuthEngineRole
+metadata:
+  name: team-a-mtls
+  namespace: mto-extension-openbao-system
+spec:
+  path: cert
+  certificateRef:
+    name: team-a-ca
+    key: ca.crt
+  displayName: team-a-mtls
+  allowedCommonNames:
+    - team-a-client
+  tokenPolicies:
+    - team-a-reader
+  tokenTtl: 1h
+  tokenMaxTtl: 24h

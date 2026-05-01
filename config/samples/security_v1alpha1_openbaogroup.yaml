@@ -1,0 +1,28 @@
+# Internal group: holds policies + member entities/groups directly.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoGroup
+metadata:
+  name: platform-admins
+  namespace: mto-extension-openbao-system
+spec:
+  type: internal
+  policies:
+    - platform-admin
+  # memberEntityIds and memberGroupIds bind specific bao identity ids
+  # into the group. Look them up with `bao read identity/entity/name/<n>`
+  # or `bao read identity/group/name/<n>`. Only valid for type=internal.
+  # memberEntityIds:
+  #   - 11111111-2222-3333-4444-555555555555
+---
+# External group: receives members through OpenBaoGroupAlias entries
+# that map auth-method aliases (OIDC sub claim, JWT subject, etc.)
+# into this group.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoGroup
+metadata:
+  name: oidc-admins
+  namespace: mto-extension-openbao-system
+spec:
+  type: external
+  policies:
+    - oidc-admin
