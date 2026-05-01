@@ -53,7 +53,7 @@ func TestPKIConfig_IsValid(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
 		c.Spec.Path = pkiCfgPath
-		c.Spec.PKIType = "root"
+		c.Spec.PKIType = PKITypeRoot
 		c.Spec.CommonName = "Test CA"
 		ok, err := c.IsValid()
 		require.True(t, ok)
@@ -61,7 +61,7 @@ func TestPKIConfig_IsValid(t *testing.T) {
 	})
 	t.Run("empty path rejected", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
-		c.Spec.PKIType = "root"
+		c.Spec.PKIType = PKITypeRoot
 		c.Spec.CommonName = "Test"
 		ok, err := c.IsValid()
 		require.False(t, ok)
@@ -70,7 +70,7 @@ func TestPKIConfig_IsValid(t *testing.T) {
 	t.Run("empty commonName rejected", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
 		c.Spec.Path = pkiCfgPath
-		c.Spec.PKIType = "root"
+		c.Spec.PKIType = PKITypeRoot
 		ok, err := c.IsValid()
 		require.False(t, ok)
 		require.ErrorContains(t, err, "spec.commonName")

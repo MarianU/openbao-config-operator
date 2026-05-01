@@ -27,6 +27,8 @@ const (
 	envtestNS = "default"
 	uidA      = "uid-a"
 	uidB      = "uid-b"
+	nsA       = "ns-a"
+	nsB       = "ns-b"
 )
 
 // fakeBao models bao's identity-group surface in-memory keyed by
@@ -540,20 +542,20 @@ func TestOpenBaoGroup_NameCollision_DifferentBaoNamespaceIsNotACollision(t *test
 	fb := newFakeBao()
 
 	a := sampleGroup("team-a")
-	a.Namespace = "ns-a"
+	a.Namespace = nsA
 	a.UID = uidA
 	a.Spec.OpenBaoNamespace = "acme/"
 
 	b := sampleGroup("team-a")
-	b.Namespace = "ns-b"
+	b.Namespace = nsB
 	b.UID = uidB
 	b.Spec.OpenBaoNamespace = "globex/"
 
 	r := buildReconciler(t, fb, a, b)
-	reconcile(t, r, "ns-a", "team-a")
-	reconcile(t, r, "ns-a", "team-a")
-	reconcile(t, r, "ns-b", "team-a")
-	reconcile(t, r, "ns-b", "team-a")
+	reconcile(t, r, nsA, "team-a")
+	reconcile(t, r, nsA, "team-a")
+	reconcile(t, r, nsB, "team-a")
+	reconcile(t, r, nsB, "team-a")
 
 	require.Equal(t, 2, fb.writes,
 		"same name in different bao namespaces must not collide")
@@ -565,12 +567,12 @@ func TestOpenBaoGroup_NameCollision_OlderWins(t *testing.T) {
 	fb := newFakeBao()
 
 	older := sampleGroup("team-a")
-	older.Namespace = "ns-a"
+	older.Namespace = nsA
 	older.UID = uidA
 	older.CreationTimestamp = metav1.NewTime(time.Now().Add(-1 * time.Hour))
 
 	newer := sampleGroup("team-a")
-	newer.Namespace = "ns-b"
+	newer.Namespace = nsB
 	newer.UID = uidB
 	newer.CreationTimestamp = metav1.NewTime(time.Now())
 
@@ -578,20 +580,20 @@ func TestOpenBaoGroup_NameCollision_OlderWins(t *testing.T) {
 
 	// Reconcile newer first so its BaoWrite path triggers the
 	// collision check before older has written.
-	reconcile(t, r, "ns-b", "team-a")
-	res := reconcile(t, r, "ns-b", "team-a")
+	reconcile(t, r, nsB, "team-a")
+	res := reconcile(t, r, nsB, "team-a")
 	require.Equal(t, resource.PeriodicInterval, res.RequeueAfter)
 	require.Equal(t, 0, fb.writes, "newer must not have written")
 
-	cond := readyCond(t, getGroup(t, r, "ns-b", "team-a"))
+	cond := readyCond(t, getGroup(t, r, nsB, "team-a"))
 	require.Equal(t, metav1.ConditionFalse, cond.Status)
 	require.Equal(t, resource.ReasonNameCollision, cond.Reason)
 	require.Contains(t, cond.Message, "ns-a/team-a",
 		"loser's message must name the older winner")
 
 	// Older proceeds successfully.
-	reconcile(t, r, "ns-a", "team-a")
-	reconcile(t, r, "ns-a", "team-a")
+	reconcile(t, r, nsA, "team-a")
+	reconcile(t, r, nsA, "team-a")
 	require.Equal(t, 1, fb.writes)
 }
 
@@ -602,39 +604,39 @@ func TestOpenBaoGroup_NameCollision_LoserHealsWhenWinnerDeleted(t *testing.T) {
 	fb := newFakeBao()
 
 	older := sampleGroup("team-a")
-	older.Namespace = "ns-a"
+	older.Namespace = nsA
 	older.UID = uidA
 	older.CreationTimestamp = metav1.NewTime(time.Now().Add(-1 * time.Hour))
 
 	newer := sampleGroup("team-a")
-	newer.Namespace = "ns-b"
+	newer.Namespace = nsB
 	newer.UID = uidB
 	newer.CreationTimestamp = metav1.NewTime(time.Now())
 
 	r := buildReconciler(t, fb, older, newer)
 
 	// Older wins, newer loses on first round.
-	reconcile(t, r, "ns-a", "team-a")
-	reconcile(t, r, "ns-a", "team-a")
-	reconcile(t, r, "ns-b", "team-a")
-	reconcile(t, r, "ns-b", "team-a")
+	reconcile(t, r, nsA, "team-a")
+	reconcile(t, r, nsA, "team-a")
+	reconcile(t, r, nsB, "team-a")
+	reconcile(t, r, nsB, "team-a")
 	require.Equal(t, 1, fb.writes)
-	cond := readyCond(t, getGroup(t, r, "ns-b", "team-a"))
+	cond := readyCond(t, getGroup(t, r, nsB, "team-a"))
 	require.Equal(t, resource.ReasonNameCollision, cond.Reason)
 
 	// Delete the winner.
-	winner := getGroup(t, r, "ns-a", "team-a")
+	winner := getGroup(t, r, nsA, "team-a")
 	require.NoError(t, r.Delete(context.Background(), winner))
-	reconcile(t, r, "ns-a", "team-a") // finalizer removes bao state + CR
+	reconcile(t, r, nsA, "team-a") // finalizer removes bao state + CR
 	require.NotContains(t, fb.groups, groupKey("", "team-a"))
 
 	// Next reconcile of the loser sees no other CR holds the
 	// collision tuple → it writes successfully.
-	reconcile(t, r, "ns-b", "team-a")
+	reconcile(t, r, nsB, "team-a")
 	require.Equal(t, 2, fb.writes,
 		"loser must write once the winner is gone")
 
-	cond = readyCond(t, getGroup(t, r, "ns-b", "team-a"))
+	cond = readyCond(t, getGroup(t, r, nsB, "team-a"))
 	require.Equal(t, metav1.ConditionTrue, cond.Status)
 	require.Equal(t, resource.ReasonReconciled, cond.Reason)
 }

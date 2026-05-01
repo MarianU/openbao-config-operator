@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	envtestNS = "default"
-	pkiMount  = "pki"
+	envtestNS    = "default"
+	pkiMount     = "pki"
+	sharedRoleNm = "shared"
 )
 
 // fakeBao keys roles by (openbaoNs, mount, name) so the same role
@@ -231,19 +232,19 @@ func sampleRole(name string) *v1alpha1.OpenBaoPKISecretEngineRole {
 	return r
 }
 
-func reconcile(t *testing.T, r *OpenBaoPKISecretEngineRoleReconciler, ns, name string) ctrl.Result {
+func reconcile(t *testing.T, r *OpenBaoPKISecretEngineRoleReconciler, name string) ctrl.Result {
 	t.Helper()
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Namespace: ns, Name: name},
+		NamespacedName: types.NamespacedName{Namespace: envtestNS, Name: name},
 	})
 	require.NoError(t, err)
 	return res
 }
 
-func getRole(t *testing.T, r *OpenBaoPKISecretEngineRoleReconciler, ns, name string) *v1alpha1.OpenBaoPKISecretEngineRole {
+func getRole(t *testing.T, r *OpenBaoPKISecretEngineRoleReconciler, name string) *v1alpha1.OpenBaoPKISecretEngineRole {
 	t.Helper()
 	var got v1alpha1.OpenBaoPKISecretEngineRole
-	require.NoError(t, r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &got))
+	require.NoError(t, r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: name}, &got))
 	return &got
 }
 
@@ -265,8 +266,8 @@ func TestPKIRole_CreatePath_WritesRole(t *testing.T) {
 	role := sampleRole("web-server")
 	r := buildReconciler(t, fb, role)
 
-	reconcile(t, r, envtestNS, role.Name) // finalizer
-	reconcile(t, r, envtestNS, role.Name) // write
+	reconcile(t, r, role.Name) // finalizer
+	reconcile(t, r, role.Name) // write
 
 	require.Equal(t, 1, fb.writes, "first reconcile must write the role")
 	stored, ok := fb.roles[roleKey("", pkiMount, "web-server")]
@@ -275,7 +276,7 @@ func TestPKIRole_CreatePath_WritesRole(t *testing.T) {
 	require.True(t, stored.AllowSubdomains)
 	require.True(t, stored.ServerFlag)
 
-	cond := readyCond(t, getRole(t, r, envtestNS, role.Name))
+	cond := readyCond(t, getRole(t, r, role.Name))
 	require.Equal(t, metav1.ConditionTrue, cond.Status)
 	require.Equal(t, resource.ReasonReconciled, cond.Reason)
 }
@@ -292,11 +293,11 @@ func TestPKIRole_NoAllowSet_RejectedByIsValid_NoBaoWrite(t *testing.T) {
 	// All allow* flags zero, allowedDomains empty.
 	r := buildReconciler(t, fb, role)
 
-	reconcile(t, r, envtestNS, role.Name) // finalizer
-	reconcile(t, r, envtestNS, role.Name) // would write — but IsValid rejects
+	reconcile(t, r, role.Name) // finalizer
+	reconcile(t, r, role.Name) // would write — but IsValid rejects
 
 	require.Equal(t, 0, fb.writes, "IsValid rejection must short-circuit before BaoWrite")
-	cond := readyCond(t, getRole(t, r, envtestNS, role.Name))
+	cond := readyCond(t, getRole(t, r, role.Name))
 	require.Equal(t, metav1.ConditionFalse, cond.Status)
 	require.Equal(t, resource.ReasonInvalid, cond.Reason)
 }
@@ -310,16 +311,16 @@ func TestPKIRole_DriftCorrection_OnSpecChange(t *testing.T) {
 	role := sampleRole("web-server")
 	r := buildReconciler(t, fb, role)
 
-	reconcile(t, r, envtestNS, role.Name)
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
+	reconcile(t, r, role.Name)
 	require.Equal(t, 1, fb.writes)
 
 	// Bump generation with a real spec change.
-	cur := getRole(t, r, envtestNS, role.Name)
+	cur := getRole(t, r, role.Name)
 	cur.Spec.AllowedDomains = []string{"example.com", "test.com"}
 	require.NoError(t, r.Update(context.Background(), cur))
 
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
 	require.Equal(t, 2, fb.writes, "spec change must drive a re-write")
 
 	stored := fb.roles[roleKey("", pkiMount, "web-server")]
@@ -334,12 +335,12 @@ func TestPKIRole_DriftComparator_StableState_NoExtraWrite(t *testing.T) {
 	role := sampleRole("web-server")
 	r := buildReconciler(t, fb, role)
 
-	reconcile(t, r, envtestNS, role.Name)
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
+	reconcile(t, r, role.Name)
 	require.Equal(t, 1, fb.writes)
 
 	// Reconcile again without any change.
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
 	require.Equal(t, 1, fb.writes,
 		"steady-state reconcile must not re-write — drift comparator returns true")
 }
@@ -351,13 +352,13 @@ func TestPKIRole_DeletePath_RemovesBaoRole(t *testing.T) {
 	role := sampleRole("web-server")
 	r := buildReconciler(t, fb, role)
 
-	reconcile(t, r, envtestNS, role.Name)
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
+	reconcile(t, r, role.Name)
 	require.Contains(t, fb.roles, roleKey("", pkiMount, "web-server"))
 
-	cur := getRole(t, r, envtestNS, role.Name)
+	cur := getRole(t, r, role.Name)
 	require.NoError(t, r.Delete(context.Background(), cur))
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
 
 	require.Equal(t, 1, fb.deletes)
 	require.NotContains(t, fb.roles, roleKey("", pkiMount, "web-server"))
@@ -373,20 +374,20 @@ func TestPKIRole_NameCollision_DifferentMountsDoNotCollide(t *testing.T) {
 	// both regardless of metadata.name (which must be unique in k8s).
 	a := sampleRole("k8s-a")
 	a.Spec.Path = "pki-a"
-	a.Spec.Name = "shared"
+	a.Spec.Name = sharedRoleNm
 	a.UID = "uid-a"
 
 	b := sampleRole("k8s-b")
 	b.Spec.Path = "pki-b"
-	b.Spec.Name = "shared"
+	b.Spec.Name = sharedRoleNm
 	b.UID = "uid-b"
 
 	r := buildReconciler(t, fb, a, b)
 
-	reconcile(t, r, envtestNS, a.Name)
-	reconcile(t, r, envtestNS, a.Name)
-	reconcile(t, r, envtestNS, b.Name)
-	reconcile(t, r, envtestNS, b.Name)
+	reconcile(t, r, a.Name)
+	reconcile(t, r, a.Name)
+	reconcile(t, r, b.Name)
+	reconcile(t, r, b.Name)
 
 	require.Equal(t, 2, fb.writes, "both roles must write — different mounts, no collision")
 	require.Contains(t, fb.roles, roleKey("", "pki-a", "shared"))
@@ -398,7 +399,7 @@ func TestPKIRole_NameCollision_OlderWins(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 
-	older := sampleRole("shared")
+	older := sampleRole(sharedRoleNm)
 	older.UID = "uid-older"
 	older.CreationTimestamp = metav1.Now()
 
@@ -408,20 +409,20 @@ func TestPKIRole_NameCollision_OlderWins(t *testing.T) {
 	younger.UID = "uid-younger"
 	younger.CreationTimestamp = metav1.NewTime(older.CreationTimestamp.Add(1))
 	younger.Spec.Path = pkiMount
-	younger.Spec.Name = "shared" // same bao role name as older
+	younger.Spec.Name = sharedRoleNm // same bao role name as older
 	younger.Spec.AllowAnyName = true
 
 	r := buildReconciler(t, fb, older, younger)
 
-	reconcile(t, r, envtestNS, older.Name)
-	reconcile(t, r, envtestNS, older.Name)
+	reconcile(t, r, older.Name)
+	reconcile(t, r, older.Name)
 	require.Equal(t, 1, fb.writes)
 
-	reconcile(t, r, envtestNS, younger.Name)
-	reconcile(t, r, envtestNS, younger.Name)
+	reconcile(t, r, younger.Name)
+	reconcile(t, r, younger.Name)
 	require.Equal(t, 1, fb.writes, "younger CR must NOT write — collision")
 
-	cond := readyCond(t, getRole(t, r, envtestNS, younger.Name))
+	cond := readyCond(t, getRole(t, r, younger.Name))
 	require.NotNil(t, cond)
 	require.Equal(t, resource.ReasonNameCollision, cond.Reason)
 }
@@ -438,21 +439,21 @@ func TestPKIRole_Rename_AcrossMountPath_CleansAtOldPath(t *testing.T) {
 	r := buildReconciler(t, fb, role)
 
 	// Create + drift through one cycle so LastWrittenPath gets stamped.
-	reconcile(t, r, envtestNS, role.Name)
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
+	reconcile(t, r, role.Name)
 	require.Contains(t, fb.roles, roleKey("", "pki-original", "orig"))
 
-	got := getRole(t, r, envtestNS, role.Name)
+	got := getRole(t, r, role.Name)
 	require.Equal(t, "pki-original", got.Status.LastWrittenPath,
 		"BaoWrite must stamp LastWrittenPath via the StatusMutator")
 
 	// Now rename BOTH name AND path in one edit.
-	cur := getRole(t, r, envtestNS, role.Name)
+	cur := getRole(t, r, role.Name)
 	cur.Spec.Name = "renamed"
 	cur.Spec.Path = "pki-new"
 	require.NoError(t, r.Update(context.Background(), cur))
 
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
 
 	require.Contains(t, fb.roles, roleKey("", "pki-new", "renamed"),
 		"new identity must be present in bao at the new mount")
@@ -468,23 +469,23 @@ func TestPKIRole_Rename_CleansPreviousRole(t *testing.T) {
 	role := sampleRole("web-server")
 	r := buildReconciler(t, fb, role)
 
-	reconcile(t, r, envtestNS, role.Name)
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
+	reconcile(t, r, role.Name)
 	require.Contains(t, fb.roles, roleKey("", pkiMount, "web-server"))
 
 	// Rename via spec.name.
-	cur := getRole(t, r, envtestNS, role.Name)
+	cur := getRole(t, r, role.Name)
 	cur.Spec.Name = "renamed-role"
 	require.NoError(t, r.Update(context.Background(), cur))
 
-	reconcile(t, r, envtestNS, role.Name)
+	reconcile(t, r, role.Name)
 
 	require.Contains(t, fb.roles, roleKey("", pkiMount, "renamed-role"),
 		"new identity must be present in bao")
 	require.NotContains(t, fb.roles, roleKey("", pkiMount, "web-server"),
 		"previous identity must be cleaned up — RenameTracker fires BaoDeleteIdentity")
 
-	got := getRole(t, r, envtestNS, role.Name)
+	got := getRole(t, r, role.Name)
 	require.Equal(t, "renamed-role", got.Status.LastWrittenBaoName)
 }
 

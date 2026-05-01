@@ -169,160 +169,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ClusterAuth")
-		os.Exit(1)
-	}
-
-	// +kubebuilder:scaffold:builder
-
-	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create TenantReconciler")
-		os.Exit(1)
-	}
-	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup Tenant controller")
-		os.Exit(1)
-	}
-
-	openBaoPolicyReconciler, err := openbaopolicy.NewOpenBaoPolicyReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoPolicyReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoPolicyReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoPolicy controller")
-		os.Exit(1)
-	}
-
-	openBaoKARReconciler, err := openbaokar.NewOpenBaoKubernetesAuthRoleReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoKubernetesAuthRoleReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoKARReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoKubernetesAuthRole controller")
-		os.Exit(1)
-	}
-
-	openBaoSecretEngineReconciler, err := openbaose.NewOpenBaoSecretEngineReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoSecretEngineReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoSecretEngineReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoSecretEngine controller")
-		os.Exit(1)
-	}
-
-	openBaoNamespaceReconciler, err := openbaonamespace.NewOpenBaoNamespaceReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoNamespaceReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoNamespaceReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoNamespace controller")
-		os.Exit(1)
-	}
-
-	openBaoPKIConfigReconciler, err := openbaopkic.NewOpenBaoPKISecretEngineConfigReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoPKISecretEngineConfigReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoPKIConfigReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoPKISecretEngineConfig controller")
-		os.Exit(1)
-	}
-
-	openBaoPKIRoleReconciler, err := openbaopkir.NewOpenBaoPKISecretEngineRoleReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoPKISecretEngineRoleReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoPKIRoleReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoPKISecretEngineRole controller")
-		os.Exit(1)
-	}
-
-	openBaoGroupReconciler, err := openbaogroup.NewOpenBaoGroupReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoGroupReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoGroupReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoGroup controller")
-		os.Exit(1)
-	}
-
-	openBaoGroupAliasReconciler, err := openbaogroupalias.NewOpenBaoGroupAliasReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoGroupAliasReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoGroupAliasReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoGroupAlias controller")
-		os.Exit(1)
-	}
-
-	openBaoITRReconciler, err := openbaoitr.NewOpenBaoIdentityTokenRoleReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoIdentityTokenRoleReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoITRReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoIdentityTokenRole controller")
-		os.Exit(1)
-	}
-
-	openBaoAuthMethodReconciler, err := openbaoauthmethod.NewOpenBaoAuthMethodReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoAuthMethodReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoAuthMethodReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoAuthMethod controller")
-		os.Exit(1)
-	}
-
-	openBaoCertCfgReconciler, err := openbaocertcfg.NewOpenBaoCertAuthEngineConfigReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoCertAuthEngineConfigReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoCertCfgReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoCertAuthEngineConfig controller")
-		os.Exit(1)
-	}
-
-	openBaoCertRoleReconciler, err := openbaocertrole.NewOpenBaoCertAuthEngineRoleReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoCertAuthEngineRoleReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoCertRoleReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoCertAuthEngineRole controller")
-		os.Exit(1)
-	}
-
-	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoJWTOIDCAuthEngineConfigReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoJWTCfgReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoJWTOIDCAuthEngineConfig controller")
-		os.Exit(1)
-	}
-
-	openBaoJWTRoleReconciler, err := openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create OpenBaoJWTOIDCAuthEngineRoleReconciler")
-		os.Exit(1)
-	}
-	if err := openBaoJWTRoleReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup OpenBaoJWTOIDCAuthEngineRole controller")
+	if err := setupReconcilers(mgr); err != nil {
+		setupLog.Error(err, "unable to set up reconcilers")
 		os.Exit(1)
 	}
 
@@ -331,4 +179,141 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// setupReconcilers wires every controller into the manager. Split out
+// of main() to keep cyclomatic complexity below the project lint
+// threshold; the body grows linearly as new primitives are added.
+func setupReconcilers(mgr ctrl.Manager) error {
+	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	// +kubebuilder:scaffold:builder
+
+	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoPolicyReconciler, err := openbaopolicy.NewOpenBaoPolicyReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoPolicyReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoKARReconciler, err := openbaokar.NewOpenBaoKubernetesAuthRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoKARReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoSecretEngineReconciler, err := openbaose.NewOpenBaoSecretEngineReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoSecretEngineReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoNamespaceReconciler, err := openbaonamespace.NewOpenBaoNamespaceReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoNamespaceReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoPKIConfigReconciler, err := openbaopkic.NewOpenBaoPKISecretEngineConfigReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoPKIConfigReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoPKIRoleReconciler, err := openbaopkir.NewOpenBaoPKISecretEngineRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoPKIRoleReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	return setupIdentityAndAuthReconcilers(mgr)
+}
+
+// setupIdentityAndAuthReconcilers wires the ST3 identity + auth
+// primitives. Split from setupReconcilers for the same complexity
+// reason — keep both helpers under the lint threshold as the family
+// grows.
+func setupIdentityAndAuthReconcilers(mgr ctrl.Manager) error {
+	openBaoGroupReconciler, err := openbaogroup.NewOpenBaoGroupReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoGroupReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoGroupAliasReconciler, err := openbaogroupalias.NewOpenBaoGroupAliasReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoGroupAliasReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoITRReconciler, err := openbaoitr.NewOpenBaoIdentityTokenRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoITRReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoAuthMethodReconciler, err := openbaoauthmethod.NewOpenBaoAuthMethodReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoAuthMethodReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoCertCfgReconciler, err := openbaocertcfg.NewOpenBaoCertAuthEngineConfigReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoCertCfgReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoCertRoleReconciler, err := openbaocertrole.NewOpenBaoCertAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoCertRoleReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoJWTCfgReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoJWTRoleReconciler, err := openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	return openBaoJWTRoleReconciler.SetupWithManager(mgr)
 }

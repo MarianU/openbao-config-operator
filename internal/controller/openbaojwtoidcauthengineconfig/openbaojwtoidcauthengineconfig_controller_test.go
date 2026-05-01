@@ -257,19 +257,19 @@ func sampleConfig() *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig {
 	return c
 }
 
-func runReconcile(t *testing.T, r *OpenBaoJWTOIDCAuthEngineConfigReconciler, ns, name string) ctrl.Result {
+func runReconcile(t *testing.T, r *OpenBaoJWTOIDCAuthEngineConfigReconciler, name string) ctrl.Result {
 	t.Helper()
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Namespace: ns, Name: name},
+		NamespacedName: types.NamespacedName{Namespace: envtestNS, Name: name},
 	})
 	require.NoError(t, err)
 	return res
 }
 
-func getCfg(t *testing.T, r *OpenBaoJWTOIDCAuthEngineConfigReconciler, ns, name string) *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig {
+func getCfg(t *testing.T, r *OpenBaoJWTOIDCAuthEngineConfigReconciler, name string) *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig {
 	t.Helper()
 	var c v1alpha1.OpenBaoJWTOIDCAuthEngineConfig
-	require.NoError(t, r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &c))
+	require.NoError(t, r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: name}, &c))
 	return &c
 }
 
@@ -289,15 +289,15 @@ func TestJWTOIDCConfig_CreatePath_ResolvesSecret(t *testing.T) {
 	sec := sampleSecret()
 	r := buildReconciler(t, fb, c, sec)
 
-	runReconcile(t, r, envtestNS, c.Name)
-	res := runReconcile(t, r, envtestNS, c.Name)
+	runReconcile(t, r, c.Name)
+	res := runReconcile(t, r, c.Name)
 
 	require.Equal(t, 1, fb.writes)
 	require.Equal(t, 5*time.Minute, res.RequeueAfter)
 	stored := fb.configs[cfgKey("", mountP)]
 	require.Equal(t, clientSecret, stored.OIDCClientSecret)
 
-	cond := readyCond(getCfg(t, r, envtestNS, c.Name))
+	cond := readyCond(getCfg(t, r, c.Name))
 	require.NotNil(t, cond)
 	require.Equal(t, metav1.ConditionTrue, cond.Status)
 }
@@ -309,11 +309,11 @@ func TestJWTOIDCConfig_NoWriteStorm(t *testing.T) {
 	c.Spec.OIDCClientSecretRef = nil // simplify the no-write-storm test
 	r := buildReconciler(t, fb, c)
 
-	runReconcile(t, r, envtestNS, c.Name)
-	runReconcile(t, r, envtestNS, c.Name)
+	runReconcile(t, r, c.Name)
+	runReconcile(t, r, c.Name)
 	require.Equal(t, 1, fb.writes)
 	for i := 0; i < 3; i++ {
-		runReconcile(t, r, envtestNS, c.Name)
+		runReconcile(t, r, c.Name)
 	}
 	require.Equal(t, 1, fb.writes)
 }
@@ -324,11 +324,11 @@ func TestJWTOIDCConfig_MissingSecret_RequeuesAsInternalError(t *testing.T) {
 	c := sampleConfig()
 	r := buildReconciler(t, fb, c) // no secret
 
-	runReconcile(t, r, envtestNS, c.Name)
-	res := runReconcile(t, r, envtestNS, c.Name)
+	runReconcile(t, r, c.Name)
+	res := runReconcile(t, r, c.Name)
 	require.Equal(t, 30*time.Second, res.RequeueAfter)
 	require.Equal(t, 0, fb.writes)
-	cond := readyCond(getCfg(t, r, envtestNS, c.Name))
+	cond := readyCond(getCfg(t, r, c.Name))
 	require.Equal(t, resource.ReasonInternalError, cond.Reason)
 }
 
@@ -340,12 +340,12 @@ func TestJWTOIDCConfig_DeletePath_NoBaoCall(t *testing.T) {
 	sec := sampleSecret()
 	r := buildReconciler(t, fb, c, sec)
 
-	runReconcile(t, r, envtestNS, c.Name)
-	runReconcile(t, r, envtestNS, c.Name)
+	runReconcile(t, r, c.Name)
+	runReconcile(t, r, c.Name)
 
-	cur := getCfg(t, r, envtestNS, c.Name)
+	cur := getCfg(t, r, c.Name)
 	require.NoError(t, r.Delete(context.Background(), cur))
-	runReconcile(t, r, envtestNS, c.Name)
+	runReconcile(t, r, c.Name)
 
 	require.Contains(t, fb.configs, cfgKey("", mountP),
 		"bao state must persist — config has no DELETE")
@@ -366,9 +366,9 @@ func TestJWTOIDCConfig_BaoForbidden(t *testing.T) {
 	sec := sampleSecret()
 	r := buildReconciler(t, fb, c, sec)
 
-	runReconcile(t, r, envtestNS, c.Name)
-	res := runReconcile(t, r, envtestNS, c.Name)
+	runReconcile(t, r, c.Name)
+	res := runReconcile(t, r, c.Name)
 	require.Equal(t, 30*time.Second, res.RequeueAfter)
-	cond := readyCond(getCfg(t, r, envtestNS, c.Name))
+	cond := readyCond(getCfg(t, r, c.Name))
 	require.Equal(t, resource.ReasonForbidden, cond.Reason)
 }

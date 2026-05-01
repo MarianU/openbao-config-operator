@@ -656,11 +656,13 @@ func (c *sdkClient) TuneSecretEngine(ctx context.Context, mount string, spec Sec
 	if mount == "" {
 		return errors.New("mount path is empty")
 	}
-	input := vault.MountConfigInput{
-		Description: &spec.Description,
-		Options:     spec.Options,
+	desc := spec.Description
+	options := spec.Options
+	input := vault.TuneMountConfigInput{
+		Description: &desc,
+		Options:     &options,
 	}
-	err := c.clientFor(opts).Sys().TuneMountWithContext(ctx, mount, input)
+	err := c.clientFor(opts).Sys().TuneMountAllowNilWithContext(ctx, mount, input)
 	return wrapStatus(err)
 }
 
@@ -751,19 +753,22 @@ func (c *sdkClient) TuneAuthMethod(ctx context.Context, mount string, spec AuthM
 		return errors.New("auth mount path is empty")
 	}
 	desc := spec.Description
-	input := vault.MountConfigInput{
+	input := vault.TuneMountConfigInput{
 		Description: &desc,
 	}
 	if spec.Config.DefaultLeaseTTL != "" {
-		input.DefaultLeaseTTL = spec.Config.DefaultLeaseTTL
+		v := spec.Config.DefaultLeaseTTL
+		input.DefaultLeaseTTL = &v
 	}
 	if spec.Config.MaxLeaseTTL != "" {
-		input.MaxLeaseTTL = spec.Config.MaxLeaseTTL
+		v := spec.Config.MaxLeaseTTL
+		input.MaxLeaseTTL = &v
 	}
 	if spec.Config.ListingVisibility != "" {
-		input.ListingVisibility = spec.Config.ListingVisibility
+		v := spec.Config.ListingVisibility
+		input.ListingVisibility = &v
 	}
-	err := c.clientFor(opts).Sys().TuneMountWithContext(ctx, "auth/"+mount, input)
+	err := c.clientFor(opts).Sys().TuneMountAllowNilWithContext(ctx, "auth/"+mount, input)
 	return wrapStatus(err)
 }
 

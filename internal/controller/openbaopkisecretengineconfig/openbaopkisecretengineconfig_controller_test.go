@@ -257,19 +257,19 @@ func sampleConfig(name string) *v1alpha1.OpenBaoPKISecretEngineConfig {
 	return c
 }
 
-func reconcile(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler, ns, name string) ctrl.Result {
+func reconcile(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler, name string) ctrl.Result {
 	t.Helper()
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Namespace: ns, Name: name},
+		NamespacedName: types.NamespacedName{Namespace: envtestNS, Name: name},
 	})
 	require.NoError(t, err)
 	return res
 }
 
-func getCfg(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler, ns, name string) *v1alpha1.OpenBaoPKISecretEngineConfig {
+func getCfg(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler, name string) *v1alpha1.OpenBaoPKISecretEngineConfig {
 	t.Helper()
 	var c v1alpha1.OpenBaoPKISecretEngineConfig
-	require.NoError(t, r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &c))
+	require.NoError(t, r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: name}, &c))
 	return &c
 }
 
@@ -281,13 +281,13 @@ func TestPKIConfig_CreatePath_GeneratesCAAndWritesURLs(t *testing.T) {
 	c := sampleConfig("pki-cfg")
 	r := buildReconciler(t, fb, c)
 
-	reconcile(t, r, envtestNS, c.Name) // finalizer
-	reconcile(t, r, envtestNS, c.Name) // write
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // write
 
 	require.Equal(t, 1, fb.generates, "first reconcile must generate CA")
 	require.GreaterOrEqual(t, fb.writeURLs, 1, "URLs must be written")
 
-	got := getCfg(t, r, envtestNS, c.Name)
+	got := getCfg(t, r, c.Name)
 	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase, "phase must be Active after generate")
 	require.NotEmpty(t, got.Status.CASerialNumber, "serial must be captured from bao response")
 }
@@ -303,13 +303,13 @@ func TestPKIConfig_DestructiveOverwriteGuard(t *testing.T) {
 	r := buildReconciler(t, fb, c)
 
 	// First create — generate fires once.
-	reconcile(t, r, envtestNS, c.Name)
-	reconcile(t, r, envtestNS, c.Name)
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
 	require.Equal(t, 1, fb.generates, "create path: generate runs once")
 
 	// Multiple later reconciles — generate must NEVER fire again.
 	for i := 0; i < 5; i++ {
-		reconcile(t, r, envtestNS, c.Name)
+		reconcile(t, r, c.Name)
 	}
 	require.Equal(t, 1, fb.generates,
 		"DESTRUCTIVE OVERWRITE: GenerateRootPKI must not be called once a CA exists; would destroy private key")
@@ -323,16 +323,16 @@ func TestPKIConfig_UpdatePath_URLsOnly(t *testing.T) {
 	c := sampleConfig("pki-cfg")
 	r := buildReconciler(t, fb, c)
 
-	reconcile(t, r, envtestNS, c.Name)
-	reconcile(t, r, envtestNS, c.Name)
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
 	urlsAfterCreate := fb.writeURLs
 
 	// Change URL spec, bump generation.
-	cur := getCfg(t, r, envtestNS, c.Name)
+	cur := getCfg(t, r, c.Name)
 	cur.Spec.URLs.IssuingCertificates = []string{"https://new.example.com/ca"}
 	require.NoError(t, r.Update(context.Background(), cur))
 
-	reconcile(t, r, envtestNS, c.Name)
+	reconcile(t, r, c.Name)
 
 	require.Equal(t, 1, fb.generates, "URL change must NOT regenerate the CA")
 	require.Greater(t, fb.writeURLs, urlsAfterCreate, "URL change must propagate via WritePKIURLs")
@@ -347,16 +347,16 @@ func TestPKIConfig_DeletePath_IsDeletableFalse_PreservesCA(t *testing.T) {
 	c := sampleConfig("pki-cfg")
 	r := buildReconciler(t, fb, c)
 
-	reconcile(t, r, envtestNS, c.Name)
-	reconcile(t, r, envtestNS, c.Name)
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
 	require.Equal(t, 1, fb.generates)
 	caKey := key("", pkiPath)
 	require.Contains(t, fb.caBySerial, caKey, "CA must exist before delete")
 
 	// Now delete the CR.
-	cur := getCfg(t, r, envtestNS, c.Name)
+	cur := getCfg(t, r, c.Name)
 	require.NoError(t, r.Delete(context.Background(), cur))
-	reconcile(t, r, envtestNS, c.Name)
+	reconcile(t, r, c.Name)
 
 	// CR should be gone.
 	var post v1alpha1.OpenBaoPKISecretEngineConfig
@@ -385,16 +385,16 @@ func TestPKIConfig_NameCollision_OlderWins(t *testing.T) {
 
 	r := buildReconciler(t, fb, older, younger)
 
-	reconcile(t, r, envtestNS, older.Name)
-	reconcile(t, r, envtestNS, older.Name)
+	reconcile(t, r, older.Name)
+	reconcile(t, r, older.Name)
 	require.Equal(t, 1, fb.generates, "older must own the CA")
 
-	reconcile(t, r, envtestNS, younger.Name)
-	reconcile(t, r, envtestNS, younger.Name)
+	reconcile(t, r, younger.Name)
+	reconcile(t, r, younger.Name)
 	require.Equal(t, 1, fb.generates,
 		"younger CR must NOT regenerate; collision check guards the destructive call")
 
-	cond := readyCond(t, getCfg(t, r, envtestNS, younger.Name))
+	cond := readyCond(t, getCfg(t, r, younger.Name))
 	require.NotNil(t, cond)
 	require.Equal(t, resource.ReasonNameCollision, cond.Reason)
 }
@@ -409,13 +409,13 @@ func TestPKIConfig_SteadyState_DoesNotRewriteURLs(t *testing.T) {
 	c := sampleConfig("pki-cfg")
 	r := buildReconciler(t, fb, c)
 
-	reconcile(t, r, envtestNS, c.Name) // finalizer
-	reconcile(t, r, envtestNS, c.Name) // create CA + write URLs
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // create CA + write URLs
 	urlsAfterCreate := fb.writeURLs
 
 	// Steady-state reconcile — no spec change, bao matches.
-	reconcile(t, r, envtestNS, c.Name)
-	reconcile(t, r, envtestNS, c.Name)
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
 
 	require.Equal(t, urlsAfterCreate, fb.writeURLs,
 		"steady-state reconcile must NOT re-write URLs — bao state already matches")
@@ -440,11 +440,11 @@ func TestPKIConfig_BackfillStampsPhaseFromObservedState(t *testing.T) {
 	c := sampleConfig("pki-cfg")
 	r := buildReconciler(t, fb, c)
 
-	reconcile(t, r, envtestNS, c.Name) // finalizer
-	reconcile(t, r, envtestNS, c.Name) // bao matches; no BaoWrite
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // bao matches; no BaoWrite
 
 	require.Equal(t, 0, fb.generates, "must not regenerate")
-	got := getCfg(t, r, envtestNS, c.Name)
+	got := getCfg(t, r, c.Name)
 	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase,
 		"Backfill hook must stamp Phase=Active when bao has a CA but status is empty")
 	require.Equal(t, "stale-status-serial", got.Status.CASerialNumber,
@@ -466,10 +466,10 @@ func TestPKIConfig_AdoptsExistingCA_PopulatesPhaseAndSerial(t *testing.T) {
 	c := sampleConfig("pki-cfg")
 	r := buildReconciler(t, fb, c)
 
-	reconcile(t, r, envtestNS, c.Name) // finalizer
-	reconcile(t, r, envtestNS, c.Name) // write — adopts existing CA
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // write — adopts existing CA
 
-	got := getCfg(t, r, envtestNS, c.Name)
+	got := getCfg(t, r, c.Name)
 	require.Equal(t, 0, fb.generates,
 		"existing CA must NOT be regenerated (destructive overwrite guard)")
 	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase,

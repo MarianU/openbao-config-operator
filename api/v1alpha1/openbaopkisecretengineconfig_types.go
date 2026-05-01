@@ -59,6 +59,9 @@ var _ vaultobject.RenameTracker = &OpenBaoPKISecretEngineConfig{}
 // release. Intermediate-CA support adds AwaitingExternalSignature.
 const PhaseActive = "Active"
 
+// PKITypeRoot is the only supported value for spec.pkiType today.
+const PKITypeRoot = "root"
+
 // BaoName returns the canonical bao identity for this CR — the PKI
 // mount path the CA + URLs live under. Trimmed of slashes.
 func (d *OpenBaoPKISecretEngineConfig) BaoName() string {
@@ -170,8 +173,8 @@ func (d *OpenBaoPKISecretEngineConfig) IsValid() (bool, error) {
 	if strings.TrimSpace(d.Spec.CommonName) == "" {
 		return false, fmt.Errorf("spec.commonName must not be empty")
 	}
-	if d.Spec.PKIType != "root" {
-		return false, fmt.Errorf("spec.pkiType=%q is not supported; only \"root\" is implemented", d.Spec.PKIType)
+	if d.Spec.PKIType != PKITypeRoot {
+		return false, fmt.Errorf("spec.pkiType=%q is not supported; only %q is implemented", d.Spec.PKIType, PKITypeRoot)
 	}
 	return true, nil
 }
