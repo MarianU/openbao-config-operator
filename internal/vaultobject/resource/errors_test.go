@@ -74,3 +74,30 @@ func TestClassifyErr_StatusErrorThroughWrap(t *testing.T) {
 		t.Errorf("ClassifyErr(wrapped 403) = %q, want %q", got, ReasonForbidden)
 	}
 }
+
+func TestClassifyErr_InvalidSpec(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("%w: type is immutable post-create", ErrInvalidSpec)
+	if got := ClassifyErr(wrapped); got != ReasonInvalid {
+		t.Errorf("ClassifyErr(wrapped ErrInvalidSpec) = %q, want %q", got, ReasonInvalid)
+	}
+	plain := errors.New("invalid spec: oops")
+	if got := ClassifyErr(plain); got == ReasonInvalid {
+		t.Errorf("plain error should not match ReasonInvalid, got %q", got)
+	}
+}
+
+func TestClassifyErr_DeleteBlocked(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("%w: bao requires deletion_allowed=true", ErrDeleteBlocked)
+	if got := ClassifyErr(wrapped); got != ReasonDeleteBlocked {
+		t.Errorf("ClassifyErr(wrapped ErrDeleteBlocked) = %q, want %q", got, ReasonDeleteBlocked)
+	}
+	// A bare 400 from bao must NOT classify as DeleteBlocked — only the
+	// sentinel wrap routes there. Without this guard, every "bad request"
+	// from bao would shadow real DeleteBlocked situations.
+	plain := status(http.StatusBadRequest, "deletion is not allowed for key")
+	if got := ClassifyErr(plain); got == ReasonDeleteBlocked {
+		t.Errorf("bare 400 should not match ReasonDeleteBlocked, got %q", got)
+	}
+}

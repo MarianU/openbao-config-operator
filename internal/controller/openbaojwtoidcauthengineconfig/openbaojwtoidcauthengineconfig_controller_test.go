@@ -21,8 +21,13 @@ import (
 
 	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	"github.com/stakater-ab/mto-extension-openbao/internal/hmacstore"
 	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject/resource"
 )
+
+func testHMAC() hmacstore.Computer {
+	return hmacstore.NewComputerFromKey([]byte("test-hmac-key-stable-across-reconciles"))
+}
 
 const (
 	envtestNS    = "default"
@@ -186,6 +191,12 @@ func (f *fakeBao) WriteCertAuthConfig(ctx context.Context, m string, s baoclient
 func (f *fakeBao) ReadCertAuthConfig(ctx context.Context, m string, o ...baoclient.CallOption) (*baoclient.CertAuthConfigSpec, error) {
 	return nil, baoclient.ErrNotFound
 }
+func (f *fakeBao) WriteK8sAuthConfig(ctx context.Context, m string, s baoclient.K8sAuthConfigSpec, o ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadK8sAuthConfig(ctx context.Context, m string, o ...baoclient.CallOption) (*baoclient.K8sAuthConfigSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
 func (f *fakeBao) WriteCertAuthRole(ctx context.Context, m, n string, s baoclient.CertAuthRoleSpec, o ...baoclient.CallOption) error {
 	return nil
 }
@@ -204,10 +215,22 @@ func (f *fakeBao) ReadJWTOIDCRole(ctx context.Context, m, n string, o ...baoclie
 func (f *fakeBao) DeleteJWTOIDCRole(ctx context.Context, m, n string, o ...baoclient.CallOption) error {
 	return nil
 }
+func (f *fakeBao) WriteTransitKey(ctx context.Context, m, n string, s baoclient.TransitKeySpec, o ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadTransitKey(ctx context.Context, m, n string, o ...baoclient.CallOption) (*baoclient.TransitKeyInfo, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) UpdateTransitKeyConfig(ctx context.Context, m, n string, s baoclient.TransitKeySpec, o ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) DeleteTransitKey(ctx context.Context, m, n string, o ...baoclient.CallOption) error {
+	return nil
+}
 
 // ---- harness ----
 
-func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBaoJWTOIDCAuthEngineConfigReconciler {
+func buildReconciler(t *testing.T, fb baoclient.Client, objs ...runtime.Object) *OpenBaoJWTOIDCAuthEngineConfigReconciler {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
@@ -223,7 +246,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Client:        cl,
 		Scheme:        scheme,
 		FinalizerName: OpenBaoJWTOIDCAuthEngineConfigFinalizer,
-		Handlers:      OpenBaoJWTOIDCAuthEngineConfigHandlers(cl, fb),
+		Handlers:      OpenBaoJWTOIDCAuthEngineConfigHandlers(cl, fb, testHMAC()),
 	}
 	return &OpenBaoJWTOIDCAuthEngineConfigReconciler{VaultResource: base, cl: cl}
 }
@@ -333,6 +356,50 @@ func TestJWTOIDCConfig_MissingSecret_RequeuesAsInternalError(t *testing.T) {
 }
 
 // IsDeletable=false: CR delete releases finalizer without touching bao.
+// Models real bao: oidc_client_secret is omitted from the read
+// response (verified live earlier; openbao's pathConfigRead never
+// includes it). The HMAC mechanism must still detect rotations.
+type redactingFakeBao struct {
+	*fakeBao
+}
+
+func (r *redactingFakeBao) ReadJWTOIDCConfig(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.JWTOIDCConfigSpec, error) {
+	cur, err := r.fakeBao.ReadJWTOIDCConfig(ctx, mount, opts...)
+	if cur != nil {
+		cp := *cur
+		cp.OIDCClientSecret = "" // bao omits this on read
+		return &cp, nil
+	}
+	return cur, err
+}
+
+// Definitive rotation test against a redaction-modeling fake — the
+// case the previous "both non-empty" guard silently dropped.
+func TestJWTOIDCConfig_SecretRotation_DetectedDespiteBaoRedaction(t *testing.T) {
+	t.Parallel()
+	fb := &redactingFakeBao{fakeBao: newFakeBao()}
+	c := sampleConfig()
+	sec := sampleSecret()
+	r := buildReconciler(t, fb, c, sec)
+
+	runReconcile(t, r, c.Name)
+	runReconcile(t, r, c.Name)
+	require.Equal(t, 1, fb.writes, "initial create should write once")
+
+	// Rotate the OIDC client_secret in-place.
+	const rotated = "client-secret-v2-rotated"
+	cur := &corev1.Secret{}
+	require.NoError(t, r.Get(context.Background(),
+		types.NamespacedName{Namespace: envtestNS, Name: "oidc-client"}, cur))
+	cur.Data["oidcClientSecret"] = []byte(rotated)
+	require.NoError(t, r.Update(context.Background(), cur))
+
+	runReconcile(t, r, c.Name)
+	require.Equal(t, 2, fb.writes,
+		"rotation must trigger a re-write even though bao omits the client_secret on read")
+	require.Equal(t, rotated, fb.fakeBao.configs[cfgKey("", mountP)].OIDCClientSecret)
+}
+
 func TestJWTOIDCConfig_DeletePath_NoBaoCall(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()

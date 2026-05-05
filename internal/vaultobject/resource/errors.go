@@ -22,6 +22,11 @@ const (
 	// would mislead an operator paging on a Ready=False with reason=BaoError
 	// into checking the bao server when the fault is in our preparation step.
 	ReasonInternalError = "InternalError"
+	// ReasonDeleteBlocked covers the case where bao refuses a delete because
+	// a server-side flag forbids it (e.g. transit's deletion_allowed=false).
+	// Surfaced as its own reason so dashboards distinguish "user must flip a
+	// gate" from a generic BaoError or a controller-side bug.
+	ReasonDeleteBlocked = "DeleteBlocked"
 )
 
 // ErrNameCollision is returned by a primitive's BaoWrite callback when it
@@ -42,6 +47,21 @@ var ErrNameCollision = errors.New("bao name collision")
 // operators into checking the bao server.
 var ErrInternal = errors.New("controller internal error")
 
+// ErrInvalidSpec marks user-spec violations detected after IsValid() — i.e.
+// a check that needs bao-state context (post-create immutability, mount-shape
+// mismatch). IsValid() runs before any bao read and produces ReasonInvalid
+// directly via the base; BaoWrite cannot, so it wraps with ErrInvalidSpec
+// to route through ClassifyErr.
+var ErrInvalidSpec = errors.New("invalid spec")
+
+// ErrDeleteBlocked marks a delete that bao refused because of a server-side
+// flag (e.g. transit's deletion_allowed=false). Wrap with
+// fmt.Errorf("%w: ...", ErrDeleteBlocked, ...) so ClassifyErr produces
+// ReasonDeleteBlocked. The base's handleDelete keeps the finalizer in
+// place when BaoDelete returns this, so the CR stays Terminating until the
+// user flips the gate.
+var ErrDeleteBlocked = errors.New("bao delete blocked")
+
 // ClassifyErr maps a bao client error to a Reason. Detection is structured:
 // the wrapper at internal/client tags every SDK error with HTTP status via
 // *baoclient.StatusError, so we never have to string-match an error
@@ -53,6 +73,15 @@ func ClassifyErr(err error) string {
 	}
 	if errors.Is(err, ErrNameCollision) {
 		return ReasonNameCollision
+	}
+	// ErrInvalidSpec and ErrDeleteBlocked precede ErrInternal because a
+	// caller may wrap the same underlying cause with whichever sentinel
+	// best describes the failure; the more specific reason wins.
+	if errors.Is(err, ErrInvalidSpec) {
+		return ReasonInvalid
+	}
+	if errors.Is(err, ErrDeleteBlocked) {
+		return ReasonDeleteBlocked
 	}
 	if errors.Is(err, ErrInternal) {
 		return ReasonInternalError

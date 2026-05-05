@@ -17,6 +17,7 @@ import (
 
 	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	"github.com/stakater-ab/mto-extension-openbao/internal/hmacstore"
 	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject/resource"
 )
 
@@ -32,23 +33,23 @@ type OpenBaoJWTOIDCAuthEngineConfigReconciler struct {
 	cl client.Client
 }
 
-func NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr ctrl.Manager) (*OpenBaoJWTOIDCAuthEngineConfigReconciler, error) {
+func NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr ctrl.Manager, hmac hmacstore.Computer) (*OpenBaoJWTOIDCAuthEngineConfigReconciler, error) {
 	bao, err := newBaoFromEnv()
 	if err != nil {
 		return nil, err
 	}
-	return NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr, bao), nil
+	return NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr, bao, hmac), nil
 }
 
-func NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client) *OpenBaoJWTOIDCAuthEngineConfigReconciler {
+func NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client, hmac hmacstore.Computer) *OpenBaoJWTOIDCAuthEngineConfigReconciler {
 	return &OpenBaoJWTOIDCAuthEngineConfigReconciler{
 		VaultResource: resource.New[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig](mgr, OpenBaoJWTOIDCAuthEngineConfigFinalizer,
-			OpenBaoJWTOIDCAuthEngineConfigHandlers(mgr.GetClient(), bao)),
+			OpenBaoJWTOIDCAuthEngineConfigHandlers(mgr.GetClient(), bao, hmac)),
 		cl: mgr.GetClient(),
 	}
 }
 
-func OpenBaoJWTOIDCAuthEngineConfigHandlers(cl client.Client, bao baoclient.Client) resource.Handlers[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig] {
+func OpenBaoJWTOIDCAuthEngineConfigHandlers(cl client.Client, bao baoclient.Client, hmac hmacstore.Computer) resource.Handlers[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig] {
 	return resource.Handlers[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig]{
 		NewInstance: func() *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig {
 			return &v1alpha1.OpenBaoJWTOIDCAuthEngineConfig{}
@@ -63,7 +64,11 @@ func OpenBaoJWTOIDCAuthEngineConfigHandlers(cl client.Client, bao baoclient.Clie
 			if err != nil {
 				return nil, err
 			}
-			return map[string]any{"config": cur}, nil
+			return map[string]any{
+				"config":               cur,
+				"currentSecretMAC":     hmac.Compute(c.SecretMACInputs()...),
+				"lastWrittenSecretMAC": c.Status.LastWrittenSecretMAC,
+			}, nil
 		},
 
 		BaoWrite: func(ctx context.Context, c *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) (resource.StatusMutator[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig], error) {
@@ -71,13 +76,25 @@ func OpenBaoJWTOIDCAuthEngineConfigHandlers(cl client.Client, bao baoclient.Clie
 				return nil, err
 			}
 			ns := baoclient.WithNamespace(c.OpenBaoNamespace())
-			return nil, bao.WriteJWTOIDCConfig(ctx, c.Spec.Path, c.ToBaoSpec(), ns)
+			if err := bao.WriteJWTOIDCConfig(ctx, c.Spec.Path, c.ToBaoSpec(), ns); err != nil {
+				return nil, err
+			}
+			mac := hmac.Compute(c.SecretMACInputs()...)
+			return func(t *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) {
+				t.Status.LastWrittenSecretMAC = mac
+			}, nil
 		},
 
 		// IsDeletable=false; bao has no DELETE on /config.
 		BaoDelete: func(ctx context.Context, _ *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) error {
 			return nil
 		},
+		// Rename hook is intentionally empty: bao has no DELETE on
+		// auth/<mount>/config, and the previous mount itself is owned
+		// by OpenBaoAuthMethod (not this CR). When that mount is later
+		// disabled via its OpenBaoAuthMethod, bao discards the config
+		// along with it. So a rename across spec.path leaves no
+		// orphan this CR is responsible for cleaning up.
 		BaoDeleteIdentity: func(ctx context.Context, _ *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig, _, _ string) error {
 			return nil
 		},
@@ -133,6 +150,9 @@ func (r *OpenBaoJWTOIDCAuthEngineConfigReconciler) SetupWithManager(mgr ctrl.Man
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.OpenBaoJWTOIDCAuthEngineConfig{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// No GenerationChangedPredicate on the Secret watch — Secret
+		// data changes don't bump metadata.generation, so gating on
+		// generation would silently drop every rotation event.
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.configsReferencingSecret),

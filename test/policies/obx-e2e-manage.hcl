@@ -14,7 +14,17 @@ path "sys/namespaces/*"      { capabilities = ["create","read","update","delete"
 path "sys/policies/acl"      { capabilities = ["read","list","sudo"] }
 path "sys/policies/acl/*"    { capabilities = ["create","update","read","list","delete","sudo"] }
 
-# manage Kubernetes auth roles (no sudo needed)
-path "auth/kubernetes/*" { capabilities = ["create","read","update","delete","list"] }
-path "auth/kubernetes/roles" { capabilities = ["read","list"] }
-path "auth/kubernetes/role/*"{ capabilities = ["create","update","read","list","delete"] }
+# manage kubernetes auth (per-mount). spec.path is operator-supplied
+# on OpenBaoAuthMethod / OpenBaoKubernetesAuthEngineConfig /
+# OpenBaoKubernetesAuthRole, so e2e fixtures using non-default mounts
+# must be covered by wildcards. Mirrors the +/keys pattern below.
+path "auth/+/config"         { capabilities = ["create","read","update","delete","list"] }
+path "auth/+/role"           { capabilities = ["read","list"] }
+path "auth/+/role/*"         { capabilities = ["create","read","update","delete","list"] }
+
+# manage transit keys (per-mount). The OpenBaoTransitKey controller
+# reads, writes, and deletes /<mount>/keys/<name> and writes the
+# mutable subset to /<mount>/keys/<name>/config. Wildcard mount path
+# because the spec.path is operator-supplied.
+path "+/keys"               { capabilities = ["read","list"] }
+path "+/keys/*"             { capabilities = ["create","read","update","delete","list"] }

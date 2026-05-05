@@ -1822,5 +1822,231 @@ func TestDeleteJWTOIDCRole_IdempotentOn404(t *testing.T) {
 	require.NoError(t, c.DeleteJWTOIDCRole(context.Background(), "oidc", "missing"))
 }
 
+// ---- Kubernetes auth (auth/<mount>/config) ----
+
+func TestWriteK8sAuthConfig_PostsAtAuthConfigPath(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	var seenBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&seenBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	disableISS := true
+	require.NoError(t, c.WriteK8sAuthConfig(context.Background(), "kubernetes",
+		K8sAuthConfigSpec{
+			KubernetesHost:       "https://kubernetes.default.svc:443",
+			KubernetesCACert:     "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n",
+			TokenReviewerJWT:     "eyJ.fake.jwt",
+			Issuer:               "kubernetes/serviceaccount",
+			DisableISSValidation: &disableISS,
+		}))
+	require.Equal(t, "/v1/auth/kubernetes/config", seenPath)
+	require.Equal(t, "https://kubernetes.default.svc:443", seenBody["kubernetes_host"])
+	require.Contains(t, seenBody["kubernetes_ca_cert"], "BEGIN CERTIFICATE")
+	require.Equal(t, "eyJ.fake.jwt", seenBody["token_reviewer_jwt"])
+	require.Equal(t, "kubernetes/serviceaccount", seenBody["issuer"])
+	require.Equal(t, true, seenBody["disable_iss_validation"])
+	// Unset bool pointers must NOT appear in the body — bao defaults
+	// stay in effect when the spec doesn't pin them.
+	_, hasLocalCA := seenBody["disable_local_ca_jwt"]
+	require.False(t, hasLocalCA, "unset bool pointers elided from body")
+}
+
+func TestWriteK8sAuthConfig_RejectsEmptyHost(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao with empty kubernetes_host")
+	})
+	require.Error(t, c.WriteK8sAuthConfig(context.Background(), "kubernetes",
+		K8sAuthConfigSpec{}))
+}
+
+func TestReadK8sAuthConfig_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadK8sAuthConfig(context.Background(), "kubernetes")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestReadK8sAuthConfig_ParsesFields(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/auth/kubernetes/config", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"kubernetes_host":        "https://kubernetes.default.svc:443",
+				"kubernetes_ca_cert":     "PEM",
+				"pem_keys":               []any{"key-a", "key-b"},
+				"issuer":                 "kubernetes/serviceaccount",
+				"disable_iss_validation": true,
+			},
+		})
+	})
+	out, err := c.ReadK8sAuthConfig(context.Background(), "kubernetes")
+	require.NoError(t, err)
+	require.Equal(t, "https://kubernetes.default.svc:443", out.KubernetesHost)
+	require.Equal(t, "PEM", out.KubernetesCACert)
+	require.Equal(t, []string{"key-a", "key-b"}, out.PEMKeys)
+	require.Equal(t, "kubernetes/serviceaccount", out.Issuer)
+	require.NotNil(t, out.DisableISSValidation)
+	require.True(t, *out.DisableISSValidation)
+}
+
+// ---- WriteTransitKey / UpdateTransitKeyConfig / ReadTransitKey / DeleteTransitKey ----
+
+func TestWriteTransitKey_PostsCreateBodyAtKeyPath(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	derived := true
+	conv := false
+	keySize := 32
+	require.NoError(t, c.WriteTransitKey(context.Background(), "transit", "app-key", TransitKeySpec{
+		Type:                 "aes256-gcm96",
+		Derived:              &derived,
+		ConvergentEncryption: &conv,
+		KeySize:              &keySize,
+		AutoRotatePeriod:     "720h",
+	}))
+	require.Equal(t, "/v1/transit/keys/app-key", gotPath)
+	require.Equal(t, "aes256-gcm96", gotBody["type"])
+	require.Equal(t, true, gotBody["derived"])
+	require.Equal(t, false, gotBody["convergent_encryption"])
+	require.Equal(t, "720h", gotBody["auto_rotate_period"])
+	// Mutable-only fields must NOT appear on the create call — the
+	// controller's two-phase pattern relies on this split.
+	for _, k := range []string{"min_decryption_version", "min_encryption_version", "deletion_allowed"} {
+		_, present := gotBody[k]
+		require.False(t, present, "create body must not include config-only field %q", k)
+	}
+}
+
+func TestUpdateTransitKeyConfig_PostsConfigBodyAtConfigPath(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	delAllowed := true
+	minDec := 2
+	minEnc := 0
+	require.NoError(t, c.UpdateTransitKeyConfig(context.Background(), "transit", "app-key", TransitKeySpec{
+		MinDecryptionVersion: &minDec,
+		MinEncryptionVersion: &minEnc,
+		DeletionAllowed:      &delAllowed,
+		AutoRotatePeriod:     "0",
+	}))
+	require.Equal(t, "/v1/transit/keys/app-key/config", gotPath)
+	require.Equal(t, true, gotBody["deletion_allowed"])
+	// json round-trip turns ints into float64 — assert via the numeric value.
+	require.EqualValues(t, 2, gotBody["min_decryption_version"])
+	require.EqualValues(t, 0, gotBody["min_encryption_version"])
+	require.Equal(t, "0", gotBody["auto_rotate_period"])
+	// Create-only fields must NOT appear on the config call.
+	for _, k := range []string{"type", "derived", "convergent_encryption", "key_size"} {
+		_, present := gotBody[k]
+		require.False(t, present, "config body must not include create-only field %q", k)
+	}
+}
+
+func TestReadTransitKey_DecodesFullShape(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/transit/keys/app-key", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"name":                   "app-key",
+				"type":                   "aes256-gcm96",
+				"derived":                false,
+				"convergent_encryption":  false,
+				"exportable":             false,
+				"allow_plaintext_backup": false,
+				"auto_rotate_period":     2592000, // bao returns int seconds
+				"deletion_allowed":       true,
+				"min_decryption_version": 1,
+				"min_encryption_version": 0,
+				"latest_version":         3,
+				"creation_time":          "2026-05-04T00:00:00Z",
+				"supports_encryption":    true,
+				"supports_decryption":    true,
+				"supports_signing":       false,
+				"supports_derivation":    false,
+				"imported_key":           false,
+				"keys": map[string]any{
+					"1": map[string]any{"creation_time": "2026-05-04T00:00:00Z"},
+				},
+			},
+		})
+	})
+	info, err := c.ReadTransitKey(context.Background(), "transit", "app-key")
+	require.NoError(t, err)
+	require.Equal(t, "aes256-gcm96", info.Type)
+	require.Equal(t, 2592000, info.AutoRotatePeriod, "int seconds preserved on read")
+	require.Equal(t, 3, info.LatestVersion)
+	require.True(t, info.DeletionAllowed)
+	require.True(t, info.SupportsEncryption)
+	require.NotNil(t, info.Keys, "version map round-trips opaque")
+}
+
+func TestReadTransitKey_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ReadTransitKey(context.Background(), "transit", "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteTransitKey_Swallows404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/transit/keys/missing", r.URL.Path)
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	require.NoError(t, c.DeleteTransitKey(context.Background(), "transit", "missing"),
+		"404 = already gone, idempotent success")
+}
+
+func TestDeleteTransitKey_400DeletionNotAllowed(t *testing.T) {
+	t.Parallel()
+	// Pin bao's exact error body shape. A wording change upstream
+	// surfaces here as a test failure — without this guard, bao could
+	// rename the message, the substring match would fail, and the
+	// wrapper would silently emit a generic *StatusError{400} that
+	// classifies as ReasonBaoError instead of DeleteBlocked.
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["deletion is not allowed for key app-key"]}`, http.StatusBadRequest)
+	})
+	err := c.DeleteTransitKey(context.Background(), "transit", "app-key")
+	require.ErrorIs(t, err, ErrDeletionNotAllowed)
+}
+
+func TestDeleteTransitKey_400OtherBody_PropagatesAsStatusError(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["mount is sealed"]}`, http.StatusBadRequest)
+	})
+	err := c.DeleteTransitKey(context.Background(), "transit", "app-key")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrDeletionNotAllowed,
+		"400 with a different body must NOT classify as DeletionNotAllowed")
+	var se *StatusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusBadRequest, se.StatusCode)
+}
+
 // ---- silence linter on imports used only by appended tests ----
 var _ = io.Discard

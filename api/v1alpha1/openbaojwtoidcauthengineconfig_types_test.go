@@ -143,3 +143,38 @@ func TestOpenBaoJWTOIDCAuthEngineConfig_ToBaoSpec_CarriesResolvedSecret(t *testi
 	require.Equal(t, "bao-client", spec.OIDCClientID)
 	require.Equal(t, jwtClientSecret, spec.OIDCClientSecret)
 }
+
+// HMAC-pattern upgrade path: a CR that was last reconciled by a
+// pre-MAC operator has Status.LastWrittenSecretMAC == "". The new
+// operator's first reconcile must treat that as drift (empty != freshly
+// computed MAC) so a write fires and stamps the MAC, putting the CR
+// back on the steady-state path. Locks in the migration story for
+// already-deployed CRs.
+func TestOpenBaoJWTOIDCAuthEngineConfig_IsEquivalent_EmptyLastMAC_TreatedAsDrift(t *testing.T) {
+	t.Parallel()
+	c := newJWTConfig()
+	cur := &baoclient.JWTOIDCConfigSpec{OIDCDiscoveryURL: "https://accounts.example.com"}
+	// All non-MAC fields match (no other drift), but lastWrittenSecretMAC
+	// is empty (upgrade case) and currentSecretMAC is computed from a
+	// resolved Secret — they differ, comparator must report drift.
+	require.False(t, c.IsEquivalentToDesiredState(map[string]interface{}{
+		"config":               cur,
+		"currentSecretMAC":     "some-computed-mac",
+		"lastWrittenSecretMAC": "",
+	}))
+}
+
+// MAC-equality fast path: when both currentSecretMAC and
+// lastWrittenSecretMAC are empty (no Secret-sourced field on this CR
+// at all), the comparator must NOT spuriously report drift on the
+// MAC line.
+func TestOpenBaoJWTOIDCAuthEngineConfig_IsEquivalent_BothMACsEmpty_NoDrift(t *testing.T) {
+	t.Parallel()
+	c := newJWTConfig()
+	cur := &baoclient.JWTOIDCConfigSpec{OIDCDiscoveryURL: "https://accounts.example.com"}
+	require.True(t, c.IsEquivalentToDesiredState(map[string]interface{}{
+		"config":               cur,
+		"currentSecretMAC":     "",
+		"lastWrittenSecretMAC": "",
+	}))
+}

@@ -56,12 +56,28 @@ func (d *OpenBaoJWTOIDCAuthEngineConfig) GetPayload() map[string]interface{} {
 
 // IsEquivalentToDesiredState compares the spec against the bao read.
 // String fields with empty desired adopt bao's value (no drift).
-// Slices are sorted before compare. The OIDC client secret is
-// compared via the resolved value (status.ResolvedClientSecret) to
-// detect rotations of the underlying Secret.
+// Slices are sorted before compare.
+//
+// The OIDC client_secret cannot be compared against bao directly:
+// bao's pathConfigRead omits the field entirely on response (it's
+// marked sensitive in the openbao schema). The reconciler stamps an
+// HMAC of the resolved value onto the payload as "currentSecretMAC"
+// (this reconcile pass) and "lastWrittenSecretMAC" (from previous
+// successful write); a mismatch signals rotation. See
+// [internal/hmacstore](../../internal/hmacstore).
+//
+// Trade-off: out-of-band edits to the bao-side client_secret are not
+// detected, because bao won't return the value to compare against.
+// Rotation through the k8s Secret IS detected. The previous
+// "both non-empty" guard had it backwards.
 func (d *OpenBaoJWTOIDCAuthEngineConfig) IsEquivalentToDesiredState(payload map[string]interface{}) bool {
 	cur, ok := payload["config"].(*baoclient.JWTOIDCConfigSpec)
 	if !ok || cur == nil {
+		return false
+	}
+	curMAC, _ := payload["currentSecretMAC"].(string)
+	lastMAC, _ := payload["lastWrittenSecretMAC"].(string)
+	if curMAC != lastMAC {
 		return false
 	}
 	if !stringEqualOrAdopt(d.Spec.OIDCDiscoveryURL, cur.OIDCDiscoveryURL) {
@@ -71,13 +87,6 @@ func (d *OpenBaoJWTOIDCAuthEngineConfig) IsEquivalentToDesiredState(payload map[
 		return false
 	}
 	if !stringEqualOrAdopt(d.Spec.OIDCClientID, cur.OIDCClientID) {
-		return false
-	}
-	// Bao's read may redact / not return the client_secret; treat
-	// the resolved value as the source of truth and compare only
-	// when bao actually echoes a non-empty value.
-	if d.Status.ResolvedClientSecret != "" && cur.OIDCClientSecret != "" &&
-		d.Status.ResolvedClientSecret != cur.OIDCClientSecret {
 		return false
 	}
 	if !stringEqualOrAdopt(d.Spec.OIDCResponseMode, cur.OIDCResponseMode) {
@@ -105,6 +114,16 @@ func (d *OpenBaoJWTOIDCAuthEngineConfig) IsEquivalentToDesiredState(payload map[
 		return false
 	}
 	return true
+}
+
+// SecretMACInputs returns the byte slices an HMAC computer should
+// digest for this CR's Secret-sourced fields, in stable order. Used
+// by the controller to compute currentSecretMAC and to set
+// lastWrittenSecretMAC on a successful write.
+func (d *OpenBaoJWTOIDCAuthEngineConfig) SecretMACInputs() [][]byte {
+	return [][]byte{
+		[]byte(d.Status.ResolvedClientSecret),
+	}
 }
 
 // stringEqualOrAdopt returns true when the desired field is empty
@@ -331,6 +350,15 @@ type OpenBaoJWTOIDCAuthEngineConfigStatus struct {
 	// pattern is about not putting it in the CR YAML manifest.
 	// +optional
 	ResolvedClientSecret string `json:"resolvedClientSecret,omitempty"`
+
+	// LastWrittenSecretMAC is the HMAC-SHA256 (base64) of the
+	// Secret-sourced field values the operator last successfully wrote
+	// to bao. The drift comparator compares the freshly-recomputed MAC
+	// against this on each reconcile; a mismatch signals that the
+	// underlying Secret rotated and the operator must re-write.
+	// Empty until the first successful write. See [hmacstore](../../internal/hmacstore).
+	// +optional
+	LastWrittenSecretMAC string `json:"lastWrittenSecretMac,omitempty"`
 }
 
 func (m *OpenBaoJWTOIDCAuthEngineConfig) GetConditions() []metav1.Condition {

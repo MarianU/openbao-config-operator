@@ -23,6 +23,8 @@ lands its primitive(s).
 | `OpenBaoCertAuthEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cert auth role at `auth/<path>/certs/<name>`. Owns the trusted CA bundle (sourced from a Kubernetes Secret) plus the per-cert allow-list (allowedNames, allowedDnsSans, etc.) and the policies bao grants on a successful login. The Secret watch re-enqueues the CR on rotation. |
 | `OpenBaoJWTOIDCAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | JWT/OIDC auth mount-level configuration at `auth/<path>/config`. OIDC discovery URL or static JWKS, client id + client_secret (read from a Kubernetes Secret), bound issuer, default role. Pairs with an `OpenBaoAuthMethod` of `type=jwt` or `type=oidc`. `IsDeletable=false`. |
 | `OpenBaoJWTOIDCAuthEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | JWT/OIDC role at `auth/<path>/role/<name>`. Maps inbound JWT/OIDC claims (sub, email, groups, etc.) to the bao identity entity and grants policies on successful login. `roleType=oidc` requires `allowedRedirectUris` for the OAuth2 callback URL set. |
+| `OpenBaoKubernetesAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Kubernetes auth mount-level configuration at `auth/<path>/config`. `kubernetesHost`, optional CA bundle (Secret-sourced), token-reviewer JWT (Secret-sourced), `pemKeys`, `issuer`, and bao tunables. Pairs with an `OpenBaoAuthMethod` of `type=kubernetes`. Secret-watch propagates token-reviewer JWT and CA rotations. `IsDeletable=false` — bao has no DELETE on `/config`. |
+| `OpenBaoTransitKey` | `security.mto.stakater.com/v1alpha1` | Namespaced | Transit key at `<path>/keys/<name>`. Pairs with an `OpenBaoSecretEngine` of kind=transit at the same path. `spec.type` / `spec.derived` / `spec.convergentEncryption` / `spec.keySize` are immutable post-create — editing them surfaces `Ready=False reason=Invalid`. Bao's `deletion_allowed` flag is the canonical delete gate; CR delete with `spec.deletionAllowed` unset/false leaves the CR `Terminating` with `Ready=False reason=DeleteBlocked`. |
 
 ---
 
@@ -899,3 +901,165 @@ Standard plus `status.lastWrittenPath`.
 - `security.mto.stakater.com/openbaojwtoidcauthengineroles/status`: `get, update, patch`
 - `security.mto.stakater.com/openbaojwtoidcauthengineroles/finalizers`: `update`
 - Bao token: `update` / `read` / `delete` on `auth/<mount>/role/*`.
+
+---
+
+## `OpenBaoKubernetesAuthEngineConfig`
+
+Reconciles a CR to the kubernetes auth-mount config at
+`auth/<spec.path>/config`. Pairs with an `OpenBaoAuthMethod` of
+`type=kubernetes` at the same path; the auth-method controller owns
+mount lifecycle, this CRD only writes `/config`.
+
+The token-reviewer JWT and the (optional) Kubernetes CA bundle are
+sourced from Kubernetes Secrets via `spec.tokenReviewerJwtRef` and
+`spec.kubernetesCaCertRef`. A Secret-watch re-enqueues the CR on
+rotation, so the next reconcile re-writes the new value to bao.
+
+`IsDeletable=false` — bao has no DELETE on `/config`, so CR delete
+releases the finalizer without touching bao state.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaokubernetesauthengineconfig.yaml](../config/samples/security_v1alpha1_openbaokubernetesauthengineconfig.yaml):
+
+```yaml
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoKubernetesAuthEngineConfig
+metadata:
+  name: tenant-k8s-auth
+  namespace: mto-extension-openbao-system
+spec:
+  path: kubernetes
+  kubernetesHost: https://kubernetes.default.svc:443
+  tokenReviewerJwtRef:
+    name: openbao-token-reviewer
+    key: token
+  kubernetesCaCertRef:
+    name: openbao-token-reviewer
+    key: ca.crt
+  issuer: kubernetes/serviceaccount
+```
+
+### Spec fields
+
+- `path` — bao auth-method mount path (required).
+- `openbaoNamespace` — optional bao namespace.
+- `kubernetesHost` — apiserver URL bao calls `TokenReview` against (required).
+- `tokenReviewerJwtRef` — Secret holding the SA JWT bao presents to the apiserver. `key` defaults to `token`.
+- `kubernetesCaCertRef` — Secret holding the PEM CA bundle. `key` defaults to `ca.crt`.
+- `pemKeys` — optional list of PEM-encoded public keys for local SA-JWT verification (mutually-exclusive with the TokenReview flow).
+- `issuer` — narrow accepted tokens to a specific `iss` claim. Defaults to bao's `kubernetes/serviceaccount`.
+- `disableIssValidation` — skip JWT iss-claim validation (kind / minikube).
+- `disableLocalCaJwt` — disable bao's pod-local CA + JWT defaulting.
+- `useAnnotationsAsAliasMetadata` — propagate `vault.hashicorp.com/alias-metadata-` SA annotations onto the bao identity alias.
+
+### Status
+
+- `conditions[Ready]` — drives observability.
+- `baoWritten`, `lastWrittenBaoName`, `lastWrittenOpenBaoNamespace` — last-good identity stamp.
+- `resolvedTokenReviewerJwt`, `resolvedKubernetesCaCert` — resolved Secret values used for drift comparison. Same etcd-storage trade-off as `OpenBaoJWTOIDCAuthEngineConfig.status.resolvedClientSecret`.
+
+### Operational notes
+
+- **No DELETE on `/config`.** `IsDeletable=false`; CR delete leaves the bao mount config in place.
+- **Drift on redacted JWT.** Bao redacts the JWT on read; the comparator only fires drift when both sides have a non-empty value, so a redacted echo is treated as no-drift.
+- **Collision tuple.** `(spec.path, openbaoNamespace)`. Two CRs targeting the same auth mount in the same bao namespace collide; older `creationTimestamp` wins.
+- **Parent mount.** Apply an `OpenBaoAuthMethod` (or `bao auth enable kubernetes`) at the same path first, otherwise bao 400s on the config write.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaokubernetesauthengineconfigs`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaokubernetesauthengineconfigs/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaokubernetesauthengineconfigs/finalizers`: `update`
+- `core/secrets`: `get, list, watch` (for the Secret-watch).
+- Bao token: `update` / `read` on `auth/<mount>/config`.
+
+### Watches
+
+- `OpenBaoKubernetesAuthEngineConfig` itself (filtered by `GenerationChangedPredicate`).
+- `Secret` watch — any change to a Secret named by `spec.tokenReviewerJwtRef` or `spec.kubernetesCaCertRef` re-enqueues the CR.
+
+---
+
+## `OpenBaoTransitKey`
+
+Reconciles a CR to a single transit key at `<path>/keys/<name>` on a
+pre-existing transit secret-engine mount.
+
+The bao API splits the spec across two endpoints — `POST /keys/<name>`
+on create and `POST /keys/<name>/config` for the mutable subset — so
+the controller does the same split internally. Type, derived,
+convergent encryption, and key size are immutable post-create on the
+bao side; the controller surfaces an immutability mismatch as
+`Ready=False reason=Invalid` rather than letting the drift loop retry
+forever.
+
+### Sample
+
+See [config/samples/security_v1alpha1_openbaotransitkey.yaml](../config/samples/security_v1alpha1_openbaotransitkey.yaml).
+
+### Spec fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `spec.path` | string | yes | `transit` | Parent transit secret-engine mount. |
+| `spec.name` | string | yes | — | Bao key name. |
+| `spec.openbaoNamespace` | string | no | — | `X-Vault-Namespace` target. |
+| `spec.type` | enum | yes | `aes256-gcm96` | Algorithm. Immutable post-create. |
+| `spec.keySize` | int (32–512) | no | bao default | Bytes for hmac keys; ignored otherwise. Immutable. |
+| `spec.derived` | bool | no | bao default (false) | Per-context subkeys. Immutable. |
+| `spec.convergentEncryption` | bool | no | bao default (false) | Same plaintext+context → same ciphertext. Requires `derived=true`. Immutable. |
+| `spec.exportable` | bool | no | bao default (false) | Allow `/export`. **Mutable but one-way** on bao's side — once enabled, bao refuses to disable. |
+| `spec.allowPlaintextBackup` | bool | no | bao default (false) | Same one-way semantics as `exportable`. |
+| `spec.autoRotatePeriod` | string | no | — | Go duration (`720h`); `0` or empty disables. `30d` is not a Go duration unit — use hours. |
+| `spec.deletionAllowed` | bool | no | bao default (false) | Gates `DELETE` on the bao side. CR delete with this unset/false surfaces `Ready=False reason=DeleteBlocked`. |
+| `spec.minDecryptionVersion` | int | no | 0 | Floor for decrypt operations. |
+| `spec.minEncryptionVersion` | int | no | 0 | Floor for encrypt operations. `0` = latest. |
+
+### Status
+
+Standard (`conditions`, `baoWritten`, `lastWrittenBaoName`,
+`lastWrittenOpenBaoNamespace`) plus:
+
+- `lastWrittenPath` — bao mount path the controller last wrote into.
+  Drives rename cleanup when both `spec.name` and `spec.path` change in
+  one edit.
+- `latestVersion` — bao's current key version. Apps targeting a
+  specific version pin against this field. Refreshed on every reconcile
+  (≤5 min staleness).
+- `creationTime` — bao-side key creation timestamp.
+- `supportsEncryption` / `supportsDecryption` / `supportsSigning` /
+  `supportsDerivation` — capability flags surfaced from bao on read.
+
+### Operational notes
+
+- **Two-phase write.** `BaoWrite` reads first to decide create-vs-config
+  and to enforce post-create immutability; the create body carries the
+  immutable fields, the follow-up `/config` call carries the mutable
+  subset.
+- **Drift comparator.** `auto_rotate_period` is normalized between the
+  spec's Go-duration string and bao's int-seconds read shape. Spec
+  fields left unset adopt bao's value rather than appearing as drift.
+  Immutable-field divergence drives the comparator to `false` so the
+  immutability check inside `BaoWrite` catches it as `ErrInvalidSpec`.
+- **Delete gating.** Bao's own `deletion_allowed` flag is the canonical
+  gate. CR-level `spec.deletionAllowed` is plumbed through to bao via
+  the `/config` endpoint. Bao's 400 "deletion is not allowed" surfaces
+  as `Ready=False reason=DeleteBlocked`; finalizer holds until the user
+  flips `spec.deletionAllowed=true` and re-applies.
+- **Rotation is not reconcile-driven.** `auto_rotate_period` is the
+  bao-managed knob; explicit rotation via `transit/keys/<name>/rotate`
+  is out of scope for this CRD. `status.latestVersion` reflects the
+  rotated value on the next reconcile (≤5 min).
+- **Collision tuple.** `(spec.path, BaoName, openbaoNamespace)`. Two
+  CRs at the same key name on different mounts don't collide because
+  the bao path differs.
+
+### RBAC
+
+- `security.mto.stakater.com/openbaotransitkeys`: `get, list, watch, update, patch`
+- `security.mto.stakater.com/openbaotransitkeys/status`: `get, update, patch`
+- `security.mto.stakater.com/openbaotransitkeys/finalizers`: `update`
+- Bao token: `create` / `read` / `update` / `delete` on
+  `<mount>/keys/<name>` and `<mount>/keys/<name>/config`.
