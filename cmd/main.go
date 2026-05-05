@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
-	"reflect"
 
 	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -29,7 +28,6 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -38,6 +36,20 @@ import (
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
 	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
+	openbaoauthmethod "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoauthmethod"
+	openbaocertcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthengineconfig"
+	openbaocertrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthenginerole"
+	openbaogroup "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaogroup"
+	openbaogroupalias "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaogroupalias"
+	openbaoitr "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoidentitytokenrole"
+	openbaojwtcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaojwtoidcauthengineconfig"
+	openbaojwtrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaojwtoidcauthenginerole"
+	openbaokar "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaokubernetesauthrole"
+	openbaonamespace "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaonamespace"
+	openbaopkic "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretengineconfig"
+	openbaopkir "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretenginerole"
+	openbaopolicy "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopolicy"
+	openbaose "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaosecretengine"
 	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
 	// +kubebuilder:scaffold:imports
 )
@@ -157,32 +169,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	t := &obxv1alpha1.OpenBaoExtension{}
-	gvk, err := apiutil.GVKForObject(t, mgr.GetScheme())
-	setupLog.Info("GVK probe",
-		"err", err,
-		"gvk", gvk.String(),
-		"type", reflect.TypeOf(t).Elem().String(),
-		"pkgPath", reflect.TypeOf(t).Elem().PkgPath(),
-	)
-
-	//gvk, err := apiutil.GVKForObject(&obxv1alpha1.OpenBaoExtension{}, mgr.GetScheme())
-	//setupLog.Info("GVK probe", "gvk", gvk.String(), "err", err)
-
-	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ClusterAuth")
-		os.Exit(1)
-	}
-
-	// +kubebuilder:scaffold:builder
-
-	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
-	if err != nil {
-		setupLog.Error(err, "unable to create TenantReconciler")
-		os.Exit(1)
-	}
-	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup Tenant controller")
+	if err := setupReconcilers(mgr); err != nil {
+		setupLog.Error(err, "unable to set up reconcilers")
 		os.Exit(1)
 	}
 
@@ -191,4 +179,141 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// setupReconcilers wires every controller into the manager. Split out
+// of main() to keep cyclomatic complexity below the project lint
+// threshold; the body grows linearly as new primitives are added.
+func setupReconcilers(mgr ctrl.Manager) error {
+	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	// +kubebuilder:scaffold:builder
+
+	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoPolicyReconciler, err := openbaopolicy.NewOpenBaoPolicyReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoPolicyReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoKARReconciler, err := openbaokar.NewOpenBaoKubernetesAuthRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoKARReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoSecretEngineReconciler, err := openbaose.NewOpenBaoSecretEngineReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoSecretEngineReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoNamespaceReconciler, err := openbaonamespace.NewOpenBaoNamespaceReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoNamespaceReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoPKIConfigReconciler, err := openbaopkic.NewOpenBaoPKISecretEngineConfigReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoPKIConfigReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoPKIRoleReconciler, err := openbaopkir.NewOpenBaoPKISecretEngineRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoPKIRoleReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	return setupIdentityAndAuthReconcilers(mgr)
+}
+
+// setupIdentityAndAuthReconcilers wires the ST3 identity + auth
+// primitives. Split from setupReconcilers for the same complexity
+// reason — keep both helpers under the lint threshold as the family
+// grows.
+func setupIdentityAndAuthReconcilers(mgr ctrl.Manager) error {
+	openBaoGroupReconciler, err := openbaogroup.NewOpenBaoGroupReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoGroupReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoGroupAliasReconciler, err := openbaogroupalias.NewOpenBaoGroupAliasReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoGroupAliasReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoITRReconciler, err := openbaoitr.NewOpenBaoIdentityTokenRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoITRReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoAuthMethodReconciler, err := openbaoauthmethod.NewOpenBaoAuthMethodReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoAuthMethodReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoCertCfgReconciler, err := openbaocertcfg.NewOpenBaoCertAuthEngineConfigReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoCertCfgReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoCertRoleReconciler, err := openbaocertrole.NewOpenBaoCertAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoCertRoleReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	if err := openBaoJWTCfgReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoJWTRoleReconciler, err := openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	return openBaoJWTRoleReconciler.SetupWithManager(mgr)
 }

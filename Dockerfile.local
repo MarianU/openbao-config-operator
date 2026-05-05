@@ -1,0 +1,7 @@
+# Local-only build: copies the host-cross-compiled binary into distroless.
+# Avoids the private-module fetch the main Dockerfile does.
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY manager-linux-arm64-for-build /manager
+USER 65532:65532
+ENTRYPOINT ["/manager"]

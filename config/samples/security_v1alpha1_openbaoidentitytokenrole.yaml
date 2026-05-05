@@ -1,0 +1,17 @@
+# Mints OIDC ID tokens that AWS / GCP / external relying parties can
+# trust. The `key` must be a pre-existing OIDC key managed out of band:
+# `bao write identity/oidc/key/platform allowed_client_ids="*"`.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoIdentityTokenRole
+metadata:
+  name: aws-tokens
+  namespace: mto-extension-openbao-system
+spec:
+  key: platform
+  clientId: arn:aws:iam::123456789012:role/openbao-federated
+  template: |
+    {
+      "sub": "{{identity.entity.id}}",
+      "name": "{{identity.entity.name}}"
+    }
+  ttl: 1h

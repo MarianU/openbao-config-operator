@@ -7,6 +7,9 @@ VERSION ?= 0.0.1
 OPERATOR_NAME ?= mto-extension-openbao
 CATALOG_DIR_PATH ?= catalog
 DOCKER_REPO_BASE ?= ghcr.io/stakater
+ifeq ($(strip $(DOCKER_REPO_BASE)),)
+DOCKER_REPO_BASE := ghcr.io/stakater
+endif
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -51,7 +54,7 @@ endif
 
 # Set the Operator SDK version to use. By default, what is installed on the system is used.
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
-OPERATOR_SDK_VERSION ?= v1.39.2
+OPERATOR_SDK_VERSION ?= v1.41.1
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_TAG_BASE):v$(VERSION)$(GIT_TAG)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.

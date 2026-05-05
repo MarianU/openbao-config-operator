@@ -7,6 +7,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
   - secrets
   verbs:
   - get
@@ -15,10 +16,17 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
-  - openbaoextensions
+  - openbaoauthmethods
+  - openbaocertauthengineconfigs
+  - openbaocertauthengineroles
+  - openbaogroupaliases
+  - openbaogroups
+  - openbaoidentitytokenroles
+  - openbaojwtoidcauthengineconfigs
+  - openbaojwtoidcauthengineroles
+  - openbaopkisecretengineconfigs
+  - openbaopkisecretengineroles
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -27,17 +35,61 @@ rules:
 - apiGroups:
   - security.mto.stakater.com
   resources:
+  - openbaoauthmethods/finalizers
+  - openbaocertauthengineconfigs/finalizers
+  - openbaocertauthengineroles/finalizers
   - openbaoextensions/finalizers
+  - openbaogroupaliases/finalizers
+  - openbaogroups/finalizers
+  - openbaoidentitytokenroles/finalizers
+  - openbaojwtoidcauthengineconfigs/finalizers
+  - openbaojwtoidcauthengineroles/finalizers
+  - openbaokubernetesauthroles/finalizers
+  - openbaonamespaces/finalizers
+  - openbaopkisecretengineconfigs/finalizers
+  - openbaopkisecretengineroles/finalizers
+  - openbaopolicies/finalizers
+  - openbaosecretengines/finalizers
   verbs:
   - update
 - apiGroups:
   - security.mto.stakater.com
   resources:
+  - openbaoauthmethods/status
+  - openbaocertauthengineconfigs/status
+  - openbaocertauthengineroles/status
   - openbaoextensions/status
+  - openbaogroupaliases/status
+  - openbaogroups/status
+  - openbaoidentitytokenroles/status
+  - openbaojwtoidcauthengineconfigs/status
+  - openbaojwtoidcauthengineroles/status
+  - openbaokubernetesauthroles/status
+  - openbaonamespaces/status
+  - openbaopkisecretengineconfigs/status
+  - openbaopkisecretengineroles/status
+  - openbaopolicies/status
+  - openbaosecretengines/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - security.mto.stakater.com
+  resources:
+  - openbaoextensions
+  - openbaokubernetesauthroles
+  - openbaonamespaces
+  - openbaopolicies
+  - openbaosecretengines
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - tenantoperator.stakater.com
   resources:

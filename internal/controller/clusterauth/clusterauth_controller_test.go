@@ -3,6 +3,8 @@ package clusterauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -164,4 +167,79 @@ func Test_Reconcile_StatusContracts(t *testing.T) {
 			require.Equal(t, got.Generation, cond.ObservedGeneration)
 		})
 	}
+}
+
+// Server URL "/" passes the early non-empty check at clusterauth_controller.go:63
+// but reduces to "" after TrimRight, which fails NewHTTPClient. The reconciler
+// must surface this as AuthConfigured=False/Error and back off, not return an
+// error to the manager that would loop without status visibility.
+func Test_Reconcile_NewHTTPClientFailureSurfacesAsStatus(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "bao-token", Namespace: "ns"},
+		Data:       map[string][]byte{"token": []byte("s.x")},
+	}
+	cr := makeCR("ns", "ex", func(c *obxv1alpha1.OpenBaoExtension) {
+		c.Spec.Server.URL = "/" // becomes "" after TrimRight, fails NewHTTPClient
+	})
+
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cr, secret).
+		WithStatusSubresource(cr).
+		Build()
+
+	r := &ClusterAuthReconciler{Client: fc, Scheme: scheme}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "ex"}})
+	require.NoError(t, err, "constructor failures must not bubble up to the manager — status is the contract")
+	require.Equal(t, 30*time.Second, res.RequeueAfter, "should back off, not hot-loop")
+
+	var got obxv1alpha1.OpenBaoExtension
+	require.NoError(t, fc.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "ex"}, &got))
+	cond := getCond(t, &got, "AuthConfigured")
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, "Error", cond.Reason)
+	require.Contains(t, cond.Message, "address is empty",
+		"the constructor's failure reason must reach the user via status.message")
+}
+
+// --- isForbidden classification ---
+
+// isForbidden must route through *baoclient.StatusError.StatusCode,
+// not substring-match the error message. Substring matching breaks
+// when bao's wording changes across versions or is wrapped by an
+// outer error. CLAUDE.md requires status classification through the
+// typed error.
+func TestIsForbidden_OnlyMatches403StatusError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("403 StatusError → true", func(t *testing.T) {
+		err := &baoclient.StatusError{
+			StatusCode: http.StatusForbidden,
+			Inner:      errors.New("permission denied"),
+		}
+		require.True(t, isForbidden(err))
+	})
+
+	t.Run("403 wrapped in fmt.Errorf → true (errors.As walks the chain)", func(t *testing.T) {
+		inner := &baoclient.StatusError{StatusCode: http.StatusForbidden, Inner: errors.New("denied")}
+		wrapped := fmt.Errorf("calling bao: %w", inner)
+		require.True(t, isForbidden(wrapped))
+	})
+
+	t.Run("non-403 StatusError → false", func(t *testing.T) {
+		err := &baoclient.StatusError{StatusCode: http.StatusNotFound, Inner: errors.New("nf")}
+		require.False(t, isForbidden(err))
+	})
+
+	t.Run("plain error containing 'permission denied' → false", func(t *testing.T) {
+		require.False(t, isForbidden(errors.New("permission denied: dial tcp")),
+			"substring match would have returned true; classification must be type-driven")
+	})
+
+	t.Run("nil → false", func(t *testing.T) {
+		require.False(t, isForbidden(nil))
+	})
 }

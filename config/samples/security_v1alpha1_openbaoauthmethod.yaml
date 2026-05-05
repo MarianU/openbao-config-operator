@@ -1,0 +1,15 @@
+# Enables an OIDC auth mount at /v1/auth/oidc. Followed by an
+# OpenBaoJWTOIDCAuthEngineConfig at the same path to install the
+# OIDC discovery URL + client credentials.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoAuthMethod
+metadata:
+  name: tenant-oidc
+  namespace: mto-extension-openbao-system
+spec:
+  path: oidc
+  type: oidc
+  description: Tenant OIDC auth mount
+  config:
+    defaultLeaseTtl: 1h
+    maxLeaseTtl: 24h

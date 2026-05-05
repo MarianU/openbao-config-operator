@@ -3,6 +3,7 @@ package clusterauth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -85,7 +86,11 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	token := string(raw)
 	baseURL := strings.TrimRight(obx.Spec.Server.URL, "/")
-	cli := baoclient.NewHTTPClient(baseURL, token)
+	cli, err := baoclient.NewHTTPClient(baseURL, token)
+	if err != nil {
+		_ = r.setAuthCond(ctx, req.NamespacedName, metav1.ConditionFalse, extv1alpha1.ReasonError, err.Error())
+		return ctrl.Result{RequeueAfter: authCheckErrorBackoff}, nil
+	}
 
 	// Check mount
 	okMount, err := cli.CheckAuthMount(ctx, constants.DefaultAuthMount)
@@ -98,7 +103,7 @@ func (r *ClusterAuthReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Enable if missing
 	if !okMount {
 		l.Info("auth mount missing; enabling", "mount", constants.DefaultAuthMount, "type", "kubernetes")
-		if err := enableKubernetesAuth(ctx, cli, constants.DefaultAuthMount); err != nil {
+		if err := cli.EnableAuthMount(ctx, constants.DefaultAuthMount, "kubernetes"); err != nil {
 			l.Error(err, "failed to enable kubernetes auth", "mount", constants.DefaultAuthMount)
 			msg := err.Error()
 			if isForbidden(err) {
@@ -164,6 +169,11 @@ func (r *ClusterAuthReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		var list extv1alpha1.OpenBaoExtensionList
 		if err := r.Client.List(ctx, &list, client.InNamespace(sec.Namespace)); err != nil {
+			// Returning nil drops this Secret event; without a log, a
+			// transient List failure silently delays drift detection
+			// until the next 5m periodic. Log so it's debuggable.
+			log.FromContext(ctx).Error(err, "mapSecret: list OpenBaoExtension failed; Secret event dropped",
+				"secret", sec.Namespace+"/"+sec.Name)
 			return nil
 		}
 		reqs := make([]reconcile.Request, 0, len(list.Items))
@@ -187,29 +197,20 @@ func (r *ClusterAuthReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // --- helpers ---
 
-func enableKubernetesAuth(ctx context.Context, cli baoclient.Client, mount string) error {
-	type enabler interface {
-		EnableAuthMount(context.Context, string, string) error
-	}
-	if c, ok := any(cli).(enabler); ok {
-		return c.EnableAuthMount(ctx, mount, "kubernetes")
-	}
-	type ensurer interface {
-		EnsureAuthMount(context.Context, string, string) error
-	}
-	if c, ok := any(cli).(ensurer); ok {
-		return c.EnsureAuthMount(ctx, mount, "kubernetes")
-	}
-	return errors.New("baoclient: no EnableAuthMount/EnsureAuthMount available to enable auth mount")
-}
-
+// isForbidden returns true when err carries an HTTP 403 from bao,
+// regardless of the surrounding error chain. Routes through
+// baoclient's structured *StatusError via errors.As — substring
+// matching on the error message is brittle (bao's wording changes
+// across versions, and locale-aware tooling can re-render the body),
+// and CLAUDE.md requires status classification through the typed
+// error.
 func isForbidden(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "permission denied") ||
-		strings.Contains(msg, "forbidden") ||
-		strings.Contains(msg, "status 403") ||
-		strings.Contains(msg, "code 403")
+	var se *baoclient.StatusError
+	if errors.As(err, &se) {
+		return se.StatusCode == http.StatusForbidden
+	}
+	return false
 }

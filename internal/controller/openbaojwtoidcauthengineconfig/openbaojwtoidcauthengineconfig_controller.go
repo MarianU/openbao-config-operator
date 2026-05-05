@@ -1,0 +1,184 @@
+package openbaojwtoidcauthengineconfig
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject/resource"
+)
+
+// +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaojwtoidcauthengineconfigs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaojwtoidcauthengineconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaojwtoidcauthengineconfigs/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+
+const OpenBaoJWTOIDCAuthEngineConfigFinalizer = "openbaojwtoidcauthengineconfig.security.mto.stakater.com/finalizer"
+
+type OpenBaoJWTOIDCAuthEngineConfigReconciler struct {
+	*resource.VaultResource[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig]
+	cl client.Client
+}
+
+func NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr ctrl.Manager) (*OpenBaoJWTOIDCAuthEngineConfigReconciler, error) {
+	bao, err := newBaoFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr, bao), nil
+}
+
+func NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client) *OpenBaoJWTOIDCAuthEngineConfigReconciler {
+	return &OpenBaoJWTOIDCAuthEngineConfigReconciler{
+		VaultResource: resource.New[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig](mgr, OpenBaoJWTOIDCAuthEngineConfigFinalizer,
+			OpenBaoJWTOIDCAuthEngineConfigHandlers(mgr.GetClient(), bao)),
+		cl: mgr.GetClient(),
+	}
+}
+
+func OpenBaoJWTOIDCAuthEngineConfigHandlers(cl client.Client, bao baoclient.Client) resource.Handlers[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig] {
+	return resource.Handlers[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig]{
+		NewInstance: func() *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig {
+			return &v1alpha1.OpenBaoJWTOIDCAuthEngineConfig{}
+		},
+
+		BaoGet: func(ctx context.Context, c *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) (map[string]any, error) {
+			ns := baoclient.WithNamespace(c.OpenBaoNamespace())
+			cur, err := bao.ReadJWTOIDCConfig(ctx, c.Spec.Path, ns)
+			if errors.Is(err, baoclient.ErrNotFound) {
+				return nil, resource.ErrBaoNotFound
+			}
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"config": cur}, nil
+		},
+
+		BaoWrite: func(ctx context.Context, c *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) (resource.StatusMutator[*v1alpha1.OpenBaoJWTOIDCAuthEngineConfig], error) {
+			if err := checkConfigCollision(ctx, cl, c); err != nil {
+				return nil, err
+			}
+			ns := baoclient.WithNamespace(c.OpenBaoNamespace())
+			return nil, bao.WriteJWTOIDCConfig(ctx, c.Spec.Path, c.ToBaoSpec(), ns)
+		},
+
+		// IsDeletable=false; bao has no DELETE on /config.
+		BaoDelete: func(ctx context.Context, _ *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) error {
+			return nil
+		},
+		BaoDeleteIdentity: func(ctx context.Context, _ *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig, _, _ string) error {
+			return nil
+		},
+
+		CheckCollision: func(ctx context.Context, c *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) error {
+			return checkConfigCollision(ctx, cl, c)
+		},
+	}
+}
+
+func checkConfigCollision(ctx context.Context, cl client.Client, c *v1alpha1.OpenBaoJWTOIDCAuthEngineConfig) error {
+	var all v1alpha1.OpenBaoJWTOIDCAuthEngineConfigList
+	if err := cl.List(ctx, &all); err != nil {
+		return fmt.Errorf("%w: listing OpenBaoJWTOIDCAuthEngineConfigs for collision check: %v",
+			resource.ErrInternal, err)
+	}
+	targetPath := c.BaoName()
+	targetNS := c.OpenBaoNamespace()
+	mineKey := c.Namespace + "/" + c.Name
+	for i := range all.Items {
+		other := &all.Items[i]
+		if other.UID == c.UID {
+			continue
+		}
+		if other.BaoName() != targetPath {
+			continue
+		}
+		if other.OpenBaoNamespace() != targetNS {
+			continue
+		}
+		var otherWins bool
+		switch {
+		case other.CreationTimestamp.Before(&c.CreationTimestamp):
+			otherWins = true
+		case c.CreationTimestamp.Before(&other.CreationTimestamp):
+			otherWins = false
+		default:
+			otherKey := other.Namespace + "/" + other.Name
+			otherWins = otherKey < mineKey
+		}
+		if otherWins {
+			return fmt.Errorf("%w: bao jwt/oidc auth config at %q (ns=%q) already owned by OpenBaoJWTOIDCAuthEngineConfig %s/%s",
+				resource.ErrNameCollision, targetPath, targetNS, other.Namespace, other.Name)
+		}
+	}
+	return nil
+}
+
+// SetupWithManager wires the controller. Watches the Secret holding
+// the OIDC client_secret so a rotation re-enqueues the config CR and
+// the next reconcile picks up the new value.
+func (r *OpenBaoJWTOIDCAuthEngineConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.OpenBaoJWTOIDCAuthEngineConfig{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.configsReferencingSecret),
+		).
+		Complete(r)
+}
+
+func (r *OpenBaoJWTOIDCAuthEngineConfigReconciler) configsReferencingSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	sec, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+	var configs v1alpha1.OpenBaoJWTOIDCAuthEngineConfigList
+	if err := r.cl.List(ctx, &configs); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range configs.Items {
+		c := &configs.Items[i]
+		if c.Spec.OIDCClientSecretRef == nil {
+			continue
+		}
+		refNS := c.Spec.OIDCClientSecretRef.Namespace
+		if refNS == "" {
+			refNS = c.Namespace
+		}
+		if refNS == sec.Namespace && c.Spec.OIDCClientSecretRef.Name == sec.Name {
+			out = append(out, reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: c.Namespace, Name: c.Name},
+			})
+		}
+	}
+	return out
+}
+
+func newBaoFromEnv() (baoclient.Client, error) {
+	addr, ok := os.LookupEnv("VAULT_ADDR")
+	if !ok || addr == "" {
+		addr = os.Getenv("BAO_ADDR")
+	}
+	token, ok := os.LookupEnv("VAULT_TOKEN")
+	if !ok || token == "" {
+		token = os.Getenv("BAO_TOKEN")
+	}
+	if addr == "" || token == "" {
+		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoJWTOIDCAuthEngineConfigReconciler")
+	}
+	return baoclient.NewHTTPClient(addr, token)
+}

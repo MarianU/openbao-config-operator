@@ -1,7 +1,12 @@
 # mounts & auth listing
-path "sys/mounts"            { capabilities = ["read"] }
+path "sys/mounts"            { capabilities = ["read","list"] }
+path "sys/mounts/*"          { capabilities = ["create","read","update","delete","list","sudo"] }
 path "sys/auth"              { capabilities = ["read","list","sudo","create","update"] }
 path "sys/auth/*"            { capabilities = ["read","list","sudo","create","update","delete"] }
+
+# manage OpenBao namespaces (sudo required)
+path "sys/namespaces"        { capabilities = ["read","list"] }
+path "sys/namespaces/*"      { capabilities = ["create","read","update","delete","list","sudo"] }
 
 
 
