@@ -8,10 +8,19 @@ rules:
   - ""
   resources:
   - namespaces
-  - secrets
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - update
   - watch
 - apiGroups:
   - security.mto.stakater.com
@@ -24,8 +33,10 @@ rules:
   - openbaoidentitytokenroles
   - openbaojwtoidcauthengineconfigs
   - openbaojwtoidcauthengineroles
+  - openbaokubernetesauthengineconfigs
   - openbaopkisecretengineconfigs
   - openbaopkisecretengineroles
+  - openbaotransitkeys
   verbs:
   - get
   - list
@@ -44,12 +55,14 @@ rules:
   - openbaoidentitytokenroles/finalizers
   - openbaojwtoidcauthengineconfigs/finalizers
   - openbaojwtoidcauthengineroles/finalizers
+  - openbaokubernetesauthengineconfigs/finalizers
   - openbaokubernetesauthroles/finalizers
   - openbaonamespaces/finalizers
   - openbaopkisecretengineconfigs/finalizers
   - openbaopkisecretengineroles/finalizers
   - openbaopolicies/finalizers
   - openbaosecretengines/finalizers
+  - openbaotransitkeys/finalizers
   verbs:
   - update
 - apiGroups:
@@ -64,12 +77,14 @@ rules:
   - openbaoidentitytokenroles/status
   - openbaojwtoidcauthengineconfigs/status
   - openbaojwtoidcauthengineroles/status
+  - openbaokubernetesauthengineconfigs/status
   - openbaokubernetesauthroles/status
   - openbaonamespaces/status
   - openbaopkisecretengineconfigs/status
   - openbaopkisecretengineroles/status
   - openbaopolicies/status
   - openbaosecretengines/status
+  - openbaotransitkeys/status
   verbs:
   - get
   - patch

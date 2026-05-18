@@ -582,6 +582,12 @@ func (f *fakeBao) WriteJWTOIDCConfig(ctx context.Context, mount string, spec bao
 func (f *fakeBao) ReadJWTOIDCConfig(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.JWTOIDCConfigSpec, error) {
 	return nil, baoclient.ErrNotFound
 }
+func (f *fakeBao) WriteK8sAuthConfig(ctx context.Context, mount string, spec baoclient.K8sAuthConfigSpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadK8sAuthConfig(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.K8sAuthConfigSpec, error) {
+	return nil, baoclient.ErrNotFound
+}
 func (f *fakeBao) WriteJWTOIDCRole(ctx context.Context, mount, name string, spec baoclient.JWTOIDCRoleSpec, opts ...baoclient.CallOption) error {
 	return nil
 }
@@ -589,5 +595,17 @@ func (f *fakeBao) ReadJWTOIDCRole(ctx context.Context, mount, name string, opts 
 	return nil, baoclient.ErrNotFound
 }
 func (f *fakeBao) DeleteJWTOIDCRole(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) WriteTransitKey(ctx context.Context, mount, name string, spec baoclient.TransitKeySpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) ReadTransitKey(ctx context.Context, mount, name string, opts ...baoclient.CallOption) (*baoclient.TransitKeyInfo, error) {
+	return nil, baoclient.ErrNotFound
+}
+func (f *fakeBao) UpdateTransitKeyConfig(ctx context.Context, mount, name string, spec baoclient.TransitKeySpec, opts ...baoclient.CallOption) error {
+	return nil
+}
+func (f *fakeBao) DeleteTransitKey(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
 	return nil
 }

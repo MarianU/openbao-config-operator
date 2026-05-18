@@ -75,6 +75,12 @@ func OpenBaoCertAuthEngineConfigHandlers(cl client.Client, bao baoclient.Client)
 			return nil
 		},
 
+		// Rename hook is intentionally empty: bao has no DELETE on
+		// auth/<mount>/config, and the previous mount itself is owned
+		// by OpenBaoAuthMethod (not this CR). When that mount is later
+		// disabled via its OpenBaoAuthMethod, bao discards the config
+		// along with it. So a rename across spec.path leaves no
+		// orphan this CR is responsible for cleaning up.
 		BaoDeleteIdentity: func(ctx context.Context, _ *v1alpha1.OpenBaoCertAuthEngineConfig, _, _ string) error {
 			return nil
 		},

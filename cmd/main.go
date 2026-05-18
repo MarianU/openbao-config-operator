@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -28,6 +29,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -44,13 +46,16 @@ import (
 	openbaoitr "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoidentitytokenrole"
 	openbaojwtcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaojwtoidcauthengineconfig"
 	openbaojwtrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaojwtoidcauthenginerole"
+	openbaok8scfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaokubernetesauthengineconfig"
 	openbaokar "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaokubernetesauthrole"
 	openbaonamespace "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaonamespace"
 	openbaopkic "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretengineconfig"
 	openbaopkir "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopkisecretenginerole"
 	openbaopolicy "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopolicy"
 	openbaose "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaosecretengine"
+	openbaotk "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaotransitkey"
 	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
+	"github.com/stakater-ab/mto-extension-openbao/internal/hmacstore"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -255,6 +260,10 @@ func setupReconcilers(mgr ctrl.Manager) error {
 // reason — keep both helpers under the lint threshold as the family
 // grows.
 func setupIdentityAndAuthReconcilers(mgr ctrl.Manager) error {
+	hmac, err := bootstrapHMACComputer(mgr)
+	if err != nil {
+		return err
+	}
 	openBaoGroupReconciler, err := openbaogroup.NewOpenBaoGroupReconciler(mgr)
 	if err != nil {
 		return err
@@ -303,7 +312,7 @@ func setupIdentityAndAuthReconcilers(mgr ctrl.Manager) error {
 		return err
 	}
 
-	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr)
+	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr, hmac)
 	if err != nil {
 		return err
 	}
@@ -315,5 +324,57 @@ func setupIdentityAndAuthReconcilers(mgr ctrl.Manager) error {
 	if err != nil {
 		return err
 	}
-	return openBaoJWTRoleReconciler.SetupWithManager(mgr)
+	if err := openBaoJWTRoleReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoK8sCfgReconciler, err := openbaok8scfg.NewOpenBaoKubernetesAuthEngineConfigReconciler(mgr, hmac)
+	if err != nil {
+		return err
+	}
+	if err := openBaoK8sCfgReconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+
+	openBaoTransitKeyReconciler, err := openbaotk.NewOpenBaoTransitKeyReconciler(mgr)
+	if err != nil {
+		return err
+	}
+	return openBaoTransitKeyReconciler.SetupWithManager(mgr)
+}
+
+// bootstrapHMACComputer loads or generates the HMAC key used by the
+// auth-config controllers to detect rotation of bao-redacted Secret
+// fields.
+//
+// Name resolution: HMAC_KEY_SECRET_NAME → "mto-openbao-hmac-key".
+//
+// Namespace resolution chain (first non-empty wins):
+//  1. HMAC_KEY_SECRET_NAMESPACE — explicit override, used when the key
+//     should live outside the operator's own namespace (e.g. shared
+//     across multiple operator installs).
+//  2. OPERATOR_NS — convention used elsewhere in this binary; downward-
+//     API-injected by the kustomize Deployment.
+//  3. "mto-extension-openbao-system" — last-ditch literal default for
+//     `make run` and tests where neither env var is set.
+//
+// Uses a non-cached direct client because the manager's cache isn't
+// started yet at setup time.
+func bootstrapHMACComputer(mgr ctrl.Manager) (hmacstore.Computer, error) {
+	name := os.Getenv("HMAC_KEY_SECRET_NAME")
+	if name == "" {
+		name = "mto-openbao-hmac-key"
+	}
+	namespace := os.Getenv("HMAC_KEY_SECRET_NAMESPACE")
+	if namespace == "" {
+		namespace = os.Getenv("OPERATOR_NS")
+	}
+	if namespace == "" {
+		namespace = "mto-extension-openbao-system"
+	}
+	directClient, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		return nil, err
+	}
+	return hmacstore.Bootstrap(context.Background(), directClient, name, namespace)
 }

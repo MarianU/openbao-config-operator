@@ -141,6 +141,27 @@ spec:
       kind: OpenBaoGroupAlias
       name: openbaogroupaliases.security.mto.stakater.com
       version: v1alpha1
+    - description: An OpenBao kubernetes auth-mount config managed by the MTO extension
+        operator. Owns auth/<path>/config for kubernetes-type auth methods. Surfaces
+        kubernetes_host, kubernetes_ca_cert (Secret-sourced), token_reviewer_jwt (Secret-sourced),
+        pem_keys, issuer, and bao tunables. Pairs with an OpenBaoAuthMethod of type=kubernetes
+        at the same path. Secret-watch propagates token-reviewer JWT and CA rotations
+        without operator intervention. IsDeletable=false — bao has no DELETE; CR delete
+        releases the finalizer without touching bao.
+      displayName: OpenBao Kubernetes Auth Engine Config
+      kind: OpenBaoKubernetesAuthEngineConfig
+      name: openbaokubernetesauthengineconfigs.security.mto.stakater.com
+      version: v1alpha1
+    - description: A single transit key at <mount>/keys/<name> on a pre-existing
+        transit secret-engine mount. Type, derived, convergent_encryption, and key_size
+        are immutable post-create; mutation surfaces Ready=False reason=Invalid. Bao's
+        deletion_allowed flag gates DELETE — when unset/false, CR delete leaves the
+        CR in Terminating with Ready=False reason=DeleteBlocked until the user flips
+        spec.deletionAllowed=true.
+      displayName: OpenBao Transit Key
+      kind: OpenBaoTransitKey
+      name: openbaotransitkeys.security.mto.stakater.com
+      version: v1alpha1
   description: MTO Extension for OpenBao
   displayName: MTO Extension OpenBao
   icon:

@@ -1,0 +1,30 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoTransitKey
+metadata:
+  name: app-key
+  namespace: mto-extension-openbao-system
+spec:
+  # Path must match an existing OpenBaoSecretEngine with spec.transit at
+  # the same path. Defaults to "transit".
+  path: transit
+
+  # Optional: scope this CR to a specific OpenBao namespace.
+  # openbaoNamespace: team-a/
+
+  # Bao-side key name. Required.
+  name: app-key
+
+  # Algorithm. Immutable post-create — editing this field after the key
+  # is written surfaces Ready=False reason=Invalid; delete the CR (and
+  # the bao-side key, after flipping deletionAllowed=true) to switch
+  # algorithms.
+  type: aes256-gcm96
+
+  # AutoRotatePeriod is a Go duration string ("720h"); "0" disables.
+  # bao does NOT accept "30d" — use hours.
+  autoRotatePeriod: "720h"
+
+  # deletionAllowed gates DELETE on the bao side. Without this, the
+  # controller's cleanup on CR delete is rejected and the CR remains
+  # Terminating with Ready=False reason=DeleteBlocked.
+  deletionAllowed: true

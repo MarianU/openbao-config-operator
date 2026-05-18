@@ -145,9 +145,31 @@ type Client interface {
 	WriteJWTOIDCConfig(ctx context.Context, mount string, spec JWTOIDCConfigSpec, opts ...CallOption) error
 	ReadJWTOIDCConfig(ctx context.Context, mount string, opts ...CallOption) (*JWTOIDCConfigSpec, error)
 
+	// Kubernetes auth mount-level config (auth/<mount>/config).
+	// kubernetes_host + kubernetes_ca_cert + token_reviewer_jwt give
+	// bao the bits it needs to call the apiserver's TokenReview API on
+	// inbound login. Distinct from per-role bindings at
+	// auth/<mount>/role/<name>, which are owned by UpsertK8sRole above.
+	// No DELETE on /config — config persists with the mount.
+	WriteK8sAuthConfig(ctx context.Context, mount string, spec K8sAuthConfigSpec, opts ...CallOption) error
+	ReadK8sAuthConfig(ctx context.Context, mount string, opts ...CallOption) (*K8sAuthConfigSpec, error)
+
 	WriteJWTOIDCRole(ctx context.Context, mount, name string, spec JWTOIDCRoleSpec, opts ...CallOption) error
 	ReadJWTOIDCRole(ctx context.Context, mount, name string, opts ...CallOption) (*JWTOIDCRoleSpec, error)
 	DeleteJWTOIDCRole(ctx context.Context, mount, name string, opts ...CallOption) error
+
+	// Transit keys (transit/keys/<name>). Two-call create-then-config
+	// pattern: WriteTransitKey creates the key with the immutable-once-set
+	// fields (type, derived, convergent_encryption, key_size);
+	// UpdateTransitKeyConfig posts the mutable subset to /config. The split
+	// is bao's, not ours. ReadTransitKey returns the full read shape
+	// including observed-only fields the controller stamps on status.
+	// DeleteTransitKey returns ErrDeletionNotAllowed when bao refuses
+	// because deletion_allowed=false on the bao-side key.
+	WriteTransitKey(ctx context.Context, mount, name string, spec TransitKeySpec, opts ...CallOption) error
+	ReadTransitKey(ctx context.Context, mount, name string, opts ...CallOption) (*TransitKeyInfo, error)
+	UpdateTransitKeyConfig(ctx context.Context, mount, name string, spec TransitKeySpec, opts ...CallOption) error
+	DeleteTransitKey(ctx context.Context, mount, name string, opts ...CallOption) error
 }
 
 // CertAuthConfigSpec is the write payload for auth/<mount>/config on
@@ -201,6 +223,26 @@ type JWTOIDCConfigSpec struct {
 	JWTSupportedAlgs     []string
 	BoundIssuer          string
 	DefaultRole          string
+}
+
+// K8sAuthConfigSpec is the write payload for auth/<mount>/config on
+// the kubernetes auth method. KubernetesHost is the apiserver URL
+// bao calls TokenReview against. KubernetesCACert is the PEM-encoded
+// CA bundle that verifies the apiserver's TLS cert (optional — bao
+// falls back to the system trust store). TokenReviewerJWT is the SA
+// JWT bao presents to the apiserver. PEMKeys lets bao verify SA-JWT
+// signatures locally instead of via TokenReview. Issuer narrows
+// accepted tokens to a specific iss claim. DisableISSValidation +
+// DisableLocalCAJWT + UseAnnotationsAsAliasMetadata are bao tunables.
+type K8sAuthConfigSpec struct {
+	KubernetesHost                string
+	KubernetesCACert              string
+	TokenReviewerJWT              string
+	PEMKeys                       []string
+	Issuer                        string
+	DisableISSValidation          *bool
+	DisableLocalCAJWT             *bool
+	UseAnnotationsAsAliasMetadata *bool
 }
 
 // JWTOIDCRoleSpec is the write payload for auth/<mount>/role/<name>
@@ -347,6 +389,75 @@ type PKIURLsInput struct {
 	OCSPServers           []string
 }
 
+// TransitKeySpec is the write payload for the transit key endpoints. The
+// wrapper splits the spec across two HTTP calls because bao does:
+// WriteTransitKey (POST /<mount>/keys/<name>) sends the create-only fields
+// (type, derived, convergent_encryption, key_size); UpdateTransitKeyConfig
+// (POST /<mount>/keys/<name>/config) sends the mutable subset
+// (min_decryption_version, min_encryption_version, deletion_allowed). The
+// fields below that are accepted on both endpoints (exportable,
+// allow_plaintext_backup, auto_rotate_period) are sent on whichever call
+// the caller invokes; the wrapper does not echo them on the other endpoint
+// to avoid spurious bao state churn. Pointer / empty-string sentinels mean
+// "unset — let bao default" so a minimal spec doesn't override fields the
+// CR doesn't pin.
+type TransitKeySpec struct {
+	// Create-only.
+	Type                 string
+	KeySize              *int
+	Derived              *bool
+	ConvergentEncryption *bool
+
+	// Accepted on both endpoints.
+	Exportable           *bool
+	AllowPlaintextBackup *bool
+	AutoRotatePeriod     string // bao duration ("720h"); "0" disables.
+
+	// Config-only.
+	DeletionAllowed      *bool
+	MinDecryptionVersion *int
+	MinEncryptionVersion *int
+}
+
+// TransitKeyInfo is the read shape returned by GET /<mount>/keys/<name>.
+// Bao echoes server-side defaults (e.g. auto_rotate_period=0) and
+// observed-only fields (latest_version, creation_time, supports_*, keys
+// map). The drift comparator on the CR side excludes the observed-only
+// fields; controllers stamp them on status for downstream consumers.
+type TransitKeyInfo struct {
+	Name                 string
+	Type                 string
+	KeySize              int
+	Derived              bool
+	ConvergentEncryption bool
+
+	Exportable           bool
+	AllowPlaintextBackup bool
+	// AutoRotatePeriod is bao's int-seconds shape on read. The CR's
+	// drift comparator parses the spec's duration string and compares
+	// against this int; same int↔string trick as the secret-engine
+	// TTL fields.
+	AutoRotatePeriod int
+
+	DeletionAllowed      bool
+	MinDecryptionVersion int
+	MinEncryptionVersion int
+
+	// Observed-only fields.
+	LatestVersion      int
+	CreationTime       string
+	SupportsEncryption bool
+	SupportsDecryption bool
+	SupportsSigning    bool
+	SupportsDerivation bool
+	ImportedKey        bool
+	// Keys is bao's per-version metadata map (version → {creation_time,
+	// name, …}). Surfaced as opaque so the controller can stash it on
+	// status without re-encoding; the type is map[string]any to match
+	// vault/api's decode shape.
+	Keys map[string]any
+}
+
 // SecretEngineMountSpec is the write payload for EnableSecretEngine.
 // Mirrors the shape vault/api's MountInput exposes — bao stores the same
 // fields. Description and Options are nullable on the bao side; we send
@@ -424,6 +535,16 @@ type Namespace struct {
 // ErrNotFound is the sentinel returned by every Get* when the object does
 // not exist on the bao side. Callers use errors.Is to match.
 var ErrNotFound = errors.New("bao object not found")
+
+// ErrDeletionNotAllowed is returned by DeleteTransitKey when bao refuses
+// the delete because the bao-side key has deletion_allowed=false. Bao's
+// only structured signal here is a 400 with a specific message body, so
+// the wrapper matches the body and lifts the failure into a typed
+// sentinel — controllers translate this to resource.ErrDeleteBlocked at
+// the controller layer (baoclient does not import the resource package).
+// The contract test pins the exact bao response body so a wording change
+// upstream surfaces as a test failure rather than a silent regression.
+var ErrDeletionNotAllowed = errors.New("bao delete not allowed for transit key")
 
 // CallOption configures a single bao API call. The only option today is
 // WithNamespace, which scopes the call to an OpenBao namespace via the
@@ -1323,6 +1444,183 @@ func mapToPKIRole(d map[string]interface{}) *PKIRoleSpec {
 	return out
 }
 
+// ---- Transit keys (transit/keys/<name>, transit/keys/<name>/config) ----
+
+// WriteTransitKey creates the bao-side transit key with the create-only
+// fields. Mutable fields (min_*_version, deletion_allowed) are sent on a
+// follow-up UpdateTransitKeyConfig call — bao's enable endpoint accepts
+// some of them but the controller treats /keys and /keys/<name>/config as
+// distinct write phases so the create body stays minimal and easy to
+// reason about. Bao writes are idempotent on the path.
+func (c *sdkClient) WriteTransitKey(ctx context.Context, mount, name string, spec TransitKeySpec, opts ...CallOption) error {
+	mount = strings.Trim(mount, "/")
+	if mount == "" || name == "" {
+		return errors.New("mount or transit key name empty")
+	}
+	body := transitCreateBody(spec)
+	_, err := c.clientFor(opts).Logical().WriteWithContext(ctx, mount+"/keys/"+name, body)
+	return wrapStatus(err)
+}
+
+// ReadTransitKey fetches the full read shape for /<mount>/keys/<name>.
+// 404 maps to ErrNotFound. The decoded value covers both the spec-mirror
+// fields the drift comparator consumes and the observed-only fields the
+// controller stamps on status.
+func (c *sdkClient) ReadTransitKey(ctx context.Context, mount, name string, opts ...CallOption) (*TransitKeyInfo, error) {
+	mount = strings.Trim(mount, "/")
+	resp, err := c.clientFor(opts).Logical().ReadWithContext(ctx, mount+"/keys/"+name)
+	if err != nil {
+		wrapped := wrapStatus(err)
+		var se *StatusError
+		if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, wrapped
+	}
+	if resp == nil || resp.Data == nil {
+		return nil, ErrNotFound
+	}
+	return mapToTransitKey(resp.Data), nil
+}
+
+// UpdateTransitKeyConfig posts the mutable subset to /config. Idempotent.
+// Sending the same body again is a no-op on bao's side — the drift
+// comparator on the CR side suppresses redundant calls.
+func (c *sdkClient) UpdateTransitKeyConfig(ctx context.Context, mount, name string, spec TransitKeySpec, opts ...CallOption) error {
+	mount = strings.Trim(mount, "/")
+	if mount == "" || name == "" {
+		return errors.New("mount or transit key name empty")
+	}
+	body := transitConfigBody(spec)
+	_, err := c.clientFor(opts).Logical().WriteWithContext(ctx, mount+"/keys/"+name+"/config", body)
+	return wrapStatus(err)
+}
+
+// DeleteTransitKey removes the bao-side key. 404 is swallowed (idempotent).
+// Bao's "deletion_allowed=false" signal is a 400 with a specific message
+// body; the wrapper matches the body and returns ErrDeletionNotAllowed so
+// callers can route the failure to ReasonDeleteBlocked without grepping
+// error strings themselves.
+func (c *sdkClient) DeleteTransitKey(ctx context.Context, mount, name string, opts ...CallOption) error {
+	mount = strings.Trim(mount, "/")
+	_, err := c.clientFor(opts).Logical().DeleteWithContext(ctx, mount+"/keys/"+name)
+	if err == nil {
+		return nil
+	}
+	wrapped := wrapStatus(err)
+	var se *StatusError
+	if errors.As(wrapped, &se) {
+		if se.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		if se.StatusCode == http.StatusBadRequest && isDeletionNotAllowed(err) {
+			return ErrDeletionNotAllowed
+		}
+	}
+	return wrapped
+}
+
+// transitCreateBody builds the POST /<mount>/keys/<name> body. Only
+// non-zero / non-nil fields are emitted so bao's defaults stay in effect
+// when the spec doesn't override them. The mutable-only fields
+// (min_*_version, deletion_allowed) are intentionally omitted — they go
+// on the /config endpoint.
+func transitCreateBody(s TransitKeySpec) map[string]interface{} {
+	body := map[string]interface{}{}
+	if s.Type != "" {
+		body["type"] = s.Type
+	}
+	if s.KeySize != nil {
+		body["key_size"] = *s.KeySize
+	}
+	if s.Derived != nil {
+		body["derived"] = *s.Derived
+	}
+	if s.ConvergentEncryption != nil {
+		body["convergent_encryption"] = *s.ConvergentEncryption
+	}
+	if s.Exportable != nil {
+		body["exportable"] = *s.Exportable
+	}
+	if s.AllowPlaintextBackup != nil {
+		body["allow_plaintext_backup"] = *s.AllowPlaintextBackup
+	}
+	if s.AutoRotatePeriod != "" {
+		body["auto_rotate_period"] = s.AutoRotatePeriod
+	}
+	return body
+}
+
+// transitConfigBody builds the POST /<mount>/keys/<name>/config body.
+// Only the mutable subset is emitted; bao silently ignores create-only
+// fields here, but sending them anyway risks future bao versions
+// rejecting the call so the wrapper keeps the bodies disjoint.
+func transitConfigBody(s TransitKeySpec) map[string]interface{} {
+	body := map[string]interface{}{}
+	if s.MinDecryptionVersion != nil {
+		body["min_decryption_version"] = *s.MinDecryptionVersion
+	}
+	if s.MinEncryptionVersion != nil {
+		body["min_encryption_version"] = *s.MinEncryptionVersion
+	}
+	if s.DeletionAllowed != nil {
+		body["deletion_allowed"] = *s.DeletionAllowed
+	}
+	if s.Exportable != nil {
+		body["exportable"] = *s.Exportable
+	}
+	if s.AllowPlaintextBackup != nil {
+		body["allow_plaintext_backup"] = *s.AllowPlaintextBackup
+	}
+	if s.AutoRotatePeriod != "" {
+		body["auto_rotate_period"] = s.AutoRotatePeriod
+	}
+	return body
+}
+
+// mapToTransitKey decodes bao's read shape into TransitKeyInfo. Numbers
+// arrive as json.Number under vault/api; the as*Ptr helpers handle the
+// coercion. Capability bools and observed-only fields are surfaced for
+// status; the drift comparator on the CR side excludes them.
+func mapToTransitKey(d map[string]interface{}) *TransitKeyInfo {
+	derefBool := func(v any) bool {
+		if p := asBoolPtr(v); p != nil {
+			return *p
+		}
+		return false
+	}
+	derefInt := func(v any) int {
+		if p := asIntPtr(v); p != nil {
+			return *p
+		}
+		return 0
+	}
+	out := &TransitKeyInfo{
+		Name:                 asString(d["name"]),
+		Type:                 asString(d["type"]),
+		KeySize:              derefInt(d["key_size"]),
+		Derived:              derefBool(d["derived"]),
+		ConvergentEncryption: derefBool(d["convergent_encryption"]),
+		Exportable:           derefBool(d["exportable"]),
+		AllowPlaintextBackup: derefBool(d["allow_plaintext_backup"]),
+		AutoRotatePeriod:     derefInt(d["auto_rotate_period"]),
+		DeletionAllowed:      derefBool(d["deletion_allowed"]),
+		MinDecryptionVersion: derefInt(d["min_decryption_version"]),
+		MinEncryptionVersion: derefInt(d["min_encryption_version"]),
+		LatestVersion:        derefInt(d["latest_version"]),
+		CreationTime:         asString(d["creation_time"]),
+		SupportsEncryption:   derefBool(d["supports_encryption"]),
+		SupportsDecryption:   derefBool(d["supports_decryption"]),
+		SupportsSigning:      derefBool(d["supports_signing"]),
+		SupportsDerivation:   derefBool(d["supports_derivation"]),
+		ImportedKey:          derefBool(d["imported_key"]),
+	}
+	if k, ok := d["keys"].(map[string]interface{}); ok {
+		out.Keys = k
+	}
+	return out
+}
+
 // ---- helpers ----
 
 // isAlreadyInUse stays string-based: bao returns 400 with this message text
@@ -1331,6 +1629,17 @@ func mapToPKIRole(d map[string]interface{}) *PKIRoleSpec {
 func isAlreadyInUse(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "already in use") || strings.Contains(msg, "path is already in use")
+}
+
+// isDeletionNotAllowed matches bao's 400 body when transit refuses a key
+// delete. The exact phrasing is "deletion is not allowed for key" — the
+// wrapper matches the substring rather than the full message because bao
+// appends the key name. The bao_client_test contract test pins the body
+// shape so a wording change upstream surfaces as a test failure rather
+// than a silent regression that'd swallow real BadRequest errors as
+// DeleteBlocked.
+func isDeletionNotAllowed(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "deletion is not allowed")
 }
 
 func asStringSlice(v any) []string {
@@ -1932,6 +2241,69 @@ func (c *sdkClient) ReadJWTOIDCConfig(ctx context.Context, mount string, opts ..
 		JWTSupportedAlgs:     asStringSlice(d["jwt_supported_algs"]),
 		BoundIssuer:          asString(d["bound_issuer"]),
 		DefaultRole:          asString(d["default_role"]),
+	}, nil
+}
+
+func (c *sdkClient) WriteK8sAuthConfig(ctx context.Context, mount string, spec K8sAuthConfigSpec, opts ...CallOption) error {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return errors.New("kubernetes auth mount is empty")
+	}
+	if strings.TrimSpace(spec.KubernetesHost) == "" {
+		return errors.New("kubernetes auth config kubernetes_host is required")
+	}
+	body := map[string]interface{}{
+		"kubernetes_host": spec.KubernetesHost,
+	}
+	if spec.KubernetesCACert != "" {
+		body["kubernetes_ca_cert"] = spec.KubernetesCACert
+	}
+	if spec.TokenReviewerJWT != "" {
+		body["token_reviewer_jwt"] = spec.TokenReviewerJWT
+	}
+	if len(spec.PEMKeys) > 0 {
+		body["pem_keys"] = spec.PEMKeys
+	}
+	if spec.Issuer != "" {
+		body["issuer"] = spec.Issuer
+	}
+	if spec.DisableISSValidation != nil {
+		body["disable_iss_validation"] = *spec.DisableISSValidation
+	}
+	if spec.DisableLocalCAJWT != nil {
+		body["disable_local_ca_jwt"] = *spec.DisableLocalCAJWT
+	}
+	if spec.UseAnnotationsAsAliasMetadata != nil {
+		body["use_annotations_as_alias_metadata"] = *spec.UseAnnotationsAsAliasMetadata
+	}
+	_, err := c.clientFor(opts).Logical().WriteWithContext(ctx, "auth/"+mount+"/config", body)
+	return wrapStatus(err)
+}
+
+func (c *sdkClient) ReadK8sAuthConfig(ctx context.Context, mount string, opts ...CallOption) (*K8sAuthConfigSpec, error) {
+	mount = strings.Trim(mount, "/")
+	resp, err := c.clientFor(opts).Logical().ReadWithContext(ctx, "auth/"+mount+"/config")
+	if err != nil {
+		wrapped := wrapStatus(err)
+		var se *StatusError
+		if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, wrapped
+	}
+	if resp == nil || resp.Data == nil {
+		return nil, ErrNotFound
+	}
+	d := resp.Data
+	return &K8sAuthConfigSpec{
+		KubernetesHost:                asString(d["kubernetes_host"]),
+		KubernetesCACert:              asString(d["kubernetes_ca_cert"]),
+		TokenReviewerJWT:              asString(d["token_reviewer_jwt"]),
+		PEMKeys:                       asStringSlice(d["pem_keys"]),
+		Issuer:                        asString(d["issuer"]),
+		DisableISSValidation:          asBoolPtr(d["disable_iss_validation"]),
+		DisableLocalCAJWT:             asBoolPtr(d["disable_local_ca_jwt"]),
+		UseAnnotationsAsAliasMetadata: asBoolPtr(d["use_annotations_as_alias_metadata"]),
 	}, nil
 }
 

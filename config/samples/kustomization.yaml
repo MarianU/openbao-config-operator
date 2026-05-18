@@ -15,4 +15,6 @@ resources:
 - security_v1alpha1_openbaocertauthenginerole.yaml
 - security_v1alpha1_openbaojwtoidcauthengineconfig.yaml
 - security_v1alpha1_openbaojwtoidcauthenginerole.yaml
+- security_v1alpha1_openbaokubernetesauthengineconfig.yaml
+- security_v1alpha1_openbaotransitkey.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
