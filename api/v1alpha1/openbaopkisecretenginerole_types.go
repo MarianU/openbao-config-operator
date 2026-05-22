@@ -10,7 +10,7 @@
 //   - Kind renamed PKISecretEngineRole → OpenBaoPKISecretEngineRole.
 //   - spec.openbaoNamespace added (X-Vault-Namespace target);
 //     spec.authentication and spec.connection removed (operator uses
-//     a single token from OpenBaoExtension).
+//     a single token from VAULT_TOKEN env).
 //   - IsValid rejects roles that allow nothing — at least one of
 //     allowAnyName, allowedDomains, allowGlobDomains, allowBareDomains,
 //     allowSubdomains must be set or bao silently rejects every

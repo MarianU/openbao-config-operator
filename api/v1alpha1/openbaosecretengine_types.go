@@ -28,8 +28,8 @@
 //     spec-level rename (path or openbao namespace change) tears down
 //     the previous mount instead of leaving an orphan.
 //   - Auth-method mounts are NOT covered by this CRD. Upstream's
-//     SecretEngineMount targets sys/mounts only; we follow that. The
-//     kubernetes auth method is enabled by clusterauth at startup.
+//     SecretEngineMount targets sys/mounts only; we follow that.
+//     Auth methods are managed by the OpenBaoAuthMethod CRD.
 package v1alpha1
 
 import (

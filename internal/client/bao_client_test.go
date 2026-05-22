@@ -3,10 +3,14 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -109,23 +113,23 @@ func TestGetPolicy_ReturnsBodyOnHit(t *testing.T) {
 	require.Contains(t, body, `path "secret/*"`)
 }
 
-// ---- EnableAuthMount: idempotent "already in use" ----
+// ---- EnableAuthMethod: idempotent "already in use" ----
 
-// EnableAuthMount idempotency depends on string-matching the server-side
+// EnableAuthMethod idempotency depends on string-matching the server-side
 // 400 message — there's no distinct status code. The exact message text
 // is the contract; if the server ever changes it, every re-enable in
 // production will surface as a real error and operators will see flapping
-// AuthConfigured=False conditions. These cases pin the verified-good
-// message variants so a wrapper-side regex regression is caught here, and
-// a server-side message change forces an explicit code update rather
-// than a silent break in production.
+// Ready=False conditions on OpenBaoAuthMethod CRs. These cases pin the
+// verified-good message variants so a wrapper-side regex regression is
+// caught here, and a server-side message change forces an explicit code
+// update rather than a silent break in production.
 //
 // Verified server messages (HashiCorp Vault 1.15+ / OpenBao 2.x):
 //
 //	"path is already in use at <mount>/"
 //	"path is already in use"      (older paths / sys/auth shape)
 //	"ALREADY IN USE"               (some upper-cased error wrappings)
-func TestEnableAuthMount_SwallowsAlreadyInUse(t *testing.T) {
+func TestEnableAuthMethod_SwallowsAlreadyInUse(t *testing.T) {
 	t.Parallel()
 	cases := []string{
 		`{"errors":["path is already in use at kubernetes/"]}`,
@@ -139,7 +143,8 @@ func TestEnableAuthMount_SwallowsAlreadyInUse(t *testing.T) {
 			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, body, http.StatusBadRequest)
 			})
-			require.NoError(t, c.EnableAuthMount(context.Background(), "kubernetes", "kubernetes"),
+			require.NoError(t, c.EnableAuthMethod(context.Background(), "kubernetes",
+				AuthMethodMountSpec{Type: "kubernetes"}),
 				"already-in-use 400 must be treated as success regardless of message capitalization")
 		})
 	}
@@ -149,26 +154,45 @@ func TestEnableAuthMount_SwallowsAlreadyInUse(t *testing.T) {
 // looks similar but is NOT the idempotency signal must still surface as
 // an error. A future change to isAlreadyInUse that broadens the match
 // (e.g. drops the substring anchor) would fail this case.
-func TestEnableAuthMount_DistinctBadRequestStillErrors(t *testing.T) {
+func TestEnableAuthMethod_DistinctBadRequestStillErrors(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"errors":["mount type 'kubernetes' is not supported"]}`, http.StatusBadRequest)
 	})
-	err := c.EnableAuthMount(context.Background(), "kubernetes", "kubernetes")
+	err := c.EnableAuthMethod(context.Background(), "kubernetes",
+		AuthMethodMountSpec{Type: "kubernetes"})
 	require.Error(t, err, "unrelated 400 must NOT be classified as already-in-use")
 }
 
-func TestEnableAuthMount_RejectsEmptyArgs(t *testing.T) {
+func TestEnableAuthMethod_RejectsEmptyArgs(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("server must not be called for empty-arg validation")
 	})
-	require.Error(t, c.EnableAuthMount(context.Background(), "", "kubernetes"))
-	require.Error(t, c.EnableAuthMount(context.Background(), "kubernetes", ""))
+	require.Error(t, c.EnableAuthMethod(context.Background(), "",
+		AuthMethodMountSpec{Type: "kubernetes"}))
+	require.Error(t, c.EnableAuthMethod(context.Background(), "kubernetes",
+		AuthMethodMountSpec{Type: ""}))
 }
 
 // ---- isAlreadyInUse helper ----
 
+// TestIsAlreadyInUse pins the server-side wording variants the helper
+// matches. Bao returns 400 with one of these message bodies for an
+// idempotent re-enable (no distinct status code), so the wrapper has
+// to peek at the message text. A server-side wording change would
+// surface here before reaching production, forcing an explicit code
+// update rather than a silent break.
+//
+// Positive variants verified against HashiCorp Vault 1.15+ and
+// OpenBao 2.x:
+//
+//	"path is already in use at <mount>/"
+//	"path is already in use"          (older sys/auth shape)
+//	"ALREADY IN USE"                  (upper-cased wrapper)
+//
+// Negative cases guard against the match broadening: an unrelated 400
+// must NOT be classified as already-in-use.
 func TestIsAlreadyInUse(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -176,15 +200,48 @@ func TestIsAlreadyInUse(t *testing.T) {
 		want bool
 	}{
 		{errors.New("path is already in use at kubernetes/"), true},
+		{errors.New("path is already in use"), true},
 		{errors.New("ALREADY IN USE at /sys/auth"), true},
 		{errors.New("permission denied"), false},
 		{errors.New("not found"), false},
+		{errors.New("mount type 'kubernetes' is not supported"), false},
 		{errors.New(""), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.err.Error(), func(t *testing.T) {
 			if got := isAlreadyInUse(tc.err); got != tc.want {
 				t.Errorf("isAlreadyInUse(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// ---- isNoDefaultIssuer helper ----
+
+// TestIsNoDefaultIssuer pins the OpenBao 2.x 400 wording for an empty
+// PKI mount. Same contract-test purpose as TestIsAlreadyInUse — a
+// server-side message change must surface here, not as a controller
+// stuck in an "I see a CA but read returns nothing" loop in prod.
+//
+// Negative cases guard against the match broadening: a 400 mentioning
+// "default" for an unrelated reason must NOT classify as no-default-issuer.
+func TestIsNoDefaultIssuer(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("no default issuer currently configured"), true},
+		{errors.New("No Default Issuer present"), true},
+		{errors.New("permission denied"), false},
+		{errors.New("not found"), false},
+		{errors.New("default ttl exceeds max"), false},
+		{errors.New(""), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.err.Error(), func(t *testing.T) {
+			if got := isNoDefaultIssuer(tc.err); got != tc.want {
+				t.Errorf("isNoDefaultIssuer(%q) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}
@@ -362,16 +419,18 @@ func TestUpsertK8sRole_NewFieldsRoundTrip(t *testing.T) {
 	require.Equal(t, "service", gotBody["token_type"])
 }
 
-// Pins the wire shape Tenant produces today. Two complementary guards:
+// Pins the wire body UpsertK8sRole produces for a minimal K8sRoleSpec
+// (the required fields only, every optional field left zero). Two
+// complementary guards:
 //
-//   - Every historical key must remain present with its historical
-//     value. Catches accidental removal or value-mutation of fields
-//     Tenant depends on.
+//   - Every required-field key must be present with its expected value.
+//     Catches accidental removal or value-mutation of the bao keys
+//     OpenBaoKubernetesAuthRole depends on.
 //   - No unexpected keys may appear. Catches silent over-emission —
 //     a future K8sRoleSpec field accidentally promoted to emit-by-
-//     default would otherwise enter Tenant's wire body without
-//     Tenant's knowledge, potentially overriding bao's mount default
-//     for that field on every tenant write.
+//     default would otherwise enter the wire body without the
+//     controller's knowledge, potentially overriding bao's mount
+//     default for that field on every reconcile.
 //
 // TestUpsertK8sRole_OmitsUnsetOptionalFields covers the same class of
 // over-emission failure but only for the optional-field names listed
@@ -379,10 +438,10 @@ func TestUpsertK8sRole_NewFieldsRoundTrip(t *testing.T) {
 // fields not yet listed (i.e. fields added to K8sRoleSpec after the
 // absence-list test was last updated).
 //
-// If a Tenant change INTENTIONALLY adopts a new K8sRoleSpec field,
-// add the new key to `want` below — the second loop's failure
-// message points to this comment.
-func TestUpsertK8sRole_TenantWireBody_HistoricalShapeIntact(t *testing.T) {
+// If a controller change intentionally adopts a new K8sRoleSpec field,
+// add the new key to `want` below — the second loop's failure message
+// points to this comment.
+func TestUpsertK8sRole_MinimalSpec_HistoricalShapeIntact(t *testing.T) {
 	t.Parallel()
 	var gotBody map[string]any
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -392,7 +451,9 @@ func TestUpsertK8sRole_TenantWireBody_HistoricalShapeIntact(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	renewable := true
-	// Mirror tenant_controller.go's K8sRoleSpec construction verbatim.
+	// Minimal K8sRoleSpec — only the required fields populated. Every
+	// optional field stays at its zero value to exercise the omit-when-
+	// empty contract.
 	spec := K8sRoleSpec{
 		Policies:                      []string{"team-a-prod-editor"},
 		BoundServiceAccountNames:      []string{"default"},
@@ -414,21 +475,21 @@ func TestUpsertK8sRole_TenantWireBody_HistoricalShapeIntact(t *testing.T) {
 	// Forward direction: every pinned key must remain with its value.
 	for key, expected := range want {
 		require.Contains(t, gotBody, key,
-			"Tenant's request body must still contain %q", key)
+			"request body must still contain %q", key)
 		require.Equal(t, expected, gotBody[key],
-			"Tenant's value for %q must not change", key)
+			"value for %q must not change", key)
 	}
 
 	// Reverse direction: no key may appear that isn't in `want`.
 	// Catches silent over-emission from new K8sRoleSpec fields that
 	// don't follow the omit-when-empty convention. Failure means
-	// either: (a) Tenant has intentionally adopted a new field — add
-	// the key to `want` above; or (b) UpsertK8sRole is leaking a
+	// either: (a) a controller has intentionally adopted a new field —
+	// add the key to `want` above; or (b) UpsertK8sRole is leaking a
 	// field's zero value — fix the emit predicate in bao_client.go.
 	for key := range gotBody {
 		require.Contains(t, want, key,
-			"unexpected key %q in Tenant's bao request body — "+
-				"if Tenant intentionally adopted this field add it to `want`; "+
+			"unexpected key %q in bao request body — "+
+				"if a controller intentionally adopted this field add it to `want`; "+
 				"otherwise UpsertK8sRole is over-emitting and the emit "+
 				"predicate needs an omit-when-empty guard", key)
 	}
@@ -785,35 +846,7 @@ func TestDisableSecretEngineMount_PropagatesNon404(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, se.StatusCode)
 }
 
-// ---- auth-mount read + delete (sys/auth/<path>) ----
-
-func TestGetAuthMount_ReturnsTypeOnHit(t *testing.T) {
-	t.Parallel()
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/v1/sys/auth", r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"kubernetes/": {"type": "kubernetes", "description": "k8s auth"}
-			}
-		}`))
-	})
-	got, err := c.GetAuthMount(context.Background(), "kubernetes")
-	require.NoError(t, err)
-	require.Equal(t, "kubernetes", got.Type)
-	require.Equal(t, "k8s auth", got.Description)
-}
-
-func TestGetAuthMount_MissingReturnsErrNotFound(t *testing.T) {
-	t.Parallel()
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{}}`))
-	})
-	_, err := c.GetAuthMount(context.Background(), "missing")
-	require.ErrorIs(t, err, ErrNotFound)
-}
+// ---- auth-mount delete (sys/auth/<path>) ----
 
 func TestDisableAuthMount_Swallows404(t *testing.T) {
 	t.Parallel()
@@ -960,8 +993,10 @@ func TestNamespaceMethods_HonorWithNamespace(t *testing.T) {
 	}
 }
 
-// Asserts the X-Vault-Namespace plumbing reaches the new mount methods,
-// not just policies/roles. Story 4 ships namespace-aware mounts.
+// Asserts the X-Vault-Namespace plumbing reaches the mount methods, not
+// just policies/roles. Mount endpoints (sys/mounts/<path>, sys/auth/<path>)
+// are namespace-scoped on the bao side, so the wrapper must propagate
+// WithNamespace into the SDK's per-request client.
 func TestMountMethods_HonorWithNamespace(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -978,10 +1013,6 @@ func TestMountMethods_HonorWithNamespace(t *testing.T) {
 		}},
 		{"DisableSecretEngineMount", func(c Client) error {
 			return c.DisableSecretEngineMount(context.Background(), "secret", WithNamespace("acme/"))
-		}},
-		{"GetAuthMount", func(c Client) error {
-			_, err := c.GetAuthMount(context.Background(), "kubernetes", WithNamespace("acme/"))
-			return err
 		}},
 		{"DisableAuthMount", func(c Client) error {
 			return c.DisableAuthMount(context.Background(), "kubernetes", WithNamespace("acme/"))
@@ -2046,6 +2077,139 @@ func TestDeleteTransitKey_400OtherBody_PropagatesAsStatusError(t *testing.T) {
 	var se *StatusError
 	require.True(t, errors.As(err, &se))
 	require.Equal(t, http.StatusBadRequest, se.StatusCode)
+}
+
+// ---- TLS env-var driven configuration ----
+//
+// NewHTTPClient builds its config via vault.DefaultConfig(), which calls
+// (*Config).ReadEnvironment(). That reader picks up VAULT_CACERT,
+// VAULT_CAPATH, VAULT_CACERT_BYTES, VAULT_TLS_SERVER_NAME, VAULT_SKIP_VERIFY
+// and friends, and applies them to the underlying http.Transport's
+// TLSClientConfig before the first request leaves the process.
+//
+// These tests pin that contract empirically: spin up an httptest TLS
+// server (which signs with its own ephemeral CA, untrusted by system
+// roots), drive NewHTTPClient through each of the three modes operators
+// care about, and assert the handshake outcome.
+//
+// Tests do not call t.Parallel() — env vars are process-global and
+// t.Setenv disallows parallelism in the same test.
+
+// tlsServer returns an httptest TLS server that answers /v1/sys/mounts
+// with an empty mounts object. That's the path exercised by
+// CheckKVv2Mount, which is the cheapest Client method that proves a
+// real TLS handshake happened.
+func tlsServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// writeServerCertAsCA persists the httptest server's leaf cert as a PEM
+// CA bundle on disk and returns the path. The Vault SDK reads this
+// bundle via VAULT_CACERT and loads it into RootCAs.
+func writeServerCertAsCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: srv.Certificate().Raw,
+	})
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(path, pemBytes, 0o600))
+	return path
+}
+
+func TestNewHTTPClient_TLS_TrustsCABundleFromEnv(t *testing.T) {
+	srv := tlsServer(t)
+	caPath := writeServerCertAsCA(t, srv)
+
+	t.Setenv("VAULT_CACERT", caPath)
+	t.Setenv("VAULT_SKIP_VERIFY", "")
+
+	c, err := NewHTTPClient(srv.URL, "test-token")
+	require.NoError(t, err)
+	_, err = c.CheckKVv2Mount(context.Background(), "secret")
+	require.NoError(t, err,
+		"VAULT_CACERT pointing at the server's cert must make the handshake succeed")
+}
+
+func TestNewHTTPClient_TLS_SkipVerifyAcceptsUntrustedCert(t *testing.T) {
+	srv := tlsServer(t)
+
+	t.Setenv("VAULT_CACERT", "")
+	t.Setenv("VAULT_SKIP_VERIFY", "true")
+
+	c, err := NewHTTPClient(srv.URL, "test-token")
+	require.NoError(t, err)
+	_, err = c.CheckKVv2Mount(context.Background(), "secret")
+	require.NoError(t, err,
+		"VAULT_SKIP_VERIFY=true must bypass cert validation entirely")
+}
+
+func TestNewHTTPClient_TLS_NoBundleNoSkipVerifyRejectsUntrustedCert(t *testing.T) {
+	srv := tlsServer(t)
+
+	// Neither knob set: SDK falls back to system roots, which don't
+	// trust httptest's private CA. Handshake must fail.
+	t.Setenv("VAULT_CACERT", "")
+	t.Setenv("VAULT_SKIP_VERIFY", "")
+
+	c, err := NewHTTPClient(srv.URL, "test-token")
+	require.NoError(t, err)
+	_, err = c.CheckKVv2Mount(context.Background(), "secret")
+	require.Error(t, err, "untrusted cert without skip-verify must fail at TLS handshake")
+	// Be tolerant of Go-version drift in the exact wording — every variant
+	// surfaces one of these tokens.
+	msg := err.Error()
+	require.True(t,
+		strings.Contains(msg, "x509") ||
+			strings.Contains(msg, "certificate") ||
+			strings.Contains(msg, "tls:"),
+		"expected an x509 / tls error, got: %s", msg)
+}
+
+func TestNewHTTPClient_TLS_MissingCAFileFallsBackToSystemRoots(t *testing.T) {
+	srv := tlsServer(t)
+
+	// VAULT_CACERT points at a path that doesn't exist — the operator
+	// hits this when the bao-ca-bundle Secret is `optional: true` and
+	// absent. The Vault SDK errors hard here without our probe; with
+	// it, the env var is dropped and the SDK falls back to system roots.
+	t.Setenv("VAULT_CACERT", filepath.Join(t.TempDir(), "missing-ca.crt"))
+	t.Setenv("VAULT_SKIP_VERIFY", "")
+
+	c, err := NewHTTPClient(srv.URL, "test-token")
+	require.NoError(t, err, "missing CA file must not crash the constructor")
+	// Post-condition: the helper must have actually unset the env var.
+	// A regression that returns early on stat error without unsetting
+	// would let the SDK crash the next time DefaultConfig() reads it,
+	// e.g. during a per-call client clone.
+	require.Empty(t, os.Getenv("VAULT_CACERT"),
+		"unsetMissingCAEnv must have cleared VAULT_CACERT after stat-on-missing-file failed")
+	// System roots don't trust the httptest private CA, so the request
+	// itself must still fail — at TLS handshake time, not setup time.
+	_, err = c.CheckKVv2Mount(context.Background(), "secret")
+	require.Error(t, err, "untrusted cert without skip-verify must fail at TLS")
+}
+
+// Mirror invariant: when the file VAULT_CACERT points at DOES exist, the
+// helper must leave the env var in place. A regression to "unset
+// unconditionally" would silently fall back to system roots in prod and
+// silently break TLS to a private bao with a real CA bundle mounted.
+func TestNewHTTPClient_TLS_PresentCAFilePreservesEnv(t *testing.T) {
+	srv := tlsServer(t)
+	caPath := writeServerCertAsCA(t, srv)
+	t.Setenv("VAULT_CACERT", caPath)
+	t.Setenv("VAULT_SKIP_VERIFY", "")
+
+	_, err := NewHTTPClient(srv.URL, "test-token")
+	require.NoError(t, err)
+	require.Equal(t, caPath, os.Getenv("VAULT_CACERT"),
+		"unsetMissingCAEnv must leave VAULT_CACERT untouched when the file exists")
 }
 
 // ---- silence linter on imports used only by appended tests ----

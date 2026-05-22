@@ -106,9 +106,6 @@ func (f *fakeBao) ReadPKIURLs(ctx context.Context, mount string, opts ...baoclie
 func (f *fakeBao) CheckKVv2Mount(ctx context.Context, mount string, opts ...baoclient.CallOption) (bool, error) {
 	return true, nil
 }
-func (f *fakeBao) CheckAuthMount(ctx context.Context, mount string, opts ...baoclient.CallOption) (bool, error) {
-	return true, nil
-}
 func (f *fakeBao) UpsertPolicy(ctx context.Context, name, rules string, opts ...baoclient.CallOption) error {
 	return nil
 }
@@ -138,12 +135,6 @@ func (f *fakeBao) GetSecretEngineMount(ctx context.Context, m string, o ...baocl
 }
 func (f *fakeBao) DisableSecretEngineMount(ctx context.Context, m string, o ...baoclient.CallOption) error {
 	return nil
-}
-func (f *fakeBao) EnableAuthMount(ctx context.Context, m, t string, o ...baoclient.CallOption) error {
-	return nil
-}
-func (f *fakeBao) GetAuthMount(ctx context.Context, m string, o ...baoclient.CallOption) (*baoclient.AuthMount, error) {
-	return nil, baoclient.ErrNotFound
 }
 func (f *fakeBao) DisableAuthMount(ctx context.Context, m string, o ...baoclient.CallOption) error {
 	return nil

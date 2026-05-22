@@ -41,11 +41,11 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 	It("creates a Policy CR and sees the policy in OpenBao", func(ctx SpecContext) {
 		By("cleaning up any leftover Policy from a previous run")
 		_ = k8s.Delete(ctx, &v1alpha1.OpenBaoPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OBXNS},
+			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OperatorNS},
 		})
 		Eventually(func() bool {
 			var p v1alpha1.OpenBaoPolicy
-			err := k8s.Get(ctx, types.NamespacedName{Namespace: OBXNS, Name: policyName}, &p)
+			err := k8s.Get(ctx, types.NamespacedName{Namespace: OperatorNS, Name: policyName}, &p)
 			return k8serrors.IsNotFound(err)
 		}).WithTimeout(30 * time.Second).WithPolling(1 * time.Second).Should(BeTrue())
 
@@ -59,7 +59,7 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 
 		By("creating the Policy CR")
 		cr := &v1alpha1.OpenBaoPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OBXNS},
+			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OperatorNS},
 			Spec: v1alpha1.OpenBaoPolicySpec{
 				Policy: initBody,
 			},
@@ -67,7 +67,7 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 		Expect(k8s.Create(ctx, cr)).To(Succeed())
 		DeferCleanup(func() {
 			_ = k8s.Delete(ctx, &v1alpha1.OpenBaoPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OBXNS},
+				ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OperatorNS},
 			})
 		})
 
@@ -81,7 +81,7 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 		By("observing Ready=True on the CR status")
 		Eventually(func(g Gomega) {
 			var got v1alpha1.OpenBaoPolicy
-			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OBXNS, Name: policyName}, &got)).To(Succeed())
+			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OperatorNS, Name: policyName}, &got)).To(Succeed())
 			cond := findCond(got.Status.Conditions, "Ready")
 			g.Expect(cond).NotTo(BeNil(), "Ready condition should be set")
 			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -93,7 +93,7 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 		By("patching spec.policy")
 		Eventually(func(g Gomega) {
 			var cur v1alpha1.OpenBaoPolicy
-			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OBXNS, Name: policyName}, &cur)).To(Succeed())
+			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OperatorNS, Name: policyName}, &cur)).To(Succeed())
 			cur.Spec.Policy = editBody
 			g.Expect(k8s.Update(ctx, &cur)).To(Succeed())
 		}).WithTimeout(10 * time.Second).Should(Succeed())
@@ -109,13 +109,13 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 	It("deletes the policy when the CR is deleted", func(ctx SpecContext) {
 		By("deleting the Policy CR")
 		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OBXNS},
+			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: OperatorNS},
 		})).To(Succeed())
 
 		By("waiting for the CR to disappear (finalizer releases after bao delete)")
 		Eventually(func() bool {
 			var p v1alpha1.OpenBaoPolicy
-			err := k8s.Get(ctx, types.NamespacedName{Namespace: OBXNS, Name: policyName}, &p)
+			err := k8s.Get(ctx, types.NamespacedName{Namespace: OperatorNS, Name: policyName}, &p)
 			return k8serrors.IsNotFound(err)
 		}).WithTimeout(60*time.Second).WithPolling(2*time.Second).Should(BeTrue(),
 			"CR should be gone from etcd after finalizer removal")
@@ -131,9 +131,16 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 	It("surfaces a condition when accessor templating is used", func(ctx SpecContext) {
 		tmplName := policyName + "-tmpl"
 
+		// Scrub any leftover from a prior run before Create; otherwise we
+		// hit AlreadyExists when a previous failed run left this CR in
+		// Terminating state.
+		deleteIfExists(ctx, k8s, &v1alpha1.OpenBaoPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: tmplName, Namespace: OperatorNS},
+		}, types.NamespacedName{Namespace: OperatorNS, Name: tmplName})
+
 		By("applying a Policy with a ${auth/.../@accessor} placeholder")
 		cr := &v1alpha1.OpenBaoPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: tmplName, Namespace: OBXNS},
+			ObjectMeta: metav1.ObjectMeta{Name: tmplName, Namespace: OperatorNS},
 			Spec: v1alpha1.OpenBaoPolicySpec{
 				Policy: `path "x" { allowed_parameters = { "accessor" = ["${auth/kubernetes/@accessor}"] } }`,
 			},
@@ -141,14 +148,14 @@ var _ = Describe("OpenBaoPolicy CR → OpenBao", Ordered, func() {
 		Expect(k8s.Create(ctx, cr)).To(Succeed())
 		DeferCleanup(func() {
 			_ = k8s.Delete(ctx, &v1alpha1.OpenBaoPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: tmplName, Namespace: OBXNS},
+				ObjectMeta: metav1.ObjectMeta{Name: tmplName, Namespace: OperatorNS},
 			})
 		})
 
 		By("expecting Ready=False with a user-facing placeholder-rejection message")
 		Eventually(func(g Gomega) {
 			var got v1alpha1.OpenBaoPolicy
-			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OBXNS, Name: tmplName}, &got)).To(Succeed())
+			g.Expect(k8s.Get(ctx, types.NamespacedName{Namespace: OperatorNS, Name: tmplName}, &got)).To(Succeed())
 			cond := findCond(got.Status.Conditions, "Ready")
 			g.Expect(cond).NotTo(BeNil(), "Ready condition should be set")
 			g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))

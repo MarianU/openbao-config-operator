@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,6 +80,9 @@ func (d *OpenBaoJWTOIDCAuthEngineRole) IsEquivalentToDesiredState(payload map[st
 	if d.Spec.BoundClaimsType != cur.BoundClaimsType {
 		return false
 	}
+	if !boundClaimsEqual(d.Spec.BoundClaims, cur.BoundClaims) {
+		return false
+	}
 	if d.Spec.GroupsClaim != cur.GroupsClaim {
 		return false
 	}
@@ -135,6 +139,22 @@ func (d *OpenBaoJWTOIDCAuthEngineRole) IsValid() (bool, error) {
 	if d.Spec.RoleType == JWTOIDCRoleTypeOIDC && len(d.Spec.AllowedRedirectURIs) == 0 {
 		return false, fmt.Errorf("spec.allowedRedirectUris must list at least one URI for type=oidc roles")
 	}
+	// Bao treats an empty-list bound-claim as "no value matches" — a
+	// silent lockout for every inbound token whose claim names match
+	// the empty list. Reject both the empty-key shape (no claim name)
+	// and empty-value shape (no accepted values) at admission so the
+	// failure surfaces as a config error instead of a login outage.
+	for key, vals := range d.Spec.BoundClaims {
+		if strings.TrimSpace(key) == "" {
+			return false, fmt.Errorf("spec.boundClaims has an empty key; every entry must name a JWT claim")
+		}
+		if len(vals) == 0 {
+			return false, fmt.Errorf(
+				"spec.boundClaims[%q] is empty; an empty value list locks out every "+
+					"login because no value can satisfy the filter — remove the key to disable the filter "+
+					"or list at least one accepted value", key)
+		}
+	}
 	return true, nil
 }
 
@@ -145,6 +165,7 @@ func (d *OpenBaoJWTOIDCAuthEngineRole) ToBaoSpec() baoclient.JWTOIDCRoleSpec {
 		BoundAudiences:      append([]string(nil), d.Spec.BoundAudiences...),
 		BoundSubject:        d.Spec.BoundSubject,
 		BoundClaimsType:     d.Spec.BoundClaimsType,
+		BoundClaims:         boundClaimsToBao(d.Spec.BoundClaims),
 		GroupsClaim:         d.Spec.GroupsClaim,
 		ClaimMappings:       copyStringMapV1(d.Spec.ClaimMappings),
 		OIDCScopes:          append([]string(nil), d.Spec.OIDCScopes...),
@@ -153,6 +174,77 @@ func (d *OpenBaoJWTOIDCAuthEngineRole) ToBaoSpec() baoclient.JWTOIDCRoleSpec {
 		TokenTTL:            d.Spec.TokenTTL,
 		TokenMaxTTL:         d.Spec.TokenMaxTTL,
 		TokenBoundCIDRs:     append([]string(nil), d.Spec.TokenBoundCIDRs...),
+	}
+}
+
+// boundClaimsToBao copies a typed (claim → list of strings) map into
+// the loose map[string]interface{} the bao wire format expects.
+// Returns nil for an empty input so the writer omits the field.
+func boundClaimsToBao(in map[string][]string) map[string]interface{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
+// boundClaimsEqual compares the typed desired claims against bao's
+// read (a map of interface{} values, since bao's bound_claims also
+// supports comparison-operator objects like {"gt": 18}). The CRD
+// shape only models the string/list case used for group + claim
+// filtering, so a bao-side value that isn't string-coercible
+// compares as a mismatch — which is the correct behaviour: an
+// operator-edited bao value the CRD can't represent must trigger a
+// rewrite back to the CR's intent.
+func boundClaimsEqual(desired map[string][]string, current map[string]interface{}) bool {
+	if len(desired) != len(current) {
+		return false
+	}
+	for k, want := range desired {
+		raw, ok := current[k]
+		if !ok {
+			return false
+		}
+		got, ok := boundClaimsCoerceList(raw)
+		if !ok {
+			return false
+		}
+		a := append([]string(nil), want...)
+		b := append([]string(nil), got...)
+		sort.Strings(a)
+		sort.Strings(b)
+		if !reflect.DeepEqual(a, b) {
+			return false
+		}
+	}
+	return true
+}
+
+// boundClaimsCoerceList accepts the shapes bao returns for a
+// bound_claims value: a single string, a slice of strings, or a
+// []interface{} of strings (encoding/json's default for JSON arrays).
+// Returns ok=false for anything else.
+func boundClaimsCoerceList(v interface{}) ([]string, bool) {
+	switch t := v.(type) {
+	case string:
+		return []string{t}, true
+	case []string:
+		return t, true
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			s, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
 	}
 }
 
@@ -198,11 +290,21 @@ type OpenBaoJWTOIDCAuthEngineRoleSpec struct {
 	// +kubebuilder:validation:Optional
 	BoundSubject string `json:"boundSubject,omitempty"`
 
-	// BoundClaimsType controls how boundClaims is interpreted:
-	// "string" (default) for exact-match, "glob" for wildcards.
+	// BoundClaimsType controls how BoundClaims values are matched
+	// against inbound JWT claim values: "string" (default) for
+	// exact-match, "glob" for shell-style wildcards.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=string;glob
 	BoundClaimsType string `json:"boundClaimsType,omitempty"`
+
+	// BoundClaims gates login on JWT claim values. Each key is a
+	// claim name (e.g. "groups", "email"); the value is the list of
+	// accepted strings. A login token must carry every listed claim
+	// with a value matching one of the entries (interpretation
+	// controlled by BoundClaimsType). Empty disables the filter —
+	// any token passing BoundAudiences / BoundSubject is accepted.
+	// +kubebuilder:validation:Optional
+	BoundClaims map[string][]string `json:"boundClaims,omitempty"`
 
 	// GroupsClaim is the JWT claim bao uses to populate the
 	// identity's groups (mapped to bao identity groups via aliases).

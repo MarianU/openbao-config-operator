@@ -8,7 +8,7 @@
 //
 // Modified relative to upstream:
 //   - spec.authentication and spec.connection removed (operator uses
-//     OpenBaoExtension's single token).
+//     a single token from VAULT_TOKEN env).
 //   - GetKubeAuthConfiguration / GetVaultConnection methods removed; they
 //     return nil and are not part of our slimmer VaultObject interface.
 //   - spec.type removed (only "acl" is supported and GetPath always emits

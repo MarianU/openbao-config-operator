@@ -8,7 +8,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	mto "github.com/stakater-ab/tenant-operator/api/v1beta3"
 )
 
 func GetK8sClient() client.Client {
@@ -16,8 +15,7 @@ func GetK8sClient() client.Client {
 
 	scheme := runtime.NewScheme()
 	Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed()) // core types
-	Expect(mto.AddToScheme(scheme)).To(Succeed())            // Tenant v1beta3
-	Expect(extv1alpha1.AddToScheme(scheme)).To(Succeed())    // OpenBaoExtension + OpenBao* primitives
+	Expect(extv1alpha1.AddToScheme(scheme)).To(Succeed())    // OpenBao* primitives
 
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	Expect(err).NotTo(HaveOccurred())

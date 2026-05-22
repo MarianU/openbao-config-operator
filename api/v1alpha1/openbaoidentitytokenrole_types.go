@@ -9,7 +9,7 @@
 // Modifications relative to upstream:
 //   - Kind renamed to OpenBaoIdentityTokenRole.
 //   - spec.openbaoNamespace added; spec.authentication / spec.connection
-//     removed (operator uses OpenBaoExtension's single token).
+//     removed (operator uses a single token from VAULT_TOKEN env).
 //   - IsValid rejects empty key — bao silently rejects role writes
 //     where the named OIDC key does not exist, but surfacing as Invalid
 //     keeps the user from a permanently flapping CR.

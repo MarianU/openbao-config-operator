@@ -15,7 +15,7 @@
 //     breaking root-only consumers.
 //   - spec.openbaoNamespace added (X-Vault-Namespace target);
 //     spec.authentication and spec.connection removed (operator uses
-//     a single token from OpenBaoExtension).
+//     a single token from VAULT_TOKEN env).
 //   - IsDeletable returns false (see below); the rename-cleanup path
 //     skips BaoDeleteIdentity for the same reason.
 //   - status.phase / status.caSerialNumber capture the bootstrap
@@ -55,8 +55,8 @@ var _ vaultobject.ConditionsAware = &OpenBaoPKISecretEngineConfig{}
 var _ vaultobject.WriteTracker = &OpenBaoPKISecretEngineConfig{}
 var _ vaultobject.RenameTracker = &OpenBaoPKISecretEngineConfig{}
 
-// PhaseActive is the only steady-state phase emitted in the root-only
-// release. Intermediate-CA support adds AwaitingExternalSignature.
+// PhaseActive marks a PKI mount whose CA is generated and ready to issue
+// certificates. It is currently the only phase the controller emits.
 const PhaseActive = "Active"
 
 // PKITypeRoot is the only supported value for spec.pkiType today.
