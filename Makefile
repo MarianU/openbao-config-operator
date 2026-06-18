@@ -377,8 +377,8 @@ HELM_CHART_NAME      ?= $(OPERATOR_NAME)
 HELM_CHART_DIR       ?= charts/$(HELM_CHART_NAME)
 
 # Hand-maintained sibling charts.
-BOOTSTRAP_CHART_DIR  ?= charts/mto-openbao-bootstrap
-TENANT_CHART_DIR     ?= charts/mto-openbao-tenant
+MTO_BOOTSTRAP_CHART_DIR ?= charts/openbao-config-mto-bootstrap
+MTO_CHART_DIR           ?= charts/openbao-config-mto
 
 HELM_REGISTRY        ?= $(DOCKER_REPO_BASE)/charts
 CHART_VERSION        ?= $(VERSION)$(GIT_TAG)
@@ -407,30 +407,30 @@ HELM_MK_ARGS = \
 	IMG=$(IMG)
 
 .PHONY: helm-release
-helm-release: helm-release-operator helm-release-bootstrap helm-release-tenant ## Release operator + bootstrap + tenant charts to OCI.
+helm-release: helm-release-operator helm-release-mto-bootstrap helm-release-mto ## Release operator + mto-bootstrap + mto charts to OCI.
 
 .PHONY: helm-release-operator
 helm-release-operator: helmify kustomize download-helm-mk ## Helmify config/default and release the operator chart.
 	$(HELM_MK_CMD) helm-release $(HELM_MK_ARGS)
 
-.PHONY: helm-release-bootstrap
-helm-release-bootstrap: helm ## Lint, package and push the bootstrap chart.
-	$(HELM) lint $(BOOTSTRAP_CHART_DIR) --strict
+.PHONY: helm-release-mto-bootstrap
+helm-release-mto-bootstrap: helm ## Lint, package and push openbao-config-mto-bootstrap.
+	$(HELM) lint $(MTO_BOOTSTRAP_CHART_DIR) --strict
 	@mkdir -p dist
-	$(HELM) package $(BOOTSTRAP_CHART_DIR) -d dist --version $(CHART_VERSION)
-	$(HELM) push dist/mto-openbao-bootstrap-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
+	$(HELM) package $(MTO_BOOTSTRAP_CHART_DIR) -d dist --version $(CHART_VERSION)
+	$(HELM) push dist/openbao-config-mto-bootstrap-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
 
-.PHONY: helm-release-tenant
-helm-release-tenant: helm ## Lint, package and push the tenant chart.
-	$(HELM) lint $(TENANT_CHART_DIR) --strict --set tenant=lint-only
+.PHONY: helm-release-mto
+helm-release-mto: helm ## Lint, package and push openbao-config-mto (per-Tenant chart pulled by t-op-v2).
+	$(HELM) lint $(MTO_CHART_DIR) --strict --set tenant=lint-only
 	@mkdir -p dist
-	$(HELM) package $(TENANT_CHART_DIR) -d dist --version $(CHART_VERSION)
-	$(HELM) push dist/mto-openbao-tenant-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
+	$(HELM) package $(MTO_CHART_DIR) -d dist --version $(CHART_VERSION)
+	$(HELM) push dist/openbao-config-mto-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
 
 .PHONY: helm-lint
-helm-lint: helm ## Lint bootstrap + tenant charts locally (operator chart is auto-generated).
-	$(HELM) lint $(BOOTSTRAP_CHART_DIR) --strict
-	$(HELM) lint $(TENANT_CHART_DIR) --strict --set tenant=lint-only
+helm-lint: helm ## Lint the two hand-maintained charts (operator chart is auto-generated).
+	$(HELM) lint $(MTO_BOOTSTRAP_CHART_DIR) --strict
+	$(HELM) lint $(MTO_CHART_DIR) --strict --set tenant=lint-only
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
