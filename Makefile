@@ -369,6 +369,69 @@ kind: $(KIND)
 $(KIND): $(LOCALBIN)
 	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
 
+##@ Helm charts (operator + bootstrap + tenant)
+
+# Operator chart — auto-generated via helmify from config/default kustomize
+# output. Regenerated on every release; never committed.
+HELM_CHART_NAME      ?= $(OPERATOR_NAME)
+HELM_CHART_DIR       ?= charts/$(HELM_CHART_NAME)
+
+# Hand-maintained sibling charts.
+BOOTSTRAP_CHART_DIR  ?= charts/mto-openbao-bootstrap
+TENANT_CHART_DIR     ?= charts/mto-openbao-tenant
+
+HELM_REGISTRY        ?= $(DOCKER_REPO_BASE)/charts
+CHART_VERSION        ?= $(VERSION)$(GIT_TAG)
+HELMIFY_POSTPROCESS  ?=
+
+# Shared helm release pipeline. Pulled from stakater/.github at first use.
+HELM_MK_URL ?= https://raw.githubusercontent.com/stakater/.github/refs/heads/main/.github/makefiles/helm.mk
+HELM_MK     := makefiles/helm.mk
+
+.PHONY: download-helm-mk
+download-helm-mk: ## Download shared helm.mk if missing.
+	@if [ ! -f $(HELM_MK) ]; then \
+		mkdir -p $(dir $(HELM_MK)); \
+		echo "Downloading $(HELM_MK_URL) -> $(HELM_MK)"; \
+		curl -fsSL $(HELM_MK_URL) -o $(HELM_MK); \
+	fi
+
+HELM_MK_CMD = GOBIN=$(LOCALBIN) PATH="$(LOCALBIN):$$PATH" $(MAKE) -f $(HELM_MK)
+HELM_MK_ARGS = \
+	OPERATOR_NAME=$(OPERATOR_NAME) \
+	HELM_CHART_NAME=$(HELM_CHART_NAME) \
+	HELM_CHART_DIR=$(HELM_CHART_DIR) \
+	HELM_REGISTRY=$(HELM_REGISTRY) \
+	CHART_VERSION=$(CHART_VERSION) \
+	HELMIFY_POSTPROCESS=$(HELMIFY_POSTPROCESS) \
+	IMG=$(IMG)
+
+.PHONY: helm-release
+helm-release: helm-release-operator helm-release-bootstrap helm-release-tenant ## Release operator + bootstrap + tenant charts to OCI.
+
+.PHONY: helm-release-operator
+helm-release-operator: helmify kustomize download-helm-mk ## Helmify config/default and release the operator chart.
+	$(HELM_MK_CMD) helm-release $(HELM_MK_ARGS)
+
+.PHONY: helm-release-bootstrap
+helm-release-bootstrap: helm ## Lint, package and push the bootstrap chart.
+	$(HELM) lint $(BOOTSTRAP_CHART_DIR) --strict
+	@mkdir -p dist
+	$(HELM) package $(BOOTSTRAP_CHART_DIR) -d dist --version $(CHART_VERSION)
+	$(HELM) push dist/mto-openbao-bootstrap-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
+
+.PHONY: helm-release-tenant
+helm-release-tenant: helm ## Lint, package and push the tenant chart.
+	$(HELM) lint $(TENANT_CHART_DIR) --strict --set tenant=lint-only
+	@mkdir -p dist
+	$(HELM) package $(TENANT_CHART_DIR) -d dist --version $(CHART_VERSION)
+	$(HELM) push dist/mto-openbao-tenant-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
+
+.PHONY: helm-lint
+helm-lint: helm ## Lint bootstrap + tenant charts locally (operator chart is auto-generated).
+	$(HELM) lint $(BOOTSTRAP_CHART_DIR) --strict
+	$(HELM) lint $(TENANT_CHART_DIR) --strict --set tenant=lint-only
+
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
 # $2 - package url which can be installed
