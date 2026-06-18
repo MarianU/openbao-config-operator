@@ -324,6 +324,48 @@ metadata:
         },
         {
           "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoKubernetesAuthEngineConfig",
+          "metadata": {
+            "name": "mto-extension-openbao-tenant-k8s-auth",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "issuer": "kubernetes/serviceaccount",
+            "kubernetesCaCertRef": {
+              "key": "ca.crt",
+              "name": "openbao-token-reviewer"
+            },
+            "kubernetesHost": "https://kubernetes.default.svc:443",
+            "path": "kubernetes",
+            "tokenReviewerJwtRef": {
+              "key": "token",
+              "name": "openbao-token-reviewer"
+            }
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoKubernetesAuthEngineConfig",
+          "metadata": {
+            "name": "tenant-k8s-auth",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "issuer": "kubernetes/serviceaccount",
+            "kubernetesCaCertRef": {
+              "key": "ca.crt",
+              "name": "openbao-token-reviewer"
+            },
+            "kubernetesHost": "https://kubernetes.default.svc:443",
+            "path": "kubernetes",
+            "tokenReviewerJwtRef": {
+              "key": "token",
+              "name": "openbao-token-reviewer"
+            }
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoKubernetesAuthRole",
           "metadata": {
             "name": "mto-extension-openbao-prod-deployers",
@@ -627,10 +669,40 @@ metadata:
             "kvV2": {},
             "path": "secret"
           }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoTransitKey",
+          "metadata": {
+            "name": "app-key",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "autoRotatePeriod": "720h",
+            "deletionAllowed": true,
+            "name": "app-key",
+            "path": "transit",
+            "type": "aes256-gcm96"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoTransitKey",
+          "metadata": {
+            "name": "mto-extension-openbao-app-key",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "autoRotatePeriod": "720h",
+            "deletionAllowed": true,
+            "name": "app-key",
+            "path": "transit",
+            "type": "aes256-gcm96"
+          }
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-04-30T19:54:07Z"
+    createdAt: "2026-05-18T10:51:20Z"
     operators.operatorframework.io/builder: operator-sdk-v1.41.1
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: mto-extension-openbao.v0.0.1
@@ -666,16 +738,6 @@ spec:
       displayName: OpenBao Cert Auth Engine Role
       kind: OpenBaoCertAuthEngineRole
       name: openbaocertauthengineroles.security.mto.stakater.com
-      version: v1alpha1
-    - description: Cluster-level configuration for the MTO OpenBao extension operator.
-        Holds the OpenBao server connection, the token used for primitive reconciles,
-        per-tenant token policies (TTL/MaxTTL/renewable), tenancy mode (path vs namespace),
-        and safety toggles (allowDeletes). Reconciled by the ClusterAuth controller
-        (verifies the token, ensures the kubernetes auth mount exists) and read by
-        the Tenant controller for per-tenant config.
-      displayName: OpenBao Extension
-      kind: OpenBaoExtension
-      name: openbaoextensions.security.mto.stakater.com
       version: v1alpha1
     - description: An OpenBao identity group-alias managed by the MTO extension operator.
         Maps a (name, mountAccessor) tuple from an external auth method (OIDC, JWT,
@@ -721,6 +783,17 @@ spec:
       displayName: OpenBao JWT/OIDC Auth Engine Role
       kind: OpenBaoJWTOIDCAuthEngineRole
       name: openbaojwtoidcauthengineroles.security.mto.stakater.com
+      version: v1alpha1
+    - description: An OpenBao kubernetes auth-mount config managed by the MTO extension
+        operator. Owns auth/<path>/config for kubernetes-type auth methods. Surfaces
+        kubernetes_host, kubernetes_ca_cert (Secret-sourced), token_reviewer_jwt (Secret-sourced),
+        pem_keys, issuer, and bao tunables. Pairs with an OpenBaoAuthMethod of type=kubernetes
+        at the same path. Secret-watch propagates token-reviewer JWT and CA rotations
+        without operator intervention. IsDeletable=false — bao has no DELETE; CR delete
+        releases the finalizer without touching bao.
+      displayName: OpenBao Kubernetes Auth Engine Config
+      kind: OpenBaoKubernetesAuthEngineConfig
+      name: openbaokubernetesauthengineconfigs.security.mto.stakater.com
       version: v1alpha1
     - description: An OpenBao Kubernetes-auth role managed by the MTO extension operator.
         Authors a role at auth/<spec.path>/role/<name> binding service accounts in
@@ -770,6 +843,16 @@ spec:
       kind: OpenBaoSecretEngine
       name: openbaosecretengines.security.mto.stakater.com
       version: v1alpha1
+    - description: A single transit key at <mount>/keys/<name> on a pre-existing transit
+        secret-engine mount. Type, derived, convergent_encryption, and key_size are
+        immutable post-create; mutation surfaces Ready=False reason=Invalid. Bao's
+        deletion_allowed flag gates DELETE — when unset/false, CR delete leaves the
+        CR in Terminating with Ready=False reason=DeleteBlocked until the user flips
+        spec.deletionAllowed=true.
+      displayName: OpenBao Transit Key
+      kind: OpenBaoTransitKey
+      name: openbaotransitkeys.security.mto.stakater.com
+      version: v1alpha1
   description: MTO Extension for OpenBao
   displayName: MTO Extension OpenBao
   icon:
@@ -783,10 +866,19 @@ spec:
           - ""
           resources:
           - namespaces
-          - secrets
           verbs:
           - get
           - list
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - secrets
+          verbs:
+          - create
+          - get
+          - list
+          - update
           - watch
         - apiGroups:
           - security.mto.stakater.com
@@ -799,8 +891,14 @@ spec:
           - openbaoidentitytokenroles
           - openbaojwtoidcauthengineconfigs
           - openbaojwtoidcauthengineroles
+          - openbaokubernetesauthengineconfigs
+          - openbaokubernetesauthroles
+          - openbaonamespaces
           - openbaopkisecretengineconfigs
           - openbaopkisecretengineroles
+          - openbaopolicies
+          - openbaosecretengines
+          - openbaotransitkeys
           verbs:
           - get
           - list
@@ -813,18 +911,19 @@ spec:
           - openbaoauthmethods/finalizers
           - openbaocertauthengineconfigs/finalizers
           - openbaocertauthengineroles/finalizers
-          - openbaoextensions/finalizers
           - openbaogroupaliases/finalizers
           - openbaogroups/finalizers
           - openbaoidentitytokenroles/finalizers
           - openbaojwtoidcauthengineconfigs/finalizers
           - openbaojwtoidcauthengineroles/finalizers
+          - openbaokubernetesauthengineconfigs/finalizers
           - openbaokubernetesauthroles/finalizers
           - openbaonamespaces/finalizers
           - openbaopkisecretengineconfigs/finalizers
           - openbaopkisecretengineroles/finalizers
           - openbaopolicies/finalizers
           - openbaosecretengines/finalizers
+          - openbaotransitkeys/finalizers
           verbs:
           - update
         - apiGroups:
@@ -833,52 +932,23 @@ spec:
           - openbaoauthmethods/status
           - openbaocertauthengineconfigs/status
           - openbaocertauthengineroles/status
-          - openbaoextensions/status
           - openbaogroupaliases/status
           - openbaogroups/status
           - openbaoidentitytokenroles/status
           - openbaojwtoidcauthengineconfigs/status
           - openbaojwtoidcauthengineroles/status
+          - openbaokubernetesauthengineconfigs/status
           - openbaokubernetesauthroles/status
           - openbaonamespaces/status
           - openbaopkisecretengineconfigs/status
           - openbaopkisecretengineroles/status
           - openbaopolicies/status
           - openbaosecretengines/status
+          - openbaotransitkeys/status
           verbs:
           - get
           - patch
           - update
-        - apiGroups:
-          - security.mto.stakater.com
-          resources:
-          - openbaoextensions
-          - openbaokubernetesauthroles
-          - openbaonamespaces
-          - openbaopolicies
-          - openbaosecretengines
-          verbs:
-          - create
-          - delete
-          - get
-          - list
-          - patch
-          - update
-          - watch
-        - apiGroups:
-          - tenantoperator.stakater.com
-          resources:
-          - tenants
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - tenantoperator.stakater.com
-          resources:
-          - tenants/status
-          verbs:
-          - get
         - apiGroups:
           - authentication.k8s.io
           resources:

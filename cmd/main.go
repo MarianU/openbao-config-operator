@@ -22,7 +22,6 @@ import (
 	"flag"
 	"os"
 
-	mtov1beta3 "github.com/stakater-ab/tenant-operator/api/v1beta3"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,7 +36,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	appcontroller "github.com/stakater-ab/mto-extension-openbao/internal/controller/clusterauth"
 	openbaoauthmethod "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoauthmethod"
 	openbaocertcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthengineconfig"
 	openbaocertrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthenginerole"
@@ -54,7 +52,6 @@ import (
 	openbaopolicy "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaopolicy"
 	openbaose "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaosecretengine"
 	openbaotk "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaotransitkey"
-	controllers "github.com/stakater-ab/mto-extension-openbao/internal/controller/tenant"
 	"github.com/stakater-ab/mto-extension-openbao/internal/hmacstore"
 	// +kubebuilder:scaffold:imports
 )
@@ -67,7 +64,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(obxv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(mtov1beta3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -190,19 +186,7 @@ func main() {
 // of main() to keep cyclomatic complexity below the project lint
 // threshold; the body grows linearly as new primitives are added.
 func setupReconcilers(mgr ctrl.Manager) error {
-	if err := appcontroller.NewClusterAuthReconciler(mgr).SetupWithManager(mgr); err != nil {
-		return err
-	}
-
 	// +kubebuilder:scaffold:builder
-
-	tenantReconciler, err := controllers.NewTenantReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
 
 	openBaoPolicyReconciler, err := openbaopolicy.NewOpenBaoPolicyReconciler(mgr)
 	if err != nil {

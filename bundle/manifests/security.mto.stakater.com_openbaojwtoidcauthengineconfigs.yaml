@@ -213,6 +213,15 @@ spec:
                 type: string
               lastWrittenOpenBaoNamespace:
                 type: string
+              lastWrittenSecretMac:
+                description: |-
+                  LastWrittenSecretMAC is the HMAC-SHA256 (base64) of the
+                  Secret-sourced field values the operator last successfully wrote
+                  to bao. The drift comparator compares the freshly-recomputed MAC
+                  against this on each reconcile; a mismatch signals that the
+                  underlying Secret rotated and the operator must re-write.
+                  Empty until the first successful write. See [hmacstore](../../internal/hmacstore).
+                type: string
               resolvedClientSecret:
                 description: |-
                   ResolvedClientSecret holds the cleartext value

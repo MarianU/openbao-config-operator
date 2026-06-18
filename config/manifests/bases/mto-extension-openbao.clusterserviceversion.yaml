@@ -10,16 +10,6 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: Cluster-level configuration for the MTO OpenBao extension operator.
-        Holds the OpenBao server connection, the token used for primitive reconciles,
-        per-tenant token policies (TTL/MaxTTL/renewable), tenancy mode (path vs namespace),
-        and safety toggles (allowDeletes). Reconciled by the ClusterAuth controller
-        (verifies the token, ensures the kubernetes auth mount exists) and read by
-        the Tenant controller for per-tenant config.
-      displayName: OpenBao Extension
-      kind: OpenBaoExtension
-      name: openbaoextensions.security.mto.stakater.com
-      version: v1alpha1
     - description: An OpenBao ACL policy managed by the MTO extension operator. Authors
         a policy document in OpenBao's sys/policies/acl/ path. Optionally scoped to
         an OpenBao namespace via spec.openbaoNamespace (X-Vault-Namespace header).
@@ -152,9 +142,9 @@ spec:
       kind: OpenBaoKubernetesAuthEngineConfig
       name: openbaokubernetesauthengineconfigs.security.mto.stakater.com
       version: v1alpha1
-    - description: A single transit key at <mount>/keys/<name> on a pre-existing
-        transit secret-engine mount. Type, derived, convergent_encryption, and key_size
-        are immutable post-create; mutation surfaces Ready=False reason=Invalid. Bao's
+    - description: A single transit key at <mount>/keys/<name> on a pre-existing transit
+        secret-engine mount. Type, derived, convergent_encryption, and key_size are
+        immutable post-create; mutation surfaces Ready=False reason=Invalid. Bao's
         deletion_allowed flag gates DELETE — when unset/false, CR delete leaves the
         CR in Terminating with Ready=False reason=DeleteBlocked until the user flips
         spec.deletionAllowed=true.

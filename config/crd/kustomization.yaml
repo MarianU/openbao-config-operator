@@ -1,7 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - bases/security.mto.stakater.com_openbaoextensions.yaml
   - bases/security.mto.stakater.com_openbaopolicies.yaml
   - bases/security.mto.stakater.com_openbaokubernetesauthroles.yaml
   - bases/security.mto.stakater.com_openbaosecretengines.yaml

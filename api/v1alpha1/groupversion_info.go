@@ -10,10 +10,3 @@ var (
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 	AddToScheme   = SchemeBuilder.AddToScheme
 )
-
-func init() {
-	SchemeBuilder.Register(
-		&OpenBaoExtension{},
-		&OpenBaoExtensionList{},
-	)
-}

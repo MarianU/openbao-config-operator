@@ -1,0 +1,256 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  creationTimestamp: null
+  name: openbaotransitkeys.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoTransitKey
+    listKind: OpenBaoTransitKeyList
+    plural: openbaotransitkeys
+    shortNames:
+    - obtk
+    singular: openbaotransitkey
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: OpenBaoTransitKey is the Schema for the openbaotransitkeys API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              OpenBaoTransitKeySpec is the user-facing schema for a transit key.
+              Fields fall into three groups (immutable post-create, mutable, accepted
+              on both endpoints). See the package comment for the overall design.
+            properties:
+              allowPlaintextBackup:
+                description: |-
+                  AllowPlaintextBackup permits transit/backup/<name> to include
+                  plaintext key material. Same one-way semantics as Exportable.
+                type: boolean
+              autoRotatePeriod:
+                description: |-
+                  AutoRotatePeriod is a Go duration ("720h"; "30d" is not a Go
+                  duration shape — use "720h"). "0" or empty disables auto-rotation.
+                pattern: ^(0|[0-9]+(s|m|h))+$
+                type: string
+              convergentEncryption:
+                description: |-
+                  ConvergentEncryption requires derived=true; same plaintext +
+                  context yields the same ciphertext. Immutable post-create.
+                type: boolean
+              deletionAllowed:
+                description: |-
+                  DeletionAllowed gates DELETE transit/keys/<name> on the bao side.
+                  CR deletion when this is unset or false surfaces Ready=False
+                  reason=DeleteBlocked; the user flips it true and the next
+                  reconcile completes the delete.
+                type: boolean
+              derived:
+                description: |-
+                  Derived enables key derivation (per-context subkeys). Immutable
+                  post-create.
+                type: boolean
+              exportable:
+                description: |-
+                  Exportable allows /export. Mutable but one-way: once enabled, bao
+                  refuses to disable it. The wrapper surfaces bao's 400 verbatim.
+                type: boolean
+              keySize:
+                description: |-
+                  KeySize sets the byte size for hmac keys; ignored by every other
+                  type. Immutable post-create.
+                maximum: 512
+                minimum: 32
+                type: integer
+              minDecryptionVersion:
+                description: |-
+                  MinDecryptionVersion sets the floor for decrypt operations. 0
+                  means all versions allowed.
+                minimum: 0
+                type: integer
+              minEncryptionVersion:
+                description: |-
+                  MinEncryptionVersion sets the floor for encrypt operations. 0
+                  means latest.
+                minimum: 0
+                type: integer
+              name:
+                description: Name is the bao-side transit key name. Required, immutable.
+                maxLength: 128
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$
+                type: string
+              openbaoNamespace:
+                description: OpenBaoNamespace targets a bao namespace via X-Vault-Namespace.
+                pattern: ^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$
+                type: string
+              path:
+                default: transit
+                description: |-
+                  Path is the parent transit secret-engine mount (must be type=transit;
+                  bao 400s otherwise). Defaults to "transit"; the omitempty JSON tag
+                  is intentional — kubebuilder defaulting only fires when the field
+                  is absent from the wire body, so without omitempty a Go-side
+                  zero-value would serialize as `path: ""` and bypass the default.
+                maxLength: 128
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9_./-]*$
+                type: string
+              type:
+                default: aes256-gcm96
+                description: |-
+                  Type is the transit key algorithm. Immutable post-create. omitempty
+                  JSON tag is intentional — see Path's note for the kubebuilder
+                  defaulting interaction.
+                enum:
+                - aes128-gcm96
+                - aes256-gcm96
+                - chacha20-poly1305
+                - ed25519
+                - ecdsa-p256
+                - ecdsa-p384
+                - ecdsa-p521
+                - rsa-2048
+                - rsa-3072
+                - rsa-4096
+                - hmac
+                - managed_key
+                type: string
+            required:
+            - name
+            - path
+            - type
+            type: object
+          status:
+            description: |-
+              OpenBaoTransitKeyStatus carries reconciler-managed fields plus
+              observed-only fields surfaced from bao on read.
+            properties:
+              baoWritten:
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              creationTime:
+                description: CreationTime is the bao-side key creation timestamp (RFC3339).
+                type: string
+              lastWrittenBaoName:
+                type: string
+              lastWrittenOpenBaoNamespace:
+                type: string
+              lastWrittenPath:
+                description: |-
+                  LastWrittenPath captures the bao mount path the controller last
+                  wrote a key into. Without this, a CR that simultaneously edits
+                  spec.name AND spec.path would orphan the old key — the rename-
+                  cleanup BaoDeleteIdentity would target the new path and silently
+                  404. Same shape as OpenBaoPKISecretEngineRole's status.
+                type: string
+              latestVersion:
+                description: |-
+                  LatestVersion is bao's current key version. Apps targeting a
+                  specific version pin against this field. Refreshed on every
+                  reconcile (≤ PeriodicInterval staleness).
+                type: integer
+              supportsDecryption:
+                type: boolean
+              supportsDerivation:
+                type: boolean
+              supportsEncryption:
+                description: |-
+                  Capability flags surfaced from bao. Useful for callers that want
+                  to know "does this key support signing?" without mapping the
+                  type field client-side.
+                type: boolean
+              supportsSigning:
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

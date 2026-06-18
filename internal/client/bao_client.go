@@ -1,15 +1,8 @@
-// Package client is the wrapper (facade) layer over hashicorp/vault/api.
-//
-// Callers (ClusterAuth, Tenant, the VCO-origin primitive controllers) depend
-// only on the Client interface below. This file wires each method to the
-// corresponding vault/api call, so callers never have to know we use the
-// SDK internally. The wrapper exists to (1) keep callers SDK-agnostic so
-// the implementation is swappable, (2) translate SDK error shapes into the
-// project-local *StatusError / ErrNotFound contract every controller
-// already classifies on, and (3) centralize idempotency quirks like the
-// "path is already in use" 400 from sys/auth. OpenBao is wire-compatible
-// with Vault, so all of these calls work unchanged against an OpenBao
-// server.
+// Package client wraps hashicorp/vault/api. Controllers depend only on
+// the Client interface; the wrapper translates SDK error shapes into
+// the project-local *StatusError / ErrNotFound contract and centralises
+// the idempotency quirks (e.g. the "path is already in use" 400 from
+// sys/auth).
 package client
 
 import (
@@ -18,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -34,8 +28,6 @@ import (
 // targets the root namespace and matches pre-namespace-support behaviour.
 type Client interface {
 	CheckKVv2Mount(ctx context.Context, mount string, opts ...CallOption) (bool, error)
-	CheckAuthMount(ctx context.Context, mount string, opts ...CallOption) (bool, error)
-	EnableAuthMount(ctx context.Context, mount string, typ string, opts ...CallOption) error
 
 	// Secret-engine mount lifecycle (sys/mounts/<path>). Used by the
 	// OpenBaoSecretEngine controller to manage KV / Transit / PKI mounts.
@@ -50,23 +42,16 @@ type Client interface {
 	GetSecretEngineMount(ctx context.Context, mount string, opts ...CallOption) (*SecretEngineMount, error)
 	DisableSecretEngineMount(ctx context.Context, mount string, opts ...CallOption) error
 
-	// Auth-mount read + delete (sys/auth/<path>). EnableAuthMount above
-	// owns the create path; these handle drift inspection and cleanup.
-	GetAuthMount(ctx context.Context, mount string, opts ...CallOption) (*AuthMount, error)
-	DisableAuthMount(ctx context.Context, mount string, opts ...CallOption) error
-
-	// Auth-mount enable + tune (sys/auth/<path>). The historical
-	// EnableAuthMount above is kept for ClusterAuth's narrow
-	// "ensure-kubernetes-mount" use case (type-only; no description /
-	// options / config). EnableAuthMethod and TuneAuthMethod take a
-	// richer spec so the OpenBaoAuthMethod controller can manage
-	// arbitrary auth mounts. The two methods diverge for the same
-	// reason EnableSecretEngine / TuneSecretEngine diverge: bao's
-	// enable endpoint creates only — re-enable returns 400 "already
-	// in use" — so the update path must call tune.
+	// Auth-mount lifecycle (sys/auth/<path>). EnableAuthMethod and
+	// TuneAuthMethod diverge for the same reason EnableSecretEngine
+	// and TuneSecretEngine do: bao's enable endpoint creates only —
+	// re-enable returns 400 "already in use" — so the update path
+	// must call tune. GetAuthMethod is the read shape; DisableAuthMount
+	// removes the mount (idempotent on 404).
 	EnableAuthMethod(ctx context.Context, mount string, spec AuthMethodMountSpec, opts ...CallOption) error
 	TuneAuthMethod(ctx context.Context, mount string, spec AuthMethodMountSpec, opts ...CallOption) error
 	GetAuthMethod(ctx context.Context, mount string, opts ...CallOption) (*AuthMethodMount, error)
+	DisableAuthMount(ctx context.Context, mount string, opts ...CallOption) error
 
 	// OpenBao-namespace lifecycle (sys/namespaces/<name>). Used by the
 	// OpenBaoNamespace controller. Nested namespaces are addressed via
@@ -480,12 +465,6 @@ type SecretEngineMount struct {
 	Options     map[string]string
 }
 
-// AuthMount is the read shape for GetAuthMount.
-type AuthMount struct {
-	Type        string
-	Description string
-}
-
 // AuthMethodMountSpec is the write payload for EnableAuthMethod and
 // TuneAuthMethod. Mirrors bao's sys/auth POST shape: type is
 // mount-immutable; description and config are tunable. Config holds
@@ -591,9 +570,9 @@ type K8sRoleSpec struct {
 	TokenMaxTTL                   string
 	Renewable                     *bool
 
-	// Fields below were added for the KubernetesAuthEngineRole CRD; the
-	// Tenant controller leaves them at zero values and they are omitted
-	// from the bao request, preserving its historical request shape.
+	// Optional bao role fields. UpsertK8sRole emits these on the wire only
+	// when set (pointer non-nil, string non-empty); leaving them unset
+	// preserves bao's mount-default behaviour.
 	Audience             string
 	AliasNameSource      string
 	TokenBoundCIDRs      []string
@@ -650,8 +629,6 @@ func wrapStatus(err error) error {
 	return err
 }
 
-// ---- SDK-backed implementation. ----
-
 type sdkClient struct {
 	v *vault.Client
 }
@@ -665,6 +642,16 @@ func NewHTTPClient(addr, token string) (Client, error) {
 	if strings.TrimSpace(addr) == "" {
 		return nil, fmt.Errorf("bao client: address is empty")
 	}
+	// vault.DefaultConfig() reads VAULT_CACERT and errors hard if the
+	// path is set but the file is missing. In Kubernetes the operator
+	// pod typically mounts the CA bundle from an `optional: true`
+	// Secret that may not be provisioned (HTTP-only bao, or before
+	// the secret is created); the env var stays pointed at the
+	// would-be mount path, the file doesn't materialize, and the SDK
+	// crashes the process at startup. Drop the env var when the file
+	// doesn't exist so the SDK falls back to system roots — matching
+	// the contract the v6 deployment manifest documents.
+	unsetMissingCAEnv("VAULT_CACERT")
 	cfg := vault.DefaultConfig()
 	cfg.Address = strings.TrimRight(addr, "/")
 	v, err := vault.NewClient(cfg)
@@ -675,11 +662,27 @@ func NewHTTPClient(addr, token string) (Client, error) {
 	return &sdkClient{v: v}, nil
 }
 
-// underlying is a package-private accessor used by tests in this package.
-// Exposing the raw *vault.Client externally would let callers bypass the
-// wrapper's status-classification and idempotency contracts, defeating
-// the abstraction; the lowercase name keeps the escape hatch in-package
-// where compile-time checks catch misuse.
+// unsetMissingCAEnv clears `name` from the process environment if it
+// points at a path that doesn't exist on disk. Used to keep
+// vault.DefaultConfig() from failing on a stale env var when an
+// optional CA-bundle Secret is absent.
+func unsetMissingCAEnv(name string) {
+	path := os.Getenv(name)
+	if path == "" {
+		return
+	}
+	// Any failure to stat the file leaves vault.DefaultConfig() to crash
+	// when it tries to open it — permission-denied, IO error, and
+	// not-exist all reach the same fate. Unset on any error so the SDK
+	// falls back to system roots instead of crashing the operator process
+	// at startup. The narrow fs.ErrNotExist-only check the helper used
+	// to do defeated its own purpose for any non-not-exist failure.
+	if _, err := os.Stat(path); err != nil {
+		_ = os.Unsetenv(name)
+	}
+}
+
+// underlying is a test-only escape hatch; lowercase keeps it in-package.
 func (c *sdkClient) underlying() *vault.Client { return c.v }
 
 // clientFor returns the vault client to use for this call: either the shared
@@ -713,34 +716,6 @@ func (c *sdkClient) CheckKVv2Mount(ctx context.Context, mount string, opts ...Ca
 		return false, nil
 	}
 	return m.Type == "kv" && m.Options["version"] == "2", nil
-}
-
-func (c *sdkClient) CheckAuthMount(ctx context.Context, mount string, opts ...CallOption) (bool, error) {
-	mount = strings.Trim(mount, "/") + "/"
-	auths, err := c.clientFor(opts).Sys().ListAuthWithContext(ctx)
-	if err != nil {
-		return false, wrapStatus(err)
-	}
-	m, ok := auths[mount]
-	if !ok {
-		return false, nil
-	}
-	return m.Type == "kubernetes", nil
-}
-
-func (c *sdkClient) EnableAuthMount(ctx context.Context, mount, typ string, opts ...CallOption) error {
-	mount = strings.Trim(mount, "/")
-	if mount == "" {
-		return errors.New("mount path is empty")
-	}
-	if typ == "" {
-		return errors.New("auth type is empty")
-	}
-	err := c.clientFor(opts).Sys().EnableAuthWithOptionsWithContext(ctx, mount, &vault.EnableAuthOptions{Type: typ})
-	if err != nil && isAlreadyInUse(err) {
-		return nil
-	}
-	return wrapStatus(err)
 }
 
 func (c *sdkClient) EnableSecretEngine(ctx context.Context, mount string, spec SecretEngineMountSpec, opts ...CallOption) error {
@@ -822,22 +797,6 @@ func (c *sdkClient) DisableSecretEngineMount(ctx context.Context, mount string, 
 	return wrapped
 }
 
-func (c *sdkClient) GetAuthMount(ctx context.Context, mount string, opts ...CallOption) (*AuthMount, error) {
-	mount = strings.Trim(mount, "/") + "/"
-	auths, err := c.clientFor(opts).Sys().ListAuthWithContext(ctx)
-	if err != nil {
-		return nil, wrapStatus(err)
-	}
-	m, ok := auths[mount]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return &AuthMount{
-		Type:        m.Type,
-		Description: m.Description,
-	}, nil
-}
-
 // EnableAuthMethod creates a sys/auth mount with the given type +
 // description + tunable config. Idempotent on "path already in use" —
 // callers route to TuneAuthMethod on the update path instead of
@@ -893,11 +852,9 @@ func (c *sdkClient) TuneAuthMethod(ctx context.Context, mount string, spec AuthM
 	return wrapStatus(err)
 }
 
-// GetAuthMethod returns the rich auth-mount read shape (type +
-// description + tunable config). GetAuthMount above stays — it's
-// what ClusterAuth uses and adding the config fields would change
-// its return shape. Callers wanting drift comparison against tunable
-// fields use this method.
+// GetAuthMethod returns the rich auth-mount read shape: type,
+// description, accessor, and tunable config. Callers comparing the
+// CR spec against bao's drift state read here.
 func (c *sdkClient) GetAuthMethod(ctx context.Context, mount string, opts ...CallOption) (*AuthMethodMount, error) {
 	mount = strings.Trim(mount, "/") + "/"
 	auths, err := c.clientFor(opts).Sys().ListAuthWithContext(ctx)
@@ -1225,7 +1182,7 @@ func (c *sdkClient) ReadPKICA(ctx context.Context, mount string, opts ...CallOpt
 		}
 		// OpenBao 2.x returns 400 + "no default issuer" when the mount
 		// is empty. Treat as not-found so the create path fires.
-		if strings.Contains(strings.ToLower(err.Error()), "no default issuer") {
+		if isNoDefaultIssuer(err) {
 			return nil, ErrNotFound
 		}
 		return nil, wrapped
@@ -1623,12 +1580,25 @@ func mapToTransitKey(d map[string]interface{}) *TransitKeyInfo {
 
 // ---- helpers ----
 
-// isAlreadyInUse stays string-based: bao returns 400 with this message text
-// for an idempotent re-enable, not a distinct status code, so we have to
-// peek at the message body either way.
+// isAlreadyInUse classifies bao's idempotent-re-enable signal.
+//
+// Bao returns 400 with a message body (no distinct status code), so this
+// has to inspect the message text. Both message variants observed in the
+// wild (HashiCorp Vault 1.15+ and OpenBao 2.x) are pinned via the
+// TestIsAlreadyInUse contract test and the TestEnableAuthMethod_* /
+// TestEnableSecretEngine_* integration tests; a server-side wording
+// change surfaces there before reaching production.
 func isAlreadyInUse(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "already in use") || strings.Contains(msg, "path is already in use")
+}
+
+// isNoDefaultIssuer classifies the bao 2.x 400 emitted when a PKI mount
+// has no CA configured yet. Same rationale as isAlreadyInUse — no
+// distinct status code, contract pinned via TestIsNoDefaultIssuer and
+// TestReadPKICA_400NoDefaultIssuer_ReturnsErrNotFound.
+func isNoDefaultIssuer(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "no default issuer")
 }
 
 // isDeletionNotAllowed matches bao's 400 body when transit refuses a key
