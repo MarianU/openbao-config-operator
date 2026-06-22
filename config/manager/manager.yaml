@@ -68,7 +68,7 @@ spec:
           - name: VAULT_TOKEN
             valueFrom:
               secretKeyRef:
-                name: mto-openbao-token
+                name: openbao-token
                 key: token
           - name: VAULT_ADDR
             valueFrom:
