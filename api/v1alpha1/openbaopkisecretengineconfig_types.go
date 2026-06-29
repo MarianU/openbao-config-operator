@@ -12,7 +12,7 @@
 //   - Kind renamed PKISecretEngineConfig → OpenBaoPKISecretEngineConfig.
 //   - spec.connection and spec.authentication are NOT carried — this operator
 //     authenticates every primitive with a single operator token
-//     (VAULT_TOKEN / OpenBaoExtension), so per-CR Vault auth has no code path.
+//     (VAULT_TOKEN), so per-CR Vault auth has no code path.
 //     spec.openbaoNamespace (X-Vault-Namespace target) replaces upstream's
 //     authentication.namespace.
 //

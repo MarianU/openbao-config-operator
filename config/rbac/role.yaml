@@ -35,8 +35,12 @@ rules:
   - openbaojwtoidcauthengineconfigs
   - openbaojwtoidcauthengineroles
   - openbaokubernetesauthengineconfigs
+  - openbaokubernetesauthroles
+  - openbaonamespaces
   - openbaopkisecretengineconfigs
   - openbaopkisecretengineroles
+  - openbaopolicies
+  - openbaosecretengines
   - openbaotransitkeys
   verbs:
   - get
@@ -50,7 +54,6 @@ rules:
   - openbaoauthmethods/finalizers
   - openbaocertauthengineconfigs/finalizers
   - openbaocertauthengineroles/finalizers
-  - openbaoextensions/finalizers
   - openbaogroupaliases/finalizers
   - openbaogroups/finalizers
   - openbaoidentitytokenroles/finalizers
@@ -72,7 +75,6 @@ rules:
   - openbaoauthmethods/status
   - openbaocertauthengineconfigs/status
   - openbaocertauthengineroles/status
-  - openbaoextensions/status
   - openbaogroupaliases/status
   - openbaogroups/status
   - openbaoidentitytokenroles/status
@@ -90,33 +92,3 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - security.mto.stakater.com
-  resources:
-  - openbaoextensions
-  - openbaokubernetesauthroles
-  - openbaonamespaces
-  - openbaopolicies
-  - openbaosecretengines
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - tenantoperator.stakater.com
-  resources:
-  - tenants
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - tenantoperator.stakater.com
-  resources:
-  - tenants/status
-  verbs:
-  - get

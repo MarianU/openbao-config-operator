@@ -310,6 +310,59 @@ func (c *BaoClient) SignIntermediate(ctx context.Context, rootMount, csr string)
 	return "", errors.New("unexpected sign-intermediate response format")
 }
 
+// ------------ Identity OIDC keys (/v1/identity/oidc/key/<name>) ------------
+
+// WriteIdentityOIDCKey creates or overwrites an OIDC signing key. The
+// typed baoclient.Client does not expose this endpoint (the operator
+// doesn't manage OIDC keys), but OpenBaoIdentityTokenRole needs a
+// pre-existing key to reference, so the e2e setup writes one directly.
+func (c *BaoClient) WriteIdentityOIDCKey(ctx context.Context, name string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.BaseURL+"/v1/identity/oidc/key/"+name,
+		strings.NewReader(`{"allowed_client_ids":"*","algorithm":"RS256"}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Vault-Token", c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return statusErr(resp, "write identity oidc key "+name)
+	}
+	return nil
+}
+
+// DeleteIdentityOIDCKey removes an OIDC signing key. Returns nil on a
+// 2xx; returns ErrIdentityOIDCKeyNotFound on a 404 so callers can
+// distinguish "already deleted" (acceptable in AfterAll cleanup) from
+// "path typo" (the test fixture is wrong and was silently passing
+// against an empty bao). Other non-2xx surfaces verbatim.
+func (c *BaoClient) DeleteIdentityOIDCKey(ctx context.Context, name string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "/v1/identity/oidc/key/"+name, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 300 {
+		return nil
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrIdentityOIDCKeyNotFound
+	}
+	return statusErr(resp, "delete identity oidc key "+name)
+}
+
+// ErrIdentityOIDCKeyNotFound is the sentinel returned by
+// DeleteIdentityOIDCKey when the key does not exist on the bao side.
+// Callers that legitimately tolerate "already deleted" (e.g. AfterAll
+// cleanup) should explicitly match this with errors.Is; callers that
+// asserted prior existence should treat it as a test bug.
+var ErrIdentityOIDCKeyNotFound = errors.New("identity oidc key not found")
+
 // ------------ K8s Role (/v1/auth/<mount>/role/<name>) ------------
 
 type K8sRole struct {

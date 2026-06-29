@@ -44,27 +44,22 @@ const (
 type fakeBao struct {
 	// secretMounts keyed as "<openbaoNs>|<path>".
 	secretMounts map[string]baoclient.SecretEngineMount
-	// authMounts keyed similarly.
-	authMounts map[string]baoclient.AuthMount
 
 	// Error injection.
 	enableSecretErr  error
 	tuneSecretErr    error
 	getSecretErr     error
 	disableSecretErr error
-	enableAuthErr    error
-	getAuthErr       error
 	disableAuthErr   error
 
 	// Call counters.
 	enableSecret, tuneSecret, getSecret, disableSecret int
-	enableAuth, getAuth, disableAuth                   int
+	disableAuth                                        int
 }
 
 func newFakeBao() *fakeBao {
 	return &fakeBao{
 		secretMounts: map[string]baoclient.SecretEngineMount{},
-		authMounts:   map[string]baoclient.AuthMount{},
 	}
 }
 
@@ -72,9 +67,6 @@ func mountKey(ns, path string) string { return ns + "|" + path }
 
 // Existing methods stubbed; mount controller doesn't touch policies/roles.
 func (f *fakeBao) CheckKVv2Mount(ctx context.Context, mount string, opts ...baoclient.CallOption) (bool, error) {
-	return true, nil
-}
-func (f *fakeBao) CheckAuthMount(ctx context.Context, mount string, opts ...baoclient.CallOption) (bool, error) {
 	return true, nil
 }
 func (f *fakeBao) UpsertPolicy(ctx context.Context, name, rules string, opts ...baoclient.CallOption) error {
@@ -151,36 +143,11 @@ func (f *fakeBao) DisableSecretEngineMount(ctx context.Context, mount string, op
 	return nil
 }
 
-func (f *fakeBao) EnableAuthMount(ctx context.Context, mount, typ string, opts ...baoclient.CallOption) error {
-	f.enableAuth++
-	if f.enableAuthErr != nil {
-		return f.enableAuthErr
-	}
-	ns := baoclient.NamespaceFromOpts(opts)
-	f.authMounts[mountKey(ns, mount)] = baoclient.AuthMount{Type: typ}
-	return nil
-}
-
-func (f *fakeBao) GetAuthMount(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.AuthMount, error) {
-	f.getAuth++
-	if f.getAuthErr != nil {
-		return nil, f.getAuthErr
-	}
-	ns := baoclient.NamespaceFromOpts(opts)
-	got, ok := f.authMounts[mountKey(ns, mount)]
-	if !ok {
-		return nil, baoclient.ErrNotFound
-	}
-	return &got, nil
-}
-
 func (f *fakeBao) DisableAuthMount(ctx context.Context, mount string, opts ...baoclient.CallOption) error {
 	f.disableAuth++
 	if f.disableAuthErr != nil {
 		return f.disableAuthErr
 	}
-	ns := baoclient.NamespaceFromOpts(opts)
-	delete(f.authMounts, mountKey(ns, mount))
 	return nil
 }
 

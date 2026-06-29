@@ -3,12 +3,9 @@
 // disable / tune shape, different bao endpoint. Auth mounts hold the
 // bao-side authentication state for downstream primitives like
 // OpenBaoCertAuthEngineConfig, OpenBaoJWTOIDCAuthEngineConfig, and
-// the existing kubernetes auth mount used by OpenBaoKubernetesAuthRole.
-//
-// type=kubernetes is special-cased in the existing ClusterAuth
-// startup flow (the operator self-mounts kubernetes auth at
-// constants.DefaultAuthMount); use OpenBaoAuthMethod for any other
-// auth-mount kind that the operator's downstream primitives need.
+// the kubernetes auth mount used by OpenBaoKubernetesAuthRole. Every
+// auth mount the operator manages — including type=kubernetes — is
+// provisioned through this CR.
 package v1alpha1
 
 import (

@@ -151,12 +151,7 @@ test-e2e:
 		kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
 		exit 1; \
 	fi
-#	@# 2b) Apply OpenBaoExtension CR (ensures ClusterAuth reconciles)
-#	@kubectl apply -f hack/e2e/obx/openbaoextension.yaml
-#	@# Wait until the CR reports Ready, instead of racing
-#	@kubectl -n $(OPERATOR_NS) wait --for=condition=Ready --timeout=120s openbaoextension/obx || \
-#		{ echo "OpenBaoExtension not Ready in time"; exit 1; }
-	@# 3) Read limited token from Secret and run tests with env set
+	@# 2) Read limited token from Secret and run tests with env set
 	@TOKEN=$$(kubectl -n $(OPERATOR_NS) get secret $(TOKEN_SECRET) \
 		-o go-template='{{index .data "$(TOKEN_KEY)" | base64decode}}'); \
 	if [ -z "$$TOKEN" ]; then echo "ERROR: empty VAULT_TOKEN from secret $(TOKEN_SECRET)"; \
@@ -168,11 +163,6 @@ test-e2e:
 	RC=$$?; \
 	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
 	exit $$RC
-
-.PHONY: tenant-crd-install
-tenant-crd-install:
-	@echo "Installing Tenant CRD"
-	$(KUBECTL) apply -f hack/e2e/mto/tenant.yaml
 
 .PHONY: openbao-install
 openbao-install: helm
@@ -268,12 +258,11 @@ load-image: ## Load local image into Kind cluster if it exists locally, otherwis
 	$(MAKE) cluster ACTION=load-image
 
 .PHONY: deploy
-deploy: kustomize setup-cluster tenant-crd-install openbao-install openbao-provision-creds install
+deploy: kustomize setup-cluster openbao-install openbao-provision-creds install
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG) && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
-	$(KUBECTL) wait --for=condition=Established crd/openbaoextensions.security.mto.stakater.com --timeout=60s
-	$(KUBECTL) wait --for=condition=Established crd/tenants.tenantoperator.stakater.com --timeout=60s
+	$(KUBECTL) wait --for=condition=Established crd/openbaopolicies.security.mto.stakater.com --timeout=60s
 	$(KUBECTL) -n $(OPERATOR_NS) rollout status deployment/mto-extension-openbao-controller-manager --timeout=180s
 
 .PHONY: undeploy
