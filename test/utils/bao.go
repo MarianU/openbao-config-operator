@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,16 +52,19 @@ func NewBaoClientFromEnv() *BaoClient {
 	}
 }
 
-func (c *BaoClient) do(ctx context.Context, method, path string) (*http.Response, error) {
+func (c *BaoClient) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-Vault-Token", c.Token) // Vault/OpenBao-compatible
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	return c.http.Do(req)
 }
 
@@ -148,7 +152,7 @@ func (m Mounts) HasKVv2(path string) bool {
 }
 
 func (c *BaoClient) ListMounts(ctx context.Context) (Mounts, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/v1/sys/mounts")
+	resp, err := c.do(ctx, http.MethodGet, "/v1/sys/mounts", nil)
 	if err != nil {
 		return Mounts{}, err
 	}
@@ -193,7 +197,7 @@ func (c *BaoClient) ListMounts(ctx context.Context) (Mounts, error) {
 // ------------ Policy (/v1/sys/policies/acl/<name>) ------------
 
 func (c *BaoClient) GetPolicy(ctx context.Context, name string) (string, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/v1/sys/policies/acl/"+name)
+	resp, err := c.do(ctx, http.MethodGet, "/v1/sys/policies/acl/"+name, nil)
 	if err != nil {
 		return "", err
 	}
@@ -239,6 +243,73 @@ func (c *BaoClient) GetPolicy(ctx context.Context, name string) (string, error) 
 	return "", errors.New("unexpected policy response format")
 }
 
+// ------------ PKI (/v1/<mount>/...) ------------
+
+// GetPKICACert reads the CA cert PEM at /v1/<mount>/cert/ca. Returns a
+// "not found"-flavoured error when the mount has no CA yet (bao 2.x emits 400
+// "no default issuer" for an empty mount).
+func (c *BaoClient) GetPKICACert(ctx context.Context, mount string) (string, error) {
+	mount = strings.Trim(mount, "/")
+	resp, err := c.do(ctx, http.MethodGet, "/v1/"+mount+"/cert/ca", nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw := readBody(resp.Body, 1<<20)
+	if resp.StatusCode == http.StatusNotFound ||
+		(resp.StatusCode == http.StatusBadRequest && strings.Contains(raw, "no default issuer")) {
+		return "", fmt.Errorf("pki CA at %q not found", mount)
+	}
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("get pki ca %q: HTTP %d: %s", mount, resp.StatusCode, strings.TrimSpace(raw))
+	}
+	var wrapped struct {
+		Data struct {
+			Certificate string `json:"certificate"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && wrapped.Data.Certificate != "" {
+		return wrapped.Data.Certificate, nil
+	}
+	// Some mounts return the raw PEM directly (Accept text/plain fallback).
+	if strings.Contains(raw, "BEGIN CERTIFICATE") {
+		return raw, nil
+	}
+	return "", errors.New("unexpected pki ca response format")
+}
+
+// SignIntermediate signs a CSR with the root mount and returns the signed
+// intermediate certificate PEM. Used by the offline-signer e2e path.
+func (c *BaoClient) SignIntermediate(ctx context.Context, rootMount, csr string) (string, error) {
+	rootMount = strings.Trim(rootMount, "/")
+	buf, err := json.Marshal(map[string]any{
+		"csr":    csr,
+		"format": "pem_bundle",
+		"ttl":    "43800h",
+	})
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/v1/"+rootMount+"/root/sign-intermediate", bytes.NewReader(buf))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw := readBody(resp.Body, 1<<20)
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("sign-intermediate on %q: HTTP %d: %s", rootMount, resp.StatusCode, strings.TrimSpace(raw))
+	}
+	var wrapped struct {
+		Data struct {
+			Certificate string `json:"certificate"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && wrapped.Data.Certificate != "" {
+		return wrapped.Data.Certificate, nil
+	}
+	return "", errors.New("unexpected sign-intermediate response format")
+}
+
 // ------------ K8s Role (/v1/auth/<mount>/role/<name>) ------------
 
 type K8sRole struct {
@@ -249,7 +320,7 @@ type K8sRole struct {
 
 func (c *BaoClient) GetK8sRole(ctx context.Context, name string) (*K8sRole, error) {
 	path := fmt.Sprintf("/v1/auth/%s/role/%s", c.K8sAuthPath, name)
-	resp, err := c.do(ctx, http.MethodGet, path)
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}

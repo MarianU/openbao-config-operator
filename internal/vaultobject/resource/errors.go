@@ -27,6 +27,11 @@ const (
 	// Surfaced as its own reason so dashboards distinguish "user must flip a
 	// gate" from a generic BaoError or a controller-side bug.
 	ReasonDeleteBlocked = "DeleteBlocked"
+	// ReasonAwaitingExternalSignature covers an intermediate-CA config that has
+	// generated and exported its CSR and is waiting for the externally-signed
+	// cert to land in its referenced Secret. It is not a failure — the
+	// reconcile requeues until the signed cert appears.
+	ReasonAwaitingExternalSignature = "AwaitingExternalSignature"
 )
 
 // ErrNameCollision is returned by a primitive's BaoWrite callback when it
@@ -62,6 +67,14 @@ var ErrInvalidSpec = errors.New("invalid spec")
 // user flips the gate.
 var ErrDeleteBlocked = errors.New("bao delete blocked")
 
+// ErrAwaitingExternalSignature is returned by a primitive's BaoWrite when it
+// is waiting on an out-of-band action (e.g. an offline root signing an
+// intermediate CSR). It is NOT a failure: the base's error path surfaces
+// ReasonAwaitingExternalSignature on Ready=False and requeues at ErrorBackoff,
+// while the durable state (the CSR Secret) persists across reconciles. Wrap
+// with fmt.Errorf("%w: ...", ErrAwaitingExternalSignature, ...) for context.
+var ErrAwaitingExternalSignature = errors.New("awaiting external signature")
+
 // ClassifyErr maps a bao client error to a Reason. Detection is structured:
 // the wrapper at internal/client tags every SDK error with HTTP status via
 // *baoclient.StatusError, so we never have to string-match an error
@@ -70,6 +83,9 @@ var ErrDeleteBlocked = errors.New("bao delete blocked")
 func ClassifyErr(err error) string {
 	if err == nil {
 		return ReasonReconciled
+	}
+	if errors.Is(err, ErrAwaitingExternalSignature) {
+		return ReasonAwaitingExternalSignature
 	}
 	if errors.Is(err, ErrNameCollision) {
 		return ReasonNameCollision

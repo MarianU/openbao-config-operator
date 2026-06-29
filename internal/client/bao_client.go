@@ -14,7 +14,9 @@ package client
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -92,6 +94,14 @@ type Client interface {
 	ReadPKICA(ctx context.Context, mount string, opts ...CallOption) (*PKICAResponse, error)
 	WritePKIURLs(ctx context.Context, mount string, in PKIURLsInput, opts ...CallOption) error
 	ReadPKIURLs(ctx context.Context, mount string, opts ...CallOption) (*PKIURLsInput, error)
+
+	// PKI intermediate-CA flow. GenerateIntermediateCSR creates a key + CSR on
+	// the intermediate mount; SignIntermediate signs that CSR with a root mount
+	// (applying name constraints); SetSignedIntermediate binds the signed cert
+	// back to the intermediate mount's pending key.
+	GenerateIntermediateCSR(ctx context.Context, mount string, in PKIIntermediateGenerateInput, opts ...CallOption) (string, error)
+	SignIntermediate(ctx context.Context, rootMount, csr string, in PKISignIntermediateInput, opts ...CallOption) (string, error)
+	SetSignedIntermediate(ctx context.Context, mount, certificate string, opts ...CallOption) error
 
 	// PKI roles (post-mount, post-CA). Roles define what certs may be
 	// issued from a given PKI mount.
@@ -357,23 +367,92 @@ type PKIRoleSpec struct {
 	RequireCN        bool
 }
 
-// PKIRootGenerateInput is the body for /<mount>/root/generate/internal.
-// Only the fields the controller currently exposes through the CR spec
-// are present; expand as the spec grows.
+// PKIGenCommon is the shared subject/SAN/key body for the root-generate and
+// intermediate-generate endpoints. Field set matches the upstream-aligned
+// OpenBaoPKISecretEngineConfig spec.
+type PKIGenCommon struct {
+	TTL                 string
+	KeyType             string // rsa | ec
+	KeyBits             int
+	AltNames            string
+	IPSans              string
+	URISans             string
+	OtherSans           string
+	Format              string
+	PrivateKeyFormat    string
+	Country             string
+	Locality            string
+	Province            string
+	StreetAddress       string
+	PostalCode          string
+	Organization        string
+	OU                  string
+	SerialNumber        string
+	MaxPathLength       int
+	ExcludeCNFromSAN    bool
+	PermittedDnsDomains []string
+}
+
+// applyPKIGenCommon writes the non-empty common fields onto a generate body.
+func applyPKIGenCommon(body map[string]interface{}, c PKIGenCommon) {
+	set := func(k, v string) {
+		if v != "" {
+			body[k] = v
+		}
+	}
+	set("ttl", c.TTL)
+	set("key_type", c.KeyType)
+	if c.KeyBits > 0 {
+		body["key_bits"] = c.KeyBits
+	}
+	set("alt_names", c.AltNames)
+	set("ip_sans", c.IPSans)
+	set("uri_sans", c.URISans)
+	set("other_sans", c.OtherSans)
+	set("format", c.Format)
+	set("private_key_format", c.PrivateKeyFormat)
+	set("country", c.Country)
+	set("locality", c.Locality)
+	set("province", c.Province)
+	set("street_address", c.StreetAddress)
+	set("postal_code", c.PostalCode)
+	set("organization", c.Organization)
+	set("ou", c.OU)
+	set("serial_number", c.SerialNumber)
+	if c.MaxPathLength != 0 {
+		body["max_path_length"] = c.MaxPathLength
+	}
+	if c.ExcludeCNFromSAN {
+		body["exclude_cn_from_sans"] = true
+	}
+	if len(c.PermittedDnsDomains) > 0 {
+		body["permitted_dns_domains"] = strings.Join(c.PermittedDnsDomains, ",")
+	}
+}
+
+// PKIRootGenerateInput is the body for /<mount>/root/generate/<privateKeyType>.
+// Field set matches the OpenBaoPKISecretEngineConfig spec (upstream-aligned).
 type PKIRootGenerateInput struct {
-	CommonName       string
-	TTL              string
-	KeyType          string // rsa | ec | ed25519
-	KeyBits          int
-	Country          []string
-	Locality         []string
-	Province         []string
-	StreetAddress    []string
-	PostalCode       []string
-	Organization     []string
-	OU               []string
-	MaxPathLength    int
-	ExcludeCNFromSAN bool
+	CommonName     string
+	PrivateKeyType string // internal | exported (endpoint segment); default internal
+	PKIGenCommon
+}
+
+// PKIIntermediateGenerateInput is the body for
+// /<mount>/intermediate/generate/<privateKeyType>.
+type PKIIntermediateGenerateInput struct {
+	CommonName     string
+	PrivateKeyType string // internal | exported (endpoint segment); default internal
+	PKIGenCommon
+}
+
+// PKISignIntermediateInput is the body for /<rootMount>/root/sign-intermediate.
+type PKISignIntermediateInput struct {
+	CommonName          string
+	TTL                 string
+	MaxPathLength       int
+	Format              string
+	PermittedDnsDomains []string
 }
 
 // PKICAResponse captures the bao-side data we surface to the controller.
@@ -1155,44 +1234,13 @@ func (c *sdkClient) GenerateRootPKI(ctx context.Context, mount string, in PKIRoo
 	if strings.TrimSpace(in.CommonName) == "" {
 		return nil, errors.New("common_name is required")
 	}
+	genType := strings.TrimSpace(in.PrivateKeyType)
+	if genType == "" {
+		genType = "internal"
+	}
 	body := map[string]interface{}{"common_name": in.CommonName}
-	if in.TTL != "" {
-		body["ttl"] = in.TTL
-	}
-	if in.KeyType != "" {
-		body["key_type"] = in.KeyType
-	}
-	if in.KeyBits > 0 {
-		body["key_bits"] = in.KeyBits
-	}
-	if len(in.Country) > 0 {
-		body["country"] = in.Country
-	}
-	if len(in.Locality) > 0 {
-		body["locality"] = in.Locality
-	}
-	if len(in.Province) > 0 {
-		body["province"] = in.Province
-	}
-	if len(in.StreetAddress) > 0 {
-		body["street_address"] = in.StreetAddress
-	}
-	if len(in.PostalCode) > 0 {
-		body["postal_code"] = in.PostalCode
-	}
-	if len(in.Organization) > 0 {
-		body["organization"] = in.Organization
-	}
-	if len(in.OU) > 0 {
-		body["ou"] = in.OU
-	}
-	if in.MaxPathLength != 0 {
-		body["max_path_length"] = in.MaxPathLength
-	}
-	if in.ExcludeCNFromSAN {
-		body["exclude_cn_from_sans"] = true
-	}
-	path := mount + "/root/generate/internal"
+	applyPKIGenCommon(body, in.PKIGenCommon)
+	path := mount + "/root/generate/" + genType
 	resp, err := c.clientFor(opts).Logical().WriteWithContext(ctx, path, body)
 	if err != nil {
 		return nil, wrapStatus(err)
@@ -1204,6 +1252,104 @@ func (c *sdkClient) GenerateRootPKI(ctx context.Context, mount string, in PKIRoo
 		SerialNumber: asString(resp.Data["serial_number"]),
 		Certificate:  asString(resp.Data["certificate"]),
 	}, nil
+}
+
+// GenerateIntermediateCSR calls /<mount>/intermediate/generate/<privateKeyType>
+// and returns the PEM CSR. The private key is stored inside bao until
+// SetSignedIntermediate binds the signed cert to it.
+func (c *sdkClient) GenerateIntermediateCSR(ctx context.Context, mount string, in PKIIntermediateGenerateInput, opts ...CallOption) (string, error) {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return "", errors.New("mount path is empty")
+	}
+	if strings.TrimSpace(in.CommonName) == "" {
+		return "", errors.New("common_name is required")
+	}
+	genType := strings.TrimSpace(in.PrivateKeyType)
+	if genType == "" {
+		genType = "internal"
+	}
+	body := map[string]interface{}{"common_name": in.CommonName}
+	applyPKIGenCommon(body, in.PKIGenCommon)
+	path := mount + "/intermediate/generate/" + genType
+	resp, err := c.clientFor(opts).Logical().WriteWithContext(ctx, path, body)
+	if err != nil {
+		return "", wrapStatus(err)
+	}
+	if resp == nil || resp.Data == nil {
+		return "", fmt.Errorf("empty response from %s", path)
+	}
+	csr := asString(resp.Data["csr"])
+	if csr == "" {
+		return "", fmt.Errorf("no csr in response from %s", path)
+	}
+	return csr, nil
+}
+
+// SignIntermediate calls /<rootMount>/root/sign-intermediate and returns the
+// signed intermediate cert (PEM; ca_chain appended when present so set-signed
+// can build the full chain). Name constraints are applied here via
+// permitted_dns_domains.
+func (c *sdkClient) SignIntermediate(ctx context.Context, rootMount, csr string, in PKISignIntermediateInput, opts ...CallOption) (string, error) {
+	rootMount = strings.Trim(rootMount, "/")
+	if rootMount == "" {
+		return "", errors.New("root mount path is empty")
+	}
+	if strings.TrimSpace(csr) == "" {
+		return "", errors.New("csr is required")
+	}
+	body := map[string]interface{}{"csr": csr}
+	if in.CommonName != "" {
+		body["common_name"] = in.CommonName
+	}
+	if in.TTL != "" {
+		body["ttl"] = in.TTL
+	}
+	if in.MaxPathLength != 0 {
+		body["max_path_length"] = in.MaxPathLength
+	}
+	if in.Format != "" {
+		body["format"] = in.Format
+	}
+	if len(in.PermittedDnsDomains) > 0 {
+		body["permitted_dns_domains"] = strings.Join(in.PermittedDnsDomains, ",")
+	}
+	path := rootMount + "/root/sign-intermediate"
+	resp, err := c.clientFor(opts).Logical().WriteWithContext(ctx, path, body)
+	if err != nil {
+		return "", wrapStatus(err)
+	}
+	if resp == nil || resp.Data == nil {
+		return "", fmt.Errorf("empty response from %s", path)
+	}
+	cert := asString(resp.Data["certificate"])
+	if cert == "" {
+		return "", fmt.Errorf("no certificate in response from %s", path)
+	}
+	for _, ca := range asStringSlice(resp.Data["ca_chain"]) {
+		if ca != "" && ca != cert {
+			cert += "\n" + ca
+		}
+	}
+	return cert, nil
+}
+
+// SetSignedIntermediate calls /<mount>/intermediate/set-signed, binding the
+// signed cert to the pending key generated by GenerateIntermediateCSR.
+func (c *sdkClient) SetSignedIntermediate(ctx context.Context, mount, certificate string, opts ...CallOption) error {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return errors.New("mount path is empty")
+	}
+	if strings.TrimSpace(certificate) == "" {
+		return errors.New("certificate is required")
+	}
+	path := mount + "/intermediate/set-signed"
+	_, err := c.clientFor(opts).Logical().WriteWithContext(ctx, path, map[string]interface{}{"certificate": certificate})
+	if err != nil {
+		return wrapStatus(err)
+	}
+	return nil
 }
 
 // ReadPKICA fetches the active CA cert at <mount>/cert/ca. Returns
@@ -1237,10 +1383,42 @@ func (c *sdkClient) ReadPKICA(ctx context.Context, mount string, opts ...CallOpt
 	if cert == "" {
 		return nil, ErrNotFound
 	}
+	// OpenBao's <mount>/cert/ca read returns only the certificate (no
+	// serial_number), unlike the generate/sign endpoints. Fall back to
+	// parsing the serial out of the cert so callers (drift re-writes,
+	// intermediate set-signed, adoption/backfill) still capture it.
+	serial := asString(resp.Data["serial_number"])
+	if serial == "" {
+		serial = serialFromCertPEM(cert)
+	}
 	return &PKICAResponse{
-		SerialNumber: asString(resp.Data["serial_number"]),
+		SerialNumber: serial,
 		Certificate:  cert,
 	}, nil
+}
+
+// serialFromCertPEM parses the first certificate in a PEM bundle and returns
+// its serial in OpenBao's colon-separated lowercase-hex form (e.g.
+// "17:05:04:..."). Best-effort: returns "" when the PEM can't be parsed —
+// the serial is a status field, never a gate.
+func serialFromCertPEM(pemData string) string {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return ""
+	}
+	crt, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	b := crt.SerialNumber.Bytes()
+	if len(b) == 0 {
+		return "00"
+	}
+	parts := make([]string, len(b))
+	for i, x := range b {
+		parts[i] = fmt.Sprintf("%02x", x)
+	}
+	return strings.Join(parts, ":")
 }
 
 // WritePKIURLs configures the AIA / CRL / OCSP distribution points

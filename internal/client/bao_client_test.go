@@ -2,17 +2,42 @@ package client
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	vault "github.com/hashicorp/vault/api"
 )
+
+// makeCertPEM builds a self-signed cert PEM carrying the given serial — used to
+// exercise serial parsing without a live bao.
+func makeCertPEM(t *testing.T, serial *big.Int) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Unix(0, 0),
+		NotAfter:     time.Unix(1<<31, 0),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
 
 // Spins up a local httptest server speaking just enough of the OpenBao
 // HTTP API for these contract tests. Each handler returns a status + body;
@@ -641,6 +666,23 @@ func TestWithNamespace_AppliesToK8sRoleWrite(t *testing.T) {
 	require.Equal(t, "acme/", seen[0])
 }
 
+// Cross-namespace intermediate signing depends on SignIntermediate honoring the
+// namespace option (the sign call targets the signing CA's namespace, which may
+// differ from the intermediate's). Lock that contract.
+func TestWithNamespace_AppliesToSignIntermediate(t *testing.T) {
+	t.Parallel()
+	var seen string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("X-Vault-Namespace")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"certificate": "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----"},
+		})
+	})
+	_, err := c.SignIntermediate(context.Background(), "pki-platform", "CSR", PKISignIntermediateInput{}, WithNamespace("platform/"))
+	require.NoError(t, err)
+	require.Equal(t, "platform/", seen, "sign-intermediate must honor the namespace option")
+}
+
 func TestWithNamespace_AppliesToGetPolicy(t *testing.T) {
 	t.Parallel()
 	var seen []string
@@ -1072,16 +1114,43 @@ func TestGenerateRootPKI_PostsCommonName_ParsesSerial(t *testing.T) {
 	})
 	resp, err := c.GenerateRootPKI(context.Background(), "pki", PKIRootGenerateInput{
 		CommonName: "Test CA",
-		TTL:        "8760h",
-		KeyType:    "rsa",
-		KeyBits:    2048,
+		PKIGenCommon: PKIGenCommon{
+			TTL:                 "8760h",
+			KeyType:             "rsa",
+			KeyBits:             2048,
+			MaxPathLength:       -1,
+			Organization:        "Stakater",
+			PermittedDnsDomains: []string{"svc.cluster.local", "example.com"},
+		},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "/v1/pki/root/generate/internal", gotPath)
 	require.Equal(t, "Test CA", gotBody["common_name"])
 	require.Equal(t, "8760h", gotBody["ttl"])
 	require.Equal(t, "rsa", gotBody["key_type"])
+	require.Equal(t, "Stakater", gotBody["organization"])
+	require.EqualValues(t, -1, gotBody["max_path_length"])
+	// permitted_dns_domains is a comma-joined string (bao API shape).
+	require.Equal(t, "svc.cluster.local,example.com", gotBody["permitted_dns_domains"])
 	require.Equal(t, "ab:cd:ef", resp.SerialNumber)
+}
+
+// An exported private-key type changes the endpoint segment.
+func TestGenerateRootPKI_PrivateKeyTypeExported_EndpointSegment(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"serial_number": "aa", "certificate": "x"},
+		})
+	})
+	_, err := c.GenerateRootPKI(context.Background(), "pki", PKIRootGenerateInput{
+		CommonName:     "Test CA",
+		PrivateKeyType: "exported",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki/root/generate/exported", gotPath)
 }
 
 func TestGenerateRootPKI_RejectsEmptyCommonName(t *testing.T) {
@@ -1091,6 +1160,130 @@ func TestGenerateRootPKI_RejectsEmptyCommonName(t *testing.T) {
 	})
 	_, err := c.GenerateRootPKI(context.Background(), "pki", PKIRootGenerateInput{})
 	require.ErrorContains(t, err, "common_name")
+}
+
+// ---- GenerateIntermediateCSR / SignIntermediate / SetSignedIntermediate ----
+
+func TestGenerateIntermediateCSR_PostsBody_ReturnsCSR(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"csr": "-----BEGIN CERTIFICATE REQUEST-----\nFAKE\n-----END CERTIFICATE REQUEST-----\n"},
+		})
+	})
+	csr, err := c.GenerateIntermediateCSR(context.Background(), "pki-int", PKIIntermediateGenerateInput{
+		CommonName: "Intermediate CA",
+		PKIGenCommon: PKIGenCommon{
+			KeyType: "rsa",
+			KeyBits: 2048,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki-int/intermediate/generate/internal", gotPath)
+	require.Equal(t, "Intermediate CA", gotBody["common_name"])
+	require.Equal(t, "rsa", gotBody["key_type"])
+	require.Contains(t, csr, "BEGIN CERTIFICATE REQUEST")
+}
+
+func TestSignIntermediate_PostsCSRAndConstraints_ReturnsCertWithChain(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"certificate": "-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----",
+				"ca_chain": []string{
+					"-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----",
+					"-----BEGIN CERTIFICATE-----\nROOT\n-----END CERTIFICATE-----",
+				},
+			},
+		})
+	})
+	cert, err := c.SignIntermediate(context.Background(), "pki-root", "THE-CSR", PKISignIntermediateInput{
+		CommonName:          "Intermediate CA",
+		TTL:                 "43800h",
+		MaxPathLength:       0,
+		PermittedDnsDomains: []string{"svc.cluster.local"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki-root/root/sign-intermediate", gotPath)
+	require.Equal(t, "THE-CSR", gotBody["csr"])
+	require.Equal(t, "43800h", gotBody["ttl"])
+	require.Equal(t, "svc.cluster.local", gotBody["permitted_dns_domains"])
+	// The leaf is returned and the (distinct) root from ca_chain is appended;
+	// the duplicate leaf entry in ca_chain is not.
+	require.Contains(t, cert, "LEAF")
+	require.Contains(t, cert, "ROOT")
+}
+
+func TestSignIntermediate_RejectsEmptyCSR(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao when CSR is empty")
+	})
+	_, err := c.SignIntermediate(context.Background(), "pki-root", "", PKISignIntermediateInput{})
+	require.ErrorContains(t, err, "csr")
+}
+
+func TestSetSignedIntermediate_PostsCertificate(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	var gotBody map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	err := c.SetSignedIntermediate(context.Background(), "pki-int", "-----BEGIN CERTIFICATE-----\nSIGNED\n-----END CERTIFICATE-----")
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki-int/intermediate/set-signed", gotPath)
+	require.Contains(t, gotBody["certificate"], "SIGNED")
+}
+
+func TestSetSignedIntermediate_RejectsEmptyCertificate(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao when certificate is empty")
+	})
+	err := c.SetSignedIntermediate(context.Background(), "pki-int", "")
+	require.ErrorContains(t, err, "certificate")
+}
+
+// ---- serial parsing (OpenBao's cert/ca read omits serial_number) ----
+
+func TestSerialFromCertPEM_FormatsColonHex(t *testing.T) {
+	t.Parallel()
+	pemStr := makeCertPEM(t, big.NewInt(0x1a2b3c))
+	require.Equal(t, "1a:2b:3c", serialFromCertPEM(pemStr))
+}
+
+func TestSerialFromCertPEM_Garbage_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "", serialFromCertPEM("not a pem"))
+	require.Equal(t, "", serialFromCertPEM("-----BEGIN CERTIFICATE-----\nbm90LWRlcg==\n-----END CERTIFICATE-----\n"))
+}
+
+// ReadPKICA must derive the serial from the cert when bao's cert/ca read
+// returns no serial_number field (the real OpenBao 2.x behaviour).
+func TestReadPKICA_ParsesSerialFromCertWhenAbsent(t *testing.T) {
+	t.Parallel()
+	pemStr := makeCertPEM(t, big.NewInt(0xdeadbeef))
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/pki/cert/ca", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"certificate": pemStr}, // no serial_number
+		})
+	})
+	resp, err := c.ReadPKICA(context.Background(), "pki")
+	require.NoError(t, err)
+	require.Equal(t, "de:ad:be:ef", resp.SerialNumber)
 }
 
 // ---- ReadPKICA ----

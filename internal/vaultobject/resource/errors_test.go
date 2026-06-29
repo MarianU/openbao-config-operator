@@ -87,6 +87,20 @@ func TestClassifyErr_InvalidSpec(t *testing.T) {
 	}
 }
 
+func TestClassifyErr_AwaitingExternalSignature(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("%w: sign the CSR in secret %q", ErrAwaitingExternalSignature, "x-intermediate-csr")
+	if got := ClassifyErr(wrapped); got != ReasonAwaitingExternalSignature {
+		t.Errorf("ClassifyErr(wrapped ErrAwaitingExternalSignature) = %q, want %q", got, ReasonAwaitingExternalSignature)
+	}
+	// A bare error with similar text but no sentinel wrap must NOT classify
+	// as awaiting — keeps detection precise.
+	plain := errors.New("awaiting external signature for some reason")
+	if got := ClassifyErr(plain); got == ReasonAwaitingExternalSignature {
+		t.Errorf("plain error should not match ReasonAwaitingExternalSignature, got %q", got)
+	}
+}
+
 func TestClassifyErr_DeleteBlocked(t *testing.T) {
 	t.Parallel()
 	wrapped := fmt.Errorf("%w: bao requires deletion_allowed=true", ErrDeleteBlocked)

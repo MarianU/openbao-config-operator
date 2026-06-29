@@ -6,35 +6,25 @@
 // Licensed under the Apache License, Version 2.0
 // <https://www.apache.org/licenses/LICENSE-2.0>.
 //
-// Modifications relative to upstream:
+// The spec field set, names, json tags, and defaults match upstream exactly
+// (root + intermediate CA generation, the full PKICommon/PKIConfig field set,
+// and the PKIIntermediate signing models), with two deliberate exceptions:
 //   - Kind renamed PKISecretEngineConfig → OpenBaoPKISecretEngineConfig.
-//   - Trimmed to root CA generation only — pkiType=root is the single
-//     supported value (single-step CA generation via
-//     /root/generate/internal). The PKIType enum is open for additive
-//     extension so other generation flavours can be added without
-//     breaking root-only consumers.
-//   - spec.openbaoNamespace added (X-Vault-Namespace target);
-//     spec.authentication and spec.connection removed (operator uses
-//     a single token from OpenBaoExtension).
-//   - IsDeletable returns false (see below); the rename-cleanup path
-//     skips BaoDeleteIdentity for the same reason.
-//   - status.phase / status.caSerialNumber capture the bootstrap
-//     state machine; status.lastWrittenBaoName /
-//     status.lastWrittenOpenBaoNamespace track the bao identity for
-//     rename detection.
+//   - spec.connection and spec.authentication are NOT carried — this operator
+//     authenticates every primitive with a single operator token
+//     (VAULT_TOKEN / OpenBaoExtension), so per-CR Vault auth has no code path.
+//     spec.openbaoNamespace (X-Vault-Namespace target) replaces upstream's
+//     authentication.namespace.
 //
-// OpenBaoPKISecretEngineConfig owns the per-mount PKI configuration:
-// generates the CA at <path>/root/generate/internal and writes the URL
-// distribution config at <path>/config/urls. Pairs with an existing
-// OpenBaoSecretEngine of kind=pki at the same spec.path — the mount
-// itself is enabled by that other CR; this one populates it.
+// Status carries upstream's generated/exported/signed booleans PLUS the
+// base-tracking fields this operator's shared VaultResource requires
+// (baoWritten, lastWrittenBaoName/OpenBaoNamespace, phase, caSerialNumber).
 //
-// IsDeletable returns false: deleting the CR must not call BaoDelete
-// because there is no bao API to "remove" a CA — disabling the PKI
-// mount destroys the private key and silently invalidates every cert
-// ever issued by it. The shared base supports this opt-out: on CR
-// delete the finalizer is released without touching bao, and the
-// rename-cleanup path skips BaoDeleteIdentity for the same reason.
+// IsDeletable returns false: deleting the CR must not call BaoDelete because
+// there is no bao API to "remove" a CA — disabling the PKI mount destroys the
+// private key and silently invalidates every cert ever issued by it. The
+// shared base releases the finalizer without touching bao and skips
+// rename-cleanup for the same reason.
 package v1alpha1
 
 import (
@@ -44,6 +34,7 @@ import (
 	"sort"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -55,68 +46,77 @@ var _ vaultobject.ConditionsAware = &OpenBaoPKISecretEngineConfig{}
 var _ vaultobject.WriteTracker = &OpenBaoPKISecretEngineConfig{}
 var _ vaultobject.RenameTracker = &OpenBaoPKISecretEngineConfig{}
 
-// PhaseActive is the only steady-state phase emitted in the root-only
-// release. Intermediate-CA support adds AwaitingExternalSignature.
-const PhaseActive = "Active"
+// Phase values for status.phase.
+const (
+	// PhaseActive: CA generated/signed and URL config published. This is the
+	// only phase the controller sets; an intermediate awaiting its external
+	// signature is surfaced via the Ready condition
+	// (reason=AwaitingExternalSignature), not phase — the shared base does not
+	// apply a status mutator on the awaiting/error path.
+	PhaseActive = "Active"
+)
 
-// PKITypeRoot is the only supported value for spec.pkiType today.
-const PKITypeRoot = "root"
+// pkiType values for spec.type.
+const (
+	PKITypeRoot         = "root"
+	PKITypeIntermediate = "intermediate"
+)
 
-// BaoName returns the canonical bao identity for this CR — the PKI
-// mount path the CA + URLs live under. Trimmed of slashes.
+// BaoName returns the canonical bao identity for this CR — the PKI mount path
+// the CA + URLs live under. Trimmed of slashes.
 func (d *OpenBaoPKISecretEngineConfig) BaoName() string {
 	return strings.Trim(d.Spec.Path, "/")
 }
 
-// OpenBaoNamespace returns the bao namespace this CR's API calls
-// target. Empty = root.
+// OpenBaoNamespace returns the bao namespace this CR's API calls target.
+// Empty = root.
 func (d *OpenBaoPKISecretEngineConfig) OpenBaoNamespace() string {
 	return strings.TrimSpace(d.Spec.OpenBaoNamespace)
 }
 
-// GetPath is the synthetic identifier used in collision messages and
-// log lines. Distinct from spec.path because logs distinguish a
-// PKIConfig at "pki" from a PKIRole at "pki" by their kind.
+// GetPath is the synthetic identifier used in collision messages and log
+// lines. Distinct from spec.path because logs distinguish a PKIConfig at "pki"
+// from a PKIRole at "pki" by their kind.
 func (d *OpenBaoPKISecretEngineConfig) GetPath() string {
 	return "pki/config/" + d.BaoName()
 }
 
 // GetPayload is unused by the controller's drift comparator —
-// IsEquivalentToDesiredState reads from the comparator's payload arg
-// directly. Kept on the interface so the type satisfies VaultObject.
+// IsEquivalentToDesiredState reads from the comparator's payload arg directly.
+// Kept on the interface so the type satisfies VaultObject.
 func (d *OpenBaoPKISecretEngineConfig) GetPayload() map[string]interface{} {
 	return nil
 }
 
-// IsEquivalentToDesiredState compares the bao-side read against the
-// CR's spec. Once a CA is active, the only mutable surface is the URL
-// config — the CA cert itself is locked because regenerating it would
-// destroy the private key. Comparison is order-insensitive on the URL
-// slices because bao stores them as sets.
+// IsEquivalentToDesiredState compares the bao-side read against the CR's spec.
+// Once a CA is active, the only mutable surfaces are the URL config and — when
+// spec.publishCABundleConfigMap is set — whether the published CA-bundle
+// ConfigMap matches the active CA cert. The CA cert itself is locked because
+// regenerating it would destroy the private key. URL comparison is
+// order-insensitive because bao stores the lists as sets.
 func (d *OpenBaoPKISecretEngineConfig) IsEquivalentToDesiredState(payload map[string]interface{}) bool {
 	caExists, _ := payload["caExists"].(bool)
 	if !caExists {
 		return false
 	}
-	desiredURLs := normalizePKIURLs(d.Spec.URLs)
+	// CA-bundle publishing drift: if the CR wants its CA published and the
+	// ConfigMap's content doesn't match the active CA cert (missing, stale, or
+	// deleted out-of-band), force a write so it self-heals on the next reconcile.
+	if strings.TrimSpace(d.Spec.PublishCABundleConfigMap) != "" {
+		desiredCA, _ := payload["caCert"].(string)
+		publishedCA, _ := payload["publishedCABundle"].(string)
+		if strings.TrimSpace(publishedCA) != strings.TrimSpace(desiredCA) {
+			return false
+		}
+	}
+	desiredURLs := map[string][]string{
+		"issuingCertificates":   sortedCopy(d.Spec.IssuingCertificates),
+		"crlDistributionPoints": sortedCopy(d.Spec.CRLDistributionPoints),
+		"ocspServers":           sortedCopy(d.Spec.OCSPServers),
+	}
 	currentURLs, _ := payload["urls"].(map[string][]string)
 	currentURLs = sortAndCopyURLs(currentURLs)
 	return reflect.DeepEqual(desiredURLs, currentURLs)
-}
-
-func normalizePKIURLs(in *PKIURLs) map[string][]string {
-	out := map[string][]string{
-		"issuingCertificates":   nil,
-		"crlDistributionPoints": nil,
-		"ocspServers":           nil,
-	}
-	if in == nil {
-		return out
-	}
-	out["issuingCertificates"] = sortedCopy(in.IssuingCertificates)
-	out["crlDistributionPoints"] = sortedCopy(in.CRLDistributionPoints)
-	out["ocspServers"] = sortedCopy(in.OCSPServers)
-	return out
 }
 
 func sortAndCopyURLs(in map[string][]string) map[string][]string {
@@ -148,8 +148,8 @@ func (d *OpenBaoPKISecretEngineConfig) IsInitialized() bool {
 	return true
 }
 
-// IsDeletable returns false. See package doc — disabling a PKI mount
-// loses the private key irreversibly.
+// IsDeletable returns false. See package doc — disabling a PKI mount loses the
+// private key irreversibly.
 func (d *OpenBaoPKISecretEngineConfig) IsDeletable() bool {
 	return false
 }
@@ -162,10 +162,18 @@ func (d *OpenBaoPKISecretEngineConfig) PrepareTLSConfig(ctx context.Context, obj
 	return nil
 }
 
-// IsValid validates spec-level invariants. Pattern markers + Required
-// catch the structural cases at admission; this catches what those
-// can't (whitespace-only commonName, kvV2-style placeholder traps if
-// any are added later).
+// PKIType returns spec.type, defaulting an empty value to root (mirrors the
+// CRD default for structs built outside the API server, e.g. in unit tests).
+func (d *OpenBaoPKISecretEngineConfig) PKIType() string {
+	if strings.TrimSpace(d.Spec.Type) == "" {
+		return PKITypeRoot
+	}
+	return d.Spec.Type
+}
+
+// IsValid validates spec-level invariants beyond what the CRD schema markers
+// catch (Pattern / Required / Enum). It rejects ambiguous signing shapes for
+// intermediates.
 func (d *OpenBaoPKISecretEngineConfig) IsValid() (bool, error) {
 	if strings.TrimSpace(d.Spec.Path) == "" {
 		return false, fmt.Errorf("spec.path must not be empty")
@@ -173,49 +181,32 @@ func (d *OpenBaoPKISecretEngineConfig) IsValid() (bool, error) {
 	if strings.TrimSpace(d.Spec.CommonName) == "" {
 		return false, fmt.Errorf("spec.commonName must not be empty")
 	}
-	if d.Spec.PKIType != PKITypeRoot {
-		return false, fmt.Errorf("spec.pkiType=%q is not supported; only %q is implemented", d.Spec.PKIType, PKITypeRoot)
+	hasInternal := d.Spec.InternalSign != nil && strings.TrimSpace(d.Spec.InternalSign.Name) != ""
+	hasExternal := d.Spec.ExternalSignSecret != nil && strings.TrimSpace(d.Spec.ExternalSignSecret.Name) != ""
+	switch d.PKIType() {
+	case PKITypeRoot:
+		if hasInternal || hasExternal {
+			return false, fmt.Errorf("spec.internalSign / spec.externalSignSecret are only valid for type=intermediate")
+		}
+	case PKITypeIntermediate:
+		if hasInternal == hasExternal {
+			return false, fmt.Errorf("spec.type=intermediate requires exactly one of spec.internalSign or spec.externalSignSecret")
+		}
+	default:
+		return false, fmt.Errorf("spec.type=%q is not supported; must be %q or %q",
+			d.Spec.Type, PKITypeRoot, PKITypeIntermediate)
 	}
 	return true, nil
 }
 
-// PKISubject groups the X.509 subject fields other than CommonName.
-// Each field is a slice because bao accepts multi-valued RDNs (e.g.
-// multiple OUs). Empty slices are dropped before being sent to bao.
-type PKISubject struct {
-	// +kubebuilder:validation:Optional
-	Country []string `json:"country,omitempty"`
-	// +kubebuilder:validation:Optional
-	Locality []string `json:"locality,omitempty"`
-	// +kubebuilder:validation:Optional
-	Province []string `json:"province,omitempty"`
-	// +kubebuilder:validation:Optional
-	StreetAddress []string `json:"streetAddress,omitempty"`
-	// +kubebuilder:validation:Optional
-	PostalCode []string `json:"postalCode,omitempty"`
-	// +kubebuilder:validation:Optional
-	Organization []string `json:"organization,omitempty"`
-	// +kubebuilder:validation:Optional
-	OU []string `json:"ou,omitempty"`
-}
-
-// PKIURLs are the CA-access points published in every issued cert
-// (Authority Information Access + CRL Distribution Points + OCSP).
-// All optional; bao's `pki/config/urls` accepts an empty body.
-type PKIURLs struct {
-	// +kubebuilder:validation:Optional
-	IssuingCertificates []string `json:"issuingCertificates,omitempty"`
-	// +kubebuilder:validation:Optional
-	CRLDistributionPoints []string `json:"crlDistributionPoints,omitempty"`
-	// +kubebuilder:validation:Optional
-	OCSPServers []string `json:"ocspServers,omitempty"`
-}
-
-// OpenBaoPKISecretEngineConfigSpec defines the desired state.
+// OpenBaoPKISecretEngineConfigSpec defines the desired state. Field set, names,
+// json tags, and defaults match upstream redhat-cop/vault-config-operator
+// exactly, except spec.connection/spec.authentication are dropped (single-token
+// model) and spec.openbaoNamespace is added.
 type OpenBaoPKISecretEngineConfigSpec struct {
-	// Path is the bao-side PKI mount path (e.g. "pki", "pki/internal").
-	// Must match an existing OpenBaoSecretEngine of kind=pki at the
-	// same path; the controller does NOT enable the mount itself.
+	// Path is the bao-side PKI mount path (e.g. "pki", "pki/internal"). Must
+	// match an existing OpenBaoSecretEngine of kind=pki at the same path; the
+	// controller does NOT enable the mount itself.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
@@ -223,53 +214,186 @@ type OpenBaoPKISecretEngineConfigSpec struct {
 	Path string `json:"path"`
 
 	// OpenBaoNamespace targets a specific OpenBao namespace via
-	// X-Vault-Namespace. Empty = root.
+	// X-Vault-Namespace. Empty = root. Replaces upstream's
+	// authentication.namespace.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern:=`^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$`
 	OpenBaoNamespace string `json:"openbaoNamespace,omitempty"`
 
-	// PKIType selects the CA generation flavour. Only "root" is
-	// supported. The enum is open-ended so other generation
-	// flavours can be added additively without a CRD-shape break.
+	// Type selects root vs intermediate CA generation.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=root
-	PKIType string `json:"pkiType"`
+	// +kubebuilder:validation:Enum:={"root","intermediate"}
+	// +kubebuilder:default="root"
+	Type string `json:"type,omitempty"`
 
-	// CommonName is the X.509 CN of the generated CA cert. Required.
+	// PrivateKeyType controls whether the generated key stays internal to bao
+	// or is exported.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum:={"internal","exported"}
+	// +kubebuilder:default="internal"
+	PrivateKeyType string `json:"privateKeyType,omitempty"`
+
+	// CommonName is the X.509 CN of the generated CA cert.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	CommonName string `json:"commonName"`
 
-	// TTL is the validity period of the CA cert as a bao duration
-	// string (e.g. "87600h" for 10 years). Empty = bao default
-	// (currently 30 days, deliberately short — set this for any
-	// production CA).
+	// AltNames is a comma-separated list of subject-alternative DNS/email names.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern:=`^([0-9]+(ns|us|ms|s|m|h|d))+$`
-	TTL string `json:"ttl,omitempty"`
+	AltNames string `json:"altNames,omitempty"`
 
-	// KeyType is the public-key algorithm. Defaults to bao's default
-	// (rsa) when empty.
+	// IPSans is a comma-separated list of IP subject-alternative names.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=rsa;ec;ed25519
+	IPSans string `json:"IPSans,omitempty"`
+
+	// URISans is a comma-separated list of URI subject-alternative names.
+	// +kubebuilder:validation:Optional
+	URISans string `json:"URISans,omitempty"`
+
+	// OtherSans is a comma-separated list of custom OID SANs.
+	// +kubebuilder:validation:Optional
+	OtherSans string `json:"otherSans,omitempty"`
+
+	// TTL is the validity period of the CA cert (bao duration). Empty = bao
+	// default.
+	// +kubebuilder:validation:Optional
+	TTL metav1.Duration `json:"TTL,omitempty"`
+
+	// Format is the output format of the issued cert.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum:={"pem","pem_bundle","der"}
+	// +kubebuilder:default="pem"
+	Format string `json:"format,omitempty"`
+
+	// PrivateKeyFormat is the output format of the private key.
+	// +kubebuilder:validation:Optional
+	PrivateKeyFormat string `json:"privateKeyFormat,omitempty"`
+
+	// KeyType is the public-key algorithm.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum:={"rsa","ec"}
+	// +kubebuilder:default="rsa"
 	KeyType string `json:"keyType,omitempty"`
 
-	// KeyBits is the key size in bits. RSA: 2048|3072|4096.
-	// EC: 224|256|384|521. Ignored for ed25519. Zero = bao default.
+	// KeyBits is the key size in bits.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=8192
+	// +kubebuilder:default=2048
 	KeyBits int `json:"keyBits,omitempty"`
 
-	// Subject groups the X.509 subject fields beyond CommonName.
+	// MaxPathLength is the CA's pathlen basic constraint. -1 = no limit.
 	// +kubebuilder:validation:Optional
-	Subject *PKISubject `json:"subject,omitempty"`
+	// +kubebuilder:default=-1
+	MaxPathLength int `json:"maxPathLength,omitempty"`
 
-	// URLs configures the CA's published distribution points (AIA,
-	// CRL, OCSP) embedded in every issued cert.
+	// ExcludeCnFromSans omits the CN from the generated SANs.
 	// +kubebuilder:validation:Optional
-	URLs *PKIURLs `json:"urls,omitempty"`
+	ExcludeCnFromSans bool `json:"excludeCnFromSans,omitempty"`
+
+	// PermittedDnsDomains is the X.509 name-constraints DNS allow-list applied
+	// to the CA cert.
+	// +kubebuilder:validation:Optional
+	PermittedDnsDomains []string `json:"permittedDnsDomains,omitempty"`
+
+	// OU is the X.509 subject Organizational Unit.
+	// +kubebuilder:validation:Optional
+	OU string `json:"ou,omitempty"`
+
+	// Organization is the X.509 subject Organization.
+	// +kubebuilder:validation:Optional
+	Organization string `json:"organization,omitempty"`
+
+	// Country is the X.509 subject Country.
+	// +kubebuilder:validation:Optional
+	Country string `json:"country,omitempty"`
+
+	// Locality is the X.509 subject Locality.
+	// +kubebuilder:validation:Optional
+	Locality string `json:"locality,omitempty"`
+
+	// Province is the X.509 subject Province.
+	// +kubebuilder:validation:Optional
+	Province string `json:"province,omitempty"`
+
+	// StreetAddress is the X.509 subject Street Address.
+	// +kubebuilder:validation:Optional
+	StreetAddress string `json:"streetAddress,omitempty"`
+
+	// PostalCode is the X.509 subject Postal Code.
+	// +kubebuilder:validation:Optional
+	PostalCode string `json:"postalCode,omitempty"`
+
+	// SerialNumber is the X.509 subject Serial Number (not the cert serial).
+	// +kubebuilder:validation:Optional
+	SerialNumber string `json:"serialNumber,omitempty"`
+
+	// IssuingCertificates are the AIA issuing-cert URLs published in issued certs.
+	// +kubebuilder:validation:Optional
+	IssuingCertificates []string `json:"issuingCertificates,omitempty"`
+
+	// CRLDistributionPoints are the CRL distribution-point URLs.
+	// +kubebuilder:validation:Optional
+	CRLDistributionPoints []string `json:"CRLDistributionPoints,omitempty"`
+
+	// OCSPServers are the OCSP responder URLs.
+	// +kubebuilder:validation:Optional
+	OCSPServers []string `json:"ocspServers,omitempty"`
+
+	// CRLExpiry is the CRL rotation period (bao duration).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="72h"
+	CRLExpiry metav1.Duration `json:"CRLExpiry,omitempty"`
+
+	// CRLDisable turns off CRL building.
+	// +kubebuilder:validation:Optional
+	CRLDisable bool `json:"CRLDisable,omitempty"`
+
+	// ExternalSignSecret references a Secret holding the externally-signed
+	// intermediate cert (offline-root signing). Mutually exclusive with
+	// InternalSign. type=intermediate only.
+	// +kubebuilder:validation:Optional
+	ExternalSignSecret *corev1.LocalObjectReference `json:"externalSignSecret,omitempty"`
+
+	// CertificateKey is the key within ExternalSignSecret holding the signed
+	// cert PEM.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="tls.crt"
+	CertificateKey string `json:"certificateKey,omitempty"`
+
+	// InternalSign points at a signing CA mount that signs this intermediate's
+	// CSR in-bao. Mutually exclusive with ExternalSignSecret. type=intermediate
+	// only. By default the signing CA must live in this CR's openbaoNamespace;
+	// set internalSign.openbaoNamespace to sign against a CA in a different
+	// OpenBao namespace (e.g. a platform CA signing per-tenant intermediates).
+	// +kubebuilder:validation:Optional
+	InternalSign *PKIInternalSign `json:"internalSign,omitempty"`
+
+	// PublishCABundleConfigMap, when set, names a ConfigMap (in this CR's
+	// namespace) the controller keeps populated with the active CA cert PEM
+	// (key "ca.crt"). It exists so a trust-distribution tool (cert-manager
+	// trust-manager) can source this CA for cross-tenant trust bundles. Empty
+	// = don't publish. The ConfigMap is owner-ref'd to this CR (GC on delete).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern:=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	PublishCABundleConfigMap string `json:"publishCABundleConfigMap,omitempty"`
+}
+
+// PKIInternalSign references the signing CA for an in-bao intermediate signing.
+type PKIInternalSign struct {
+	// Name is the signing CA's bao mount path (e.g. "pki-platform").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern:=`^[a-zA-Z0-9][a-zA-Z0-9_./-]*$`
+	Name string `json:"name"`
+
+	// OpenBaoNamespace is the signing CA's OpenBao namespace. Empty = the
+	// intermediate CR's own openbaoNamespace (same-namespace signing — the
+	// historical behavior). Set this to sign against a CA in another namespace.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern:=`^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$`
+	OpenBaoNamespace string `json:"openbaoNamespace,omitempty"`
 }
 
 // OpenBaoPKISecretEngineConfigStatus defines the observed state.
@@ -280,19 +404,23 @@ type OpenBaoPKISecretEngineConfigStatus struct {
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 
-	// BaoWritten records whether this CR has ever successfully
-	// generated a CA. Not used by the deletion path (IsDeletable=false
-	// short-circuits BaoDelete unconditionally) but kept for status
-	// observability.
+	// Generated records that the intermediate CSR was generated (upstream).
+	// +optional
+	Generated bool `json:"generated,omitempty"`
+
+	// Exported records that the CSR was exported to its Secret (upstream).
+	// +optional
+	Exported bool `json:"exported,omitempty"`
+
+	// Signed records that the intermediate was signed + set-signed (upstream).
+	// +optional
+	Signed bool `json:"signed,omitempty"`
+
+	// BaoWritten records whether this CR has ever successfully written a CA.
 	// +optional
 	BaoWritten bool `json:"baoWritten,omitempty"`
 
-	// LastWrittenBaoName records the PKI mount path the controller
-	// last wrote a CA into. A spec.path change that produces a
-	// different LastWrittenBaoName would leak a CA at the old mount
-	// (because IsDeletable=false skips rename cleanup); the controller
-	// logs this and advances the identity. Document and avoid renames
-	// in production.
+	// LastWrittenBaoName records the PKI mount path last written into.
 	// +optional
 	LastWrittenBaoName string `json:"lastWrittenBaoName,omitempty"`
 
@@ -300,15 +428,12 @@ type OpenBaoPKISecretEngineConfigStatus struct {
 	// +optional
 	LastWrittenOpenBaoNamespace string `json:"lastWrittenOpenBaoNamespace,omitempty"`
 
-	// Phase tracks the CA-bootstrap state.
-	// "" = no CA yet (just before first BaoWrite).
-	// "Active" = CA generated and URLs published.
+	// Phase tracks the CA-bootstrap state: "" → Active, or
+	// AwaitingExternalSignature for an external-sign intermediate.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
-	// CASerialNumber is the X.509 serial of the active CA cert,
-	// captured from the bao response on initial generate. Surfaced
-	// for operator visibility.
+	// CASerialNumber is the X.509 serial of the active CA cert.
 	// +optional
 	CASerialNumber string `json:"caSerialNumber,omitempty"`
 }
@@ -337,8 +462,10 @@ func (m *OpenBaoPKISecretEngineConfig) SetLastWrittenBaoIdentity(name, namespace
 	m.Status.LastWrittenOpenBaoNamespace = namespace
 }
 
-// MarkActive records the active CA's serial in status. Called by the
-// controller after a successful root-CA generate.
+// MarkActive records the active CA's serial and flips the phase to Active. The
+// intermediate-bootstrap booleans (generated/exported/signed) are stamped by
+// the controller's success mutator only for type=intermediate; a root has no
+// CSR/sign flow, so MarkActive leaves them untouched.
 func (m *OpenBaoPKISecretEngineConfig) MarkActive(serial string) {
 	m.Status.Phase = PhaseActive
 	m.Status.CASerialNumber = serial
@@ -347,6 +474,8 @@ func (m *OpenBaoPKISecretEngineConfig) MarkActive(serial string) {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=obpkic
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
 // OpenBaoPKISecretEngineConfig is the Schema for the
 // openbaopkisecretengineconfigs API.

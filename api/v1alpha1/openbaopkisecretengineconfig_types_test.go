@@ -5,9 +5,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 )
 
-const pkiCfgPath = "pki"
+const (
+	pkiCfgPath         = "pki"
+	cnTest             = "Test"
+	cnTestIntermediate = "Test Intermediate"
+)
 
 func TestPKIConfig_BaoName_TrimsSlashes(t *testing.T) {
 	t.Parallel()
@@ -48,51 +53,156 @@ func TestPKIConfig_IsInitialized_IsTrue(t *testing.T) {
 	require.True(t, c.IsInitialized())
 }
 
+// PKIType defaults an empty spec.type to root (mirrors the CRD default for
+// structs built outside the API server).
+func TestPKIConfig_PKIType_DefaultsToRoot(t *testing.T) {
+	t.Parallel()
+	c := &OpenBaoPKISecretEngineConfig{}
+	require.Equal(t, PKITypeRoot, c.PKIType())
+	c.Spec.Type = PKITypeIntermediate
+	require.Equal(t, PKITypeIntermediate, c.PKIType())
+}
+
 func TestPKIConfig_IsValid(t *testing.T) {
 	t.Parallel()
-	t.Run("happy path", func(t *testing.T) {
+
+	intRef := func(name string) *corev1.LocalObjectReference {
+		return &corev1.LocalObjectReference{Name: name}
+	}
+	intSign := func(name string) *PKIInternalSign {
+		return &PKIInternalSign{Name: name}
+	}
+
+	t.Run("root happy path", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
 		c.Spec.Path = pkiCfgPath
-		c.Spec.PKIType = PKITypeRoot
+		c.Spec.Type = PKITypeRoot
 		c.Spec.CommonName = "Test CA"
 		ok, err := c.IsValid()
 		require.True(t, ok)
 		require.NoError(t, err)
 	})
+
+	t.Run("empty type defaults to root and is valid", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.CommonName = "Test CA"
+		ok, err := c.IsValid()
+		require.True(t, ok)
+		require.NoError(t, err)
+	})
+
 	t.Run("empty path rejected", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
-		c.Spec.PKIType = PKITypeRoot
-		c.Spec.CommonName = "Test"
+		c.Spec.Type = PKITypeRoot
+		c.Spec.CommonName = cnTest
 		ok, err := c.IsValid()
 		require.False(t, ok)
 		require.ErrorContains(t, err, "spec.path")
 	})
+
 	t.Run("empty commonName rejected", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
 		c.Spec.Path = pkiCfgPath
-		c.Spec.PKIType = PKITypeRoot
+		c.Spec.Type = PKITypeRoot
 		ok, err := c.IsValid()
 		require.False(t, ok)
 		require.ErrorContains(t, err, "spec.commonName")
 	})
-	t.Run("non-root pkiType rejected (intermediate not implemented)", func(t *testing.T) {
+
+	t.Run("bogus type rejected", func(t *testing.T) {
 		c := &OpenBaoPKISecretEngineConfig{}
 		c.Spec.Path = pkiCfgPath
-		c.Spec.PKIType = "intermediate"
-		c.Spec.CommonName = "Test"
+		c.Spec.Type = "bogus"
+		c.Spec.CommonName = cnTest
 		ok, err := c.IsValid()
 		require.False(t, ok)
-		require.ErrorContains(t, err, "pkiType")
+		require.ErrorContains(t, err, "bogus")
+	})
+
+	t.Run("root rejects intermediate signing fields", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeRoot
+		c.Spec.CommonName = cnTest
+		c.Spec.InternalSign = intSign("pki-root")
+		ok, err := c.IsValid()
+		require.False(t, ok)
+		require.ErrorContains(t, err, "intermediate")
+	})
+
+	t.Run("intermediate + internalSign ok", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeIntermediate
+		c.Spec.CommonName = cnTestIntermediate
+		c.Spec.InternalSign = intSign("pki-root")
+		ok, err := c.IsValid()
+		require.True(t, ok)
+		require.NoError(t, err)
+	})
+
+	t.Run("intermediate + cross-namespace internalSign ok", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeIntermediate
+		c.Spec.CommonName = cnTestIntermediate
+		c.Spec.InternalSign = &PKIInternalSign{Name: "pki-platform", OpenBaoNamespace: "platform/"}
+		ok, err := c.IsValid()
+		require.True(t, ok)
+		require.NoError(t, err)
+	})
+
+	t.Run("intermediate + externalSignSecret ok", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeIntermediate
+		c.Spec.CommonName = cnTestIntermediate
+		c.Spec.ExternalSignSecret = intRef("signed-ca")
+		ok, err := c.IsValid()
+		require.True(t, ok)
+		require.NoError(t, err)
+	})
+
+	t.Run("intermediate + both signing models rejected", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeIntermediate
+		c.Spec.CommonName = cnTestIntermediate
+		c.Spec.InternalSign = intSign("pki-root")
+		c.Spec.ExternalSignSecret = intRef("signed-ca")
+		ok, err := c.IsValid()
+		require.False(t, ok)
+		require.ErrorContains(t, err, "exactly one")
+	})
+
+	t.Run("intermediate + neither signing model rejected", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeIntermediate
+		c.Spec.CommonName = cnTestIntermediate
+		ok, err := c.IsValid()
+		require.False(t, ok)
+		require.ErrorContains(t, err, "exactly one")
+	})
+
+	t.Run("intermediate + empty internalSign Name rejected", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.Path = pkiCfgPath
+		c.Spec.Type = PKITypeIntermediate
+		c.Spec.CommonName = cnTestIntermediate
+		c.Spec.InternalSign = &PKIInternalSign{Name: ""}
+		ok, err := c.IsValid()
+		require.False(t, ok)
+		require.ErrorContains(t, err, "exactly one")
 	})
 }
 
 func TestPKIConfig_IsEquivalentToDesiredState(t *testing.T) {
 	t.Parallel()
 	c := &OpenBaoPKISecretEngineConfig{}
-	c.Spec.URLs = &PKIURLs{
-		IssuingCertificates:   []string{"https://b.example.com/ca", "https://a.example.com/ca"},
-		CRLDistributionPoints: []string{"https://example.com/crl"},
-	}
+	c.Spec.IssuingCertificates = []string{"https://b.example.com/ca", "https://a.example.com/ca"}
+	c.Spec.CRLDistributionPoints = []string{"https://example.com/crl"}
 
 	t.Run("caExists=false → drift (forces create path)", func(t *testing.T) {
 		require.False(t, c.IsEquivalentToDesiredState(map[string]any{"caExists": false}))
@@ -130,6 +240,39 @@ func TestPKIConfig_IsEquivalentToDesiredState(t *testing.T) {
 	})
 }
 
+func TestPKIConfig_IsEquivalent_CABundlePublishDrift(t *testing.T) {
+	t.Parallel()
+	base := func() *OpenBaoPKISecretEngineConfig {
+		c := &OpenBaoPKISecretEngineConfig{}
+		c.Spec.PublishCABundleConfigMap = "team-a-ca"
+		return c
+	}
+	payload := func(published string) map[string]any {
+		return map[string]any{
+			"caExists":          true,
+			"caCert":            "PEM-A",
+			"publishedCABundle": published,
+			"urls":              map[string][]string{},
+		}
+	}
+
+	t.Run("published matches active CA → equivalent", func(t *testing.T) {
+		require.True(t, base().IsEquivalentToDesiredState(payload("PEM-A")))
+	})
+	t.Run("published missing → drift (forces publish)", func(t *testing.T) {
+		require.False(t, base().IsEquivalentToDesiredState(payload("")))
+	})
+	t.Run("published stale → drift (forces republish)", func(t *testing.T) {
+		require.False(t, base().IsEquivalentToDesiredState(payload("OLD-PEM")))
+	})
+	t.Run("publish not requested → bundle ignored", func(t *testing.T) {
+		c := &OpenBaoPKISecretEngineConfig{} // no PublishCABundleConfigMap
+		require.True(t, c.IsEquivalentToDesiredState(map[string]any{
+			"caExists": true, "urls": map[string][]string{},
+		}))
+	})
+}
+
 func TestPKIConfig_MarkActive_SetsPhaseAndSerial(t *testing.T) {
 	t.Parallel()
 	c := &OpenBaoPKISecretEngineConfig{}
@@ -140,6 +283,11 @@ func TestPKIConfig_MarkActive_SetsPhaseAndSerial(t *testing.T) {
 
 	require.Equal(t, PhaseActive, c.Status.Phase)
 	require.Equal(t, "ab:cd:ef", c.Status.CASerialNumber)
+	// MarkActive does not stamp the intermediate-bootstrap booleans; those
+	// are set by the controller's success mutator only for type=intermediate.
+	require.False(t, c.Status.Generated)
+	require.False(t, c.Status.Exported)
+	require.False(t, c.Status.Signed)
 }
 
 func TestPKIConfig_RenameTracker_RoundTrip(t *testing.T) {

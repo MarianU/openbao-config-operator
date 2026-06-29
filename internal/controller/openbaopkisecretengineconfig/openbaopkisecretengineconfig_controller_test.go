@@ -2,10 +2,12 @@ package openbaopkisecretengineconfig
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,8 +22,10 @@ import (
 )
 
 const (
-	envtestNS = "default"
-	pkiPath   = "pki"
+	envtestNS      = "default"
+	pkiPath        = "pki"
+	testCommonName = "Test CA"
+	caBundleCMName = "team-a-ca"
 )
 
 // fakeBao models PKI mount state in-memory. Only the four PKI methods
@@ -39,7 +43,22 @@ type fakeBao struct {
 	writeURLErr error
 	readURLErr  error
 
+	// intermediate-flow injection + capture
+	genCSRErr       error
+	signErr         error
+	setSignedErr    error
+	lastSignCSR     string
+	lastSignRoot    string
+	lastSetSigned   string
+	lastGenCSRNS    string // openbao namespace the CSR was generated in
+	lastSignNS      string // openbao namespace the sign call targeted
+	lastSetSignedNS string // openbao namespace set-signed targeted
+	// callOrder records only the four CA-mutating PKI calls (in order),
+	// so tests can assert generate→sign→set-signed sequencing.
+	callOrder []string
+
 	generates, readCAs, writeURLs, readURLs int
+	genCSRs, signs, setSigneds              int
 }
 
 func newFakeBao() *fakeBao {
@@ -55,6 +74,7 @@ func key(ns, mount string) string { return ns + "|" + mount }
 
 func (f *fakeBao) GenerateRootPKI(ctx context.Context, mount string, in baoclient.PKIRootGenerateInput, opts ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
 	f.generates++
+	f.callOrder = append(f.callOrder, "generate-root")
 	if f.generateErr != nil {
 		return nil, f.generateErr
 	}
@@ -65,6 +85,46 @@ func (f *fakeBao) GenerateRootPKI(ctx context.Context, mount string, in baoclien
 	}
 	f.caBySerial[key(baoclient.NamespaceFromOpts(opts), mount)] = resp
 	return resp, nil
+}
+
+// GenerateIntermediateCSR returns a deterministic fake CSR; the pending key is
+// modelled implicitly (a CA appears only after SetSignedIntermediate).
+func (f *fakeBao) GenerateIntermediateCSR(ctx context.Context, mount string, in baoclient.PKIIntermediateGenerateInput, opts ...baoclient.CallOption) (string, error) {
+	f.genCSRs++
+	f.callOrder = append(f.callOrder, "generate-csr")
+	f.lastGenCSRNS = baoclient.NamespaceFromOpts(opts)
+	if f.genCSRErr != nil {
+		return "", f.genCSRErr
+	}
+	return "FAKE-CSR-" + mount, nil
+}
+
+func (f *fakeBao) SignIntermediate(ctx context.Context, rootMount, csr string, in baoclient.PKISignIntermediateInput, opts ...baoclient.CallOption) (string, error) {
+	f.signs++
+	f.callOrder = append(f.callOrder, "sign")
+	f.lastSignCSR = csr
+	f.lastSignRoot = rootMount
+	f.lastSignNS = baoclient.NamespaceFromOpts(opts)
+	if f.signErr != nil {
+		return "", f.signErr
+	}
+	return "FAKE-SIGNED-CERT", nil
+}
+
+func (f *fakeBao) SetSignedIntermediate(ctx context.Context, mount, certificate string, opts ...baoclient.CallOption) error {
+	f.setSigneds++
+	f.callOrder = append(f.callOrder, "set-signed")
+	f.lastSetSigned = certificate
+	f.lastSetSignedNS = baoclient.NamespaceFromOpts(opts)
+	if f.setSignedErr != nil {
+		return f.setSignedErr
+	}
+	// Binding the signed cert makes a CA appear at this mount.
+	f.caBySerial[key(baoclient.NamespaceFromOpts(opts), mount)] = &baoclient.PKICAResponse{
+		SerialNumber: "intermediate-serial",
+		Certificate:  certificate,
+	}
+	return nil
 }
 
 func (f *fakeBao) ReadPKICA(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
@@ -229,7 +289,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Client:        cl,
 		Scheme:        scheme,
 		FinalizerName: OpenBaoPKISecretEngineConfigFinalizer,
-		Handlers:      OpenBaoPKISecretEngineConfigHandlers(cl, fb),
+		Handlers:      OpenBaoPKISecretEngineConfigHandlers(cl, scheme, fb),
 	}
 	return &OpenBaoPKISecretEngineConfigReconciler{VaultResource: base}
 }
@@ -249,12 +309,43 @@ func sampleConfig(name string) *v1alpha1.OpenBaoPKISecretEngineConfig {
 	c.Name = name
 	c.Namespace = envtestNS
 	c.Spec.Path = pkiPath
-	c.Spec.PKIType = "root"
-	c.Spec.CommonName = "Test CA"
-	c.Spec.URLs = &v1alpha1.PKIURLs{
-		IssuingCertificates: []string{"https://example.com/ca"},
-	}
+	c.Spec.Type = "root"
+	c.Spec.CommonName = testCommonName
+	c.Spec.IssuingCertificates = []string{"https://example.com/ca"}
 	return c
+}
+
+func sampleIntermediateInternal() *v1alpha1.OpenBaoPKISecretEngineConfig {
+	c := &v1alpha1.OpenBaoPKISecretEngineConfig{}
+	c.Name = "pki-int"
+	c.Namespace = envtestNS
+	c.Spec.Path = pkiPath
+	c.Spec.Type = "intermediate"
+	c.Spec.CommonName = "Test Intermediate"
+	c.Spec.InternalSign = &v1alpha1.PKIInternalSign{Name: "pki-root"}
+	c.Spec.PermittedDnsDomains = []string{"svc.cluster.local"}
+	return c
+}
+
+func sampleIntermediateExternal(name, signSecret string) *v1alpha1.OpenBaoPKISecretEngineConfig {
+	c := &v1alpha1.OpenBaoPKISecretEngineConfig{}
+	c.Name = name
+	c.Namespace = envtestNS
+	c.Spec.Path = pkiPath
+	c.Spec.Type = "intermediate"
+	c.Spec.CommonName = "Test Intermediate External"
+	c.Spec.ExternalSignSecret = &corev1.LocalObjectReference{Name: signSecret}
+	return c
+}
+
+func csrSecretFor(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler, crName string) (*corev1.Secret, bool) {
+	t.Helper()
+	var sec corev1.Secret
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: crName + "-intermediate-csr"}, &sec)
+	if err != nil {
+		return nil, false
+	}
+	return &sec, true
 }
 
 func reconcile(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler, name string) ctrl.Result {
@@ -329,7 +420,7 @@ func TestPKIConfig_UpdatePath_URLsOnly(t *testing.T) {
 
 	// Change URL spec, bump generation.
 	cur := getCfg(t, r, c.Name)
-	cur.Spec.URLs.IssuingCertificates = []string{"https://new.example.com/ca"}
+	cur.Spec.IssuingCertificates = []string{"https://new.example.com/ca"}
 	require.NoError(t, r.Update(context.Background(), cur))
 
 	reconcile(t, r, c.Name)
@@ -476,6 +567,295 @@ func TestPKIConfig_AdoptsExistingCA_PopulatesPhaseAndSerial(t *testing.T) {
 		"adopting an existing CA must still flip phase to Active via the StatusMutator")
 	require.Equal(t, "out-of-band-serial", got.Status.CASerialNumber,
 		"serial of the adopted CA must be captured via the StatusMutator")
+}
+
+// ---- intermediate: internalSign ----
+
+func TestPKIConfig_Intermediate_InternalSign_HappyPath(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleIntermediateInternal()
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // generate CSR → sign → set-signed
+
+	require.Equal(t, 0, fb.generates, "intermediate must not call root/generate")
+	require.Equal(t, 1, fb.genCSRs, "CSR generated once")
+	require.Equal(t, 1, fb.signs, "CSR signed once")
+	require.Equal(t, 1, fb.setSigneds, "signed cert bound once")
+	require.Equal(t, []string{"generate-csr", "sign", "set-signed"}, fb.callOrder,
+		"ordering must be generate→sign→set-signed")
+	require.Equal(t, "pki-root", fb.lastSignRoot, "internalSign.Name is used as the root mount")
+	require.Equal(t, "FAKE-CSR-"+pkiPath, fb.lastSignCSR, "the generated CSR must be the one signed")
+
+	// Backward-compat: no internalSign.openbaoNamespace ⇒ all three calls run
+	// in the intermediate's own namespace (here the root openbao namespace, "").
+	require.Equal(t, "", fb.lastGenCSRNS, "generate runs in the intermediate namespace")
+	require.Equal(t, "", fb.lastSignNS, "sign runs in the intermediate namespace when no cross-ns set")
+	require.Equal(t, "", fb.lastSetSignedNS, "set-signed runs in the intermediate namespace")
+
+	// CSR persisted in an owner-ref'd Secret.
+	sec, ok := csrSecretFor(t, r, c.Name)
+	require.True(t, ok, "CSR Secret must exist")
+	require.Equal(t, "FAKE-CSR-"+pkiPath, string(sec.Data["csr"]))
+	require.Len(t, sec.OwnerReferences, 1, "CSR Secret must be owner-ref'd to the CR")
+	require.Equal(t, "OpenBaoPKISecretEngineConfig", sec.OwnerReferences[0].Kind)
+	require.NotNil(t, sec.OwnerReferences[0].Controller)
+	require.True(t, *sec.OwnerReferences[0].Controller)
+
+	got := getCfg(t, r, c.Name)
+	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase)
+	require.Equal(t, "intermediate-serial", got.Status.CASerialNumber)
+	require.True(t, got.Status.Generated)
+	require.True(t, got.Status.Exported)
+	require.True(t, got.Status.Signed)
+}
+
+// Cross-namespace internalSign: the sign call targets the signing CA's
+// namespace, while generate + set-signed stay in the intermediate's namespace.
+func TestPKIConfig_Intermediate_InternalSign_CrossNamespace(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleIntermediateInternal()
+	c.Spec.OpenBaoNamespace = "team-x/"
+	c.Spec.InternalSign = &v1alpha1.PKIInternalSign{Name: "pki-platform", OpenBaoNamespace: "platform/"}
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // generate (team-x/) → sign (platform/) → set-signed (team-x/)
+
+	require.Equal(t, 1, fb.genCSRs)
+	require.Equal(t, 1, fb.signs)
+	require.Equal(t, 1, fb.setSigneds)
+	require.Equal(t, "pki-platform", fb.lastSignRoot, "signs against the platform mount")
+	require.Equal(t, "platform/", fb.lastSignNS, "sign call targets the platform namespace")
+	require.Equal(t, "team-x/", fb.lastGenCSRNS, "CSR is generated in the intermediate's namespace")
+	require.Equal(t, "team-x/", fb.lastSetSignedNS, "set-signed runs in the intermediate's namespace")
+
+	got := getCfg(t, r, c.Name)
+	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase)
+	require.True(t, got.Status.Signed)
+}
+
+func TestPKIConfig_Intermediate_InternalSign_Idempotent(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	// Pre-populate an active CA + matching (empty) URLs.
+	fb.caBySerial[key("", pkiPath)] = &baoclient.PKICAResponse{SerialNumber: "already-signed"}
+	c := sampleIntermediateInternal()
+	c.Spec.PermittedDnsDomains = nil // no URLs either → bao already matches
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // bao already has CA → no sign flow
+
+	require.Equal(t, 0, fb.genCSRs, "active CA must not regenerate a CSR")
+	require.Equal(t, 0, fb.signs)
+	require.Equal(t, 0, fb.setSigneds)
+	_, ok := csrSecretFor(t, r, c.Name)
+	require.False(t, ok, "no CSR Secret when the intermediate is already signed")
+}
+
+func TestPKIConfig_Intermediate_InternalSign_SignFails_ReusesCSR(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	fb.signErr = errors.New("boom: root mount cannot sign")
+	c := sampleIntermediateInternal()
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // CSR generated + stored, sign fails
+	reconcile(t, r, c.Name) // sign retried, CSR reused (no regen)
+
+	require.Equal(t, 1, fb.genCSRs, "CSR must be generated once and reused across sign retries")
+	require.Equal(t, 2, fb.signs, "sign retried")
+	require.Equal(t, 0, fb.setSigneds, "set-signed never reached when sign fails")
+
+	cond := readyCond(t, getCfg(t, r, c.Name))
+	require.NotNil(t, cond)
+	require.Equal(t, resource.ReasonBaoError, cond.Reason)
+}
+
+// ---- intermediate: externalSignSecret ----
+
+func TestPKIConfig_Intermediate_ExternalSign_Pass1_CreatesCSRAndAwaits(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleIntermediateExternal("pki-ext", "team-signed")
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // generate CSR → create Secret → await
+
+	require.Equal(t, 1, fb.genCSRs)
+	require.Equal(t, 0, fb.signs, "external flow never calls sign-intermediate")
+	require.Equal(t, 0, fb.setSigneds, "cannot set-signed until the offline cert lands")
+
+	sec, ok := csrSecretFor(t, r, c.Name)
+	require.True(t, ok, "CSR Secret must be created for the offline signer")
+	require.Equal(t, "FAKE-CSR-"+pkiPath, string(sec.Data["csr"]))
+
+	cond := readyCond(t, getCfg(t, r, c.Name))
+	require.NotNil(t, cond)
+	require.Equal(t, resource.ReasonAwaitingExternalSignature, cond.Reason)
+}
+
+func TestPKIConfig_Intermediate_ExternalSign_AwaitingNoRegen(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleIntermediateExternal("pki-ext", "team-signed")
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // pass 1: CSR created, await
+	reconcile(t, r, c.Name) // pass 2: still awaiting, must NOT regenerate
+	reconcile(t, r, c.Name) // pass 3: still awaiting
+
+	require.Equal(t, 1, fb.genCSRs, "CSR must be generated exactly once while awaiting signature (R4)")
+	require.Equal(t, 0, fb.setSigneds)
+	cond := readyCond(t, getCfg(t, r, c.Name))
+	require.NotNil(t, cond)
+	require.Equal(t, resource.ReasonAwaitingExternalSignature, cond.Reason)
+}
+
+func TestPKIConfig_Intermediate_ExternalSign_Completion(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleIntermediateExternal("pki-ext", "team-signed")
+	signSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-signed", Namespace: envtestNS},
+		Data: map[string][]byte{
+			"tls.crt": []byte("-----BEGIN CERTIFICATE-----\nOFFLINE-SIGNED\n-----END CERTIFICATE-----"),
+		},
+	}
+	r := buildReconciler(t, fb, c, signSec)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // pass 1: CSR created, await (signer hasn't run against THIS csr yet)
+	reconcile(t, r, c.Name) // pass 2: signed cert present → set-signed → Active
+
+	require.Equal(t, 1, fb.genCSRs, "CSR generated once")
+	require.Equal(t, 1, fb.setSigneds, "signed cert bound once")
+	require.Contains(t, fb.lastSetSigned, "OFFLINE-SIGNED", "the offline cert must be the one bound")
+
+	got := getCfg(t, r, c.Name)
+	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase)
+	require.Equal(t, "intermediate-serial", got.Status.CASerialNumber)
+	require.True(t, got.Status.Generated)
+	require.True(t, got.Status.Exported)
+	require.True(t, got.Status.Signed)
+}
+
+// Regression: type=root must take the unchanged generate path — no
+// intermediate calls, no CSR Secret, never AwaitingExternalSignature.
+func TestPKIConfig_RootPath_NoIntermediateCalls_NoCSRSecret(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleConfig("pki-root")
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // generate root
+
+	require.Equal(t, 1, fb.generates)
+	require.Equal(t, 0, fb.genCSRs)
+	require.Equal(t, 0, fb.signs)
+	require.Equal(t, 0, fb.setSigneds)
+	require.Equal(t, []string{"generate-root"}, fb.callOrder)
+
+	_, ok := csrSecretFor(t, r, c.Name)
+	require.False(t, ok, "root must not create a CSR Secret")
+
+	cond := readyCond(t, getCfg(t, r, c.Name))
+	require.NotNil(t, cond)
+	require.Equal(t, resource.ReasonReconciled, cond.Reason,
+		"root path must never enter AwaitingExternalSignature")
+}
+
+// ---- publishCABundleConfigMap ----
+
+func getCM(t *testing.T, r *OpenBaoPKISecretEngineConfigReconciler) (*corev1.ConfigMap, bool) {
+	t.Helper()
+	var cm corev1.ConfigMap
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: caBundleCMName}, &cm); err != nil {
+		return nil, false
+	}
+	return &cm, true
+}
+
+func TestPKIConfig_PublishCABundle_CreatesOwnedConfigMap(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleConfig("pki-root")
+	c.Spec.PublishCABundleConfigMap = caBundleCMName
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // generate CA + publish bundle
+
+	cm, ok := getCM(t, r)
+	require.True(t, ok, "CA-bundle ConfigMap must be created")
+	require.Contains(t, cm.Data["ca.crt"], "BEGIN CERTIFICATE")
+	require.Len(t, cm.OwnerReferences, 1, "ConfigMap must be owner-ref'd to the CR")
+	require.Equal(t, "OpenBaoPKISecretEngineConfig", cm.OwnerReferences[0].Kind)
+}
+
+func TestPKIConfig_PublishCABundle_Idempotent(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleConfig("pki-root")
+	c.Spec.PublishCABundleConfigMap = caBundleCMName
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
+	cm1, ok := getCM(t, r)
+	require.True(t, ok)
+	rv := cm1.ResourceVersion
+
+	// Steady-state reconciles must not rewrite the ConfigMap (equality check).
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
+	cm2, ok := getCM(t, r)
+	require.True(t, ok)
+	require.Equal(t, rv, cm2.ResourceVersion, "matching bundle must not be re-written")
+}
+
+func TestPKIConfig_PublishCABundle_SelfHealsWhenDeleted(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleConfig("pki-root")
+	c.Spec.PublishCABundleConfigMap = caBundleCMName
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
+	cm, ok := getCM(t, r)
+	require.True(t, ok)
+
+	// Delete the ConfigMap out-of-band; the drift check must republish it.
+	require.NoError(t, r.Delete(context.Background(), cm))
+	_, ok = getCM(t, r)
+	require.False(t, ok, "ConfigMap should be gone after delete")
+
+	reconcile(t, r, c.Name)
+	_, ok = getCM(t, r)
+	require.True(t, ok, "deleted CA-bundle ConfigMap must be republished (self-heal)")
+}
+
+func TestPKIConfig_PublishCABundle_EmptyFieldNoConfigMap(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleConfig("pki-root") // no PublishCABundleConfigMap
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name)
+	reconcile(t, r, c.Name)
+	got := getCfg(t, r, c.Name)
+	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase, "root still reconciles normally")
+	_, ok := getCM(t, r)
+	require.False(t, ok, "no ConfigMap when publishCABundleConfigMap is empty")
 }
 
 func readyCond(t *testing.T, c *v1alpha1.OpenBaoPKISecretEngineConfig) *metav1.Condition {
