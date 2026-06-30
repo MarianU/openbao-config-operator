@@ -830,6 +830,51 @@ func TestEnableSecretEngine_RejectsEmptyType(t *testing.T) {
 		SecretEngineMountSpec{Type: ""}), "empty type must be rejected before any request")
 }
 
+func TestEnableSecretEngine_SendsMaxLeaseTTL(t *testing.T) {
+	t.Parallel()
+	var seenBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.EnableSecretEngine(context.Background(), "pki-platform",
+		SecretEngineMountSpec{Type: "pki", MaxLeaseTTL: "175200h"}))
+	require.Contains(t, seenBody, `"max_lease_ttl":"175200h"`,
+		"PKI mount must carry max_lease_ttl so bao doesn't cap the CA to the 768h default")
+}
+
+func TestTuneSecretEngine_SendsMaxLeaseTTL(t *testing.T) {
+	t.Parallel()
+	var seenMethod, seenPath, seenBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.TuneSecretEngine(context.Background(), "pki-platform",
+		SecretEngineMountSpec{MaxLeaseTTL: "175200h"}))
+	require.Equal(t, http.MethodPost, seenMethod)
+	require.Equal(t, "/v1/sys/mounts/pki-platform/tune", seenPath)
+	require.Contains(t, seenBody, `"max_lease_ttl":"175200h"`)
+}
+
+func TestTuneSecretEngine_OmitsMaxLeaseTTLWhenUnset(t *testing.T) {
+	t.Parallel()
+	var seenBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	require.NoError(t, c.TuneSecretEngine(context.Background(), "secret",
+		SecretEngineMountSpec{Description: "x"}))
+	require.NotContains(t, seenBody, "max_lease_ttl",
+		"an unset MaxLeaseTTL must not reset the mount's existing value")
+}
+
 func TestGetSecretEngineMount_ReturnsTypeAndOptionsOnHit(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

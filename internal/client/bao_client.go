@@ -532,6 +532,11 @@ type SecretEngineMountSpec struct {
 	// Options is the engine-specific options map. For kv-v2 the canonical
 	// content is {"version": "2"}.
 	Options map[string]string
+	// MaxLeaseTTL is the mount's max_lease_ttl as a bao duration string. For
+	// a PKI mount this also bounds a generated CA cert: bao caps the CA to the
+	// mount's max_lease_ttl (default 768h), so a long-lived CA must raise it
+	// first. Empty leaves bao's default unchanged.
+	MaxLeaseTTL string
 }
 
 // SecretEngineMount is the read shape for GetSecretEngineMount. Stripped
@@ -809,6 +814,7 @@ func (c *sdkClient) EnableSecretEngine(ctx context.Context, mount string, spec S
 		Type:        spec.Type,
 		Description: spec.Description,
 		Options:     spec.Options,
+		Config:      vault.MountConfigInput{MaxLeaseTTL: spec.MaxLeaseTTL},
 	}
 	err := c.clientFor(opts).Sys().MountWithContext(ctx, mount, input)
 	if err != nil && isAlreadyInUse(err) {
@@ -836,6 +842,11 @@ func (c *sdkClient) TuneSecretEngine(ctx context.Context, mount string, spec Sec
 	input := vault.TuneMountConfigInput{
 		Description: &desc,
 		Options:     &options,
+	}
+	// Only send max_lease_ttl when set; a nil pointer leaves the mount's
+	// current value untouched (an empty string would reset it to default).
+	if spec.MaxLeaseTTL != "" {
+		input.MaxLeaseTTL = &spec.MaxLeaseTTL
 	}
 	err := c.clientFor(opts).Sys().TuneMountAllowNilWithContext(ctx, mount, input)
 	return wrapStatus(err)

@@ -155,6 +155,16 @@ func OpenBaoPKISecretEngineConfigHandlers(cl client.Client, scheme *runtime.Sche
 
 			switch p.PKIType() {
 			case v1alpha1.PKITypeRoot:
+				// Raise this mount's max_lease_ttl to cover spec.TTL before
+				// generating: bao caps a generated CA cert to the mount's
+				// max_lease_ttl (default 768h), so a long-lived root (e.g.
+				// spec.TTL=175200h) would otherwise be issued for only ~32
+				// days. An intermediate's cert is instead bounded by its
+				// signing root mount (see baoWriteIntermediateInternal), so
+				// the tune only applies on the root path.
+				if err := ensureMountMaxLeaseTTL(ctx, bao, p, ns); err != nil {
+					return nil, err
+				}
 				resp, err := generateRoot(ctx, bao, p, ns)
 				if err != nil {
 					return nil, err
@@ -336,6 +346,11 @@ func baoWriteIntermediateInternal(ctx context.Context, cl client.Client, scheme 
 	if rns := strings.TrimSpace(p.Spec.InternalSign.OpenBaoNamespace); rns != "" {
 		rootNS = baoclient.WithNamespace(rns)
 	}
+	// The signed intermediate's lifetime is capped by the SIGNING (root)
+	// mount's max_lease_ttl, not this intermediate's own mount. The root's own
+	// OpenBaoPKISecretEngineConfig sizes that mount to its spec.TTL when it
+	// generates, so a hierarchy honors this intermediate's spec.TTL as long as
+	// the signing root's TTL is at least as large.
 	signed, err := bao.SignIntermediate(ctx, rootMount, csr, signIntermediateInput(p), rootNS)
 	if err != nil {
 		// Name the signing mount + namespace so a cross-namespace sign
@@ -587,6 +602,19 @@ func durationString(d metav1.Duration) string {
 		return ""
 	}
 	return d.Duration.String()
+}
+
+// ensureMountMaxLeaseTTL raises the PKI mount's max_lease_ttl to cover
+// spec.TTL before CA generation. bao caps a generated CA cert to the mount's
+// max_lease_ttl (default 768h), so without this a long-lived CA (e.g.
+// spec.TTL=175200h) is silently issued for only ~32 days. No-op when spec.TTL
+// is unset, leaving bao's default.
+func ensureMountMaxLeaseTTL(ctx context.Context, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) error {
+	ttl := durationString(p.Spec.TTL)
+	if ttl == "" {
+		return nil
+	}
+	return bao.TuneSecretEngine(ctx, p.Spec.Path, baoclient.SecretEngineMountSpec{MaxLeaseTTL: ttl}, ns)
 }
 
 func writeURLs(ctx context.Context, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) error {

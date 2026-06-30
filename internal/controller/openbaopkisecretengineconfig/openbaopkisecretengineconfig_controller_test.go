@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -44,17 +45,19 @@ type fakeBao struct {
 	readURLErr  error
 
 	// intermediate-flow injection + capture
-	genCSRErr       error
-	signErr         error
-	setSignedErr    error
-	lastSignCSR     string
-	lastSignRoot    string
-	lastSetSigned   string
-	lastGenCSRNS    string // openbao namespace the CSR was generated in
-	lastSignNS      string // openbao namespace the sign call targeted
-	lastSetSignedNS string // openbao namespace set-signed targeted
-	// callOrder records only the four CA-mutating PKI calls (in order),
-	// so tests can assert generate→sign→set-signed sequencing.
+	genCSRErr           error
+	signErr             error
+	setSignedErr        error
+	lastSignCSR         string
+	lastSignRoot        string
+	lastSetSigned       string
+	lastGenCSRNS        string // openbao namespace the CSR was generated in
+	lastSignNS          string // openbao namespace the sign call targeted
+	lastSetSignedNS     string // openbao namespace set-signed targeted
+	lastTuneMaxLeaseTTL string // max_lease_ttl the controller tuned the mount to
+	// callOrder records the CA-mutating PKI calls plus the pre-generate mount
+	// tune (in order), so tests can assert tune→generate→sign→set-signed
+	// sequencing.
 	callOrder []string
 
 	generates, readCAs, writeURLs, readURLs int
@@ -188,6 +191,8 @@ func (f *fakeBao) EnableSecretEngine(ctx context.Context, m string, s baoclient.
 	return nil
 }
 func (f *fakeBao) TuneSecretEngine(ctx context.Context, m string, s baoclient.SecretEngineMountSpec, o ...baoclient.CallOption) error {
+	f.callOrder = append(f.callOrder, "tune")
+	f.lastTuneMaxLeaseTTL = s.MaxLeaseTTL
 	return nil
 }
 func (f *fakeBao) GetSecretEngineMount(ctx context.Context, m string, o ...baoclient.CallOption) (*baoclient.SecretEngineMount, error) {
@@ -372,6 +377,26 @@ func TestPKIConfig_CreatePath_GeneratesCAAndWritesURLs(t *testing.T) {
 	got := getCfg(t, r, c.Name)
 	require.Equal(t, v1alpha1.PhaseActive, got.Status.Phase, "phase must be Active after generate")
 	require.NotEmpty(t, got.Status.CASerialNumber, "serial must be captured from bao response")
+}
+
+// A root CA with a long spec.TTL must have its mount's max_lease_ttl raised
+// BEFORE generate — otherwise bao caps the CA cert to the mount default
+// (768h) and a 20-year root is silently issued for ~32 days.
+func TestPKIConfig_CreatePath_TunesMaxLeaseTTLBeforeGenerate(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	c := sampleConfig("pki-cfg")
+	c.Spec.TTL = metav1.Duration{Duration: 175200 * time.Hour}
+	r := buildReconciler(t, fb, c)
+
+	reconcile(t, r, c.Name) // finalizer
+	reconcile(t, r, c.Name) // write
+
+	require.Equal(t, 1, fb.generates, "CA must be generated")
+	require.Equal(t, "175200h0m0s", fb.lastTuneMaxLeaseTTL,
+		"mount max_lease_ttl must be tuned to cover spec.TTL before generating")
+	require.Equal(t, []string{"tune", "generate-root"}, fb.callOrder,
+		"tune must run before generate-root so bao does not cap the CA to the 768h default")
 }
 
 // Destructive-overwrite guard: the second reconcile (or any later one)

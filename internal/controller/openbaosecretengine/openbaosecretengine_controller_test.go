@@ -96,7 +96,11 @@ func (f *fakeBao) EnableSecretEngine(ctx context.Context, mount string, spec bao
 		return f.enableSecretErr
 	}
 	ns := baoclient.NamespaceFromOpts(opts)
-	f.secretMounts[mountKey(ns, mount)] = baoclient.SecretEngineMount(spec)
+	f.secretMounts[mountKey(ns, mount)] = baoclient.SecretEngineMount{
+		Type:        spec.Type,
+		Description: spec.Description,
+		Options:     spec.Options,
+	}
 	return nil
 }
 
