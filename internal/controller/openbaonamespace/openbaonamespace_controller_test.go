@@ -141,6 +141,17 @@ func (f *fakeBao) DeleteNamespace(ctx context.Context, name string, opts ...baoc
 func (f *fakeBao) GenerateRootPKI(ctx context.Context, mount string, in baoclient.PKIRootGenerateInput, opts ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
 	return nil, baoclient.ErrNotFound
 }
+
+// Intermediate-CA stubs — these controllers do not exercise the intermediate flow.
+func (f *fakeBao) GenerateIntermediateCSR(ctx context.Context, mount string, in baoclient.PKIIntermediateGenerateInput, opts ...baoclient.CallOption) (string, error) {
+	return "", baoclient.ErrNotFound
+}
+func (f *fakeBao) SignIntermediate(ctx context.Context, rootMount, csr string, in baoclient.PKISignIntermediateInput, opts ...baoclient.CallOption) (string, error) {
+	return "", baoclient.ErrNotFound
+}
+func (f *fakeBao) SetSignedIntermediate(ctx context.Context, mount, certificate string, opts ...baoclient.CallOption) error {
+	return nil
+}
 func (f *fakeBao) ReadPKICA(ctx context.Context, mount string, opts ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
 	return nil, baoclient.ErrNotFound
 }

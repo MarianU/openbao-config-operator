@@ -51,9 +51,9 @@ var _ = Describe("OpenBaoPKISecretEngineRole CR → OpenBao", Ordered, func() {
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: cfgName},
 			Spec: v1alpha1.OpenBaoPKISecretEngineConfigSpec{
 				Path:       mountPath,
-				PKIType:    "root",
+				Type:       v1alpha1.PKITypeRoot,
 				CommonName: "e2e PKI Role CA",
-				TTL:        "8760h",
+				TTL:        metav1.Duration{Duration: 8760 * time.Hour},
 			},
 		})).To(Succeed())
 		expectReady(ctx, k8s, &v1alpha1.OpenBaoPKISecretEngineConfig{},

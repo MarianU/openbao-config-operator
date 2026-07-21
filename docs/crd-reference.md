@@ -264,36 +264,56 @@ No cluster-scoped or cross-resource permissions.
 
 ## `OpenBaoPKISecretEngineConfig`
 
-Generates a root CA inside an existing PKI mount and publishes the URL distribution config (AIA / CRL / OCSP). Pairs with `OpenBaoSecretEngine` of kind=pki at the same path — this CR populates the mount, it does not enable it.
+Generates a CA inside an existing PKI mount and publishes the URL distribution config (AIA / CRL / OCSP). Pairs with `OpenBaoSecretEngine` of kind=pki at the same path — this CR populates the mount, it does not enable it. The field set, names, and defaults match upstream redhat-cop/vault-config-operator, except `connection`/`authentication` are dropped (single operator token) and `openbaoNamespace` is added.
 
-**Root-only in this release.** Intermediate CAs (CSR-emitting + external sign + set-signed) are deferred to a follow-up; the `pkiType` enum is open-ended so the addition is non-breaking.
+**`spec.type` selects root vs intermediate:**
 
-**`IsDeletable=false`.** The CR's finalizer is released without touching bao on delete. Disabling a PKI mount destroys the private key irreversibly and silently invalidates every cert ever issued. Same applies to renames: `spec.path` change leaves an orphan CA at the old mount (logged) rather than risking key loss.
+- `root` — a self-signed root CA. The key never leaves bao.
+- `intermediate` — a CA whose CSR is signed by another CA. Two signing models, mutually exclusive:
+  - `internalSign` — `internalSign.name` is the signing CA's **mount path**; the operator generates the CSR, calls `root/sign-intermediate` on that mount, and `intermediate/set-signed` — fully automated in one reconcile. By default the signing CA must be in this CR's `openbaoNamespace`; set `internalSign.openbaoNamespace` to sign against a CA in a **different** OpenBao namespace (e.g. a platform CA signing per-tenant intermediates). Only the sign call targets that namespace — generate + set-signed stay in the intermediate's own namespace.
+  - `externalSignSecret` — the operator generates the CSR, writes it to a Secret named `<cr-name>-intermediate-csr` (key `csr`), and waits (`Ready=False, reason=AwaitingExternalSignature`) until the signed cert appears in the referenced Secret under `certificateKey` (default `tls.crt`); it then `set-signed`s and activates.
 
-### Sample
+`permittedDnsDomains` applies X.509 name constraints (RFC 5280) at signing — the issued CA may only sign for those domains.
 
-See [config/samples/security_v1alpha1_openbaopkisecretengineconfig.yaml](../config/samples/security_v1alpha1_openbaopkisecretengineconfig.yaml):
+**`IsDeletable=false`.** The CR's finalizer is released without touching bao on delete. Disabling a PKI mount destroys the private key irreversibly and silently invalidates every cert ever issued. Same applies to renames: `spec.path` change leaves an orphan CA at the old mount (logged) rather than risking key loss. The CSR Secret (for intermediates) is owner-ref'd to the CR and garbage-collected with it.
+
+### Samples
+
+See [config/samples/security_v1alpha1_openbaopkisecretengineconfig.yaml](../config/samples/security_v1alpha1_openbaopkisecretengineconfig.yaml) for root + both intermediate modes.
 
 ```yaml
+# Root CA (self-signed)
 apiVersion: security.mto.stakater.com/v1alpha1
 kind: OpenBaoPKISecretEngineConfig
 metadata:
   name: pki-root
   namespace: mto-extension-openbao-system
 spec:
-  path: pki
-  pkiType: root
+  path: pki-root
+  type: root
   commonName: "Demo Root CA"
   ttl: "87600h"
   keyType: rsa
   keyBits: 4096
-  subject:
-    organization: ["Stakater Demo"]
-    ou: ["Platform"]
-    country: ["US"]
-  urls:
-    issuingCertificates: ["https://bao.example.com/v1/pki/ca"]
-    crlDistributionPoints: ["https://bao.example.com/v1/pki/crl"]
+  organization: "Stakater Demo"   # flat, single-valued subject fields
+  ou: "Platform"
+  country: "US"
+  issuingCertificates: ["https://bao.example.com/v1/pki-root/ca"]
+  CRLDistributionPoints: ["https://bao.example.com/v1/pki-root/crl"]
+---
+# Intermediate signed in-bao by the root mount (same OpenBao namespace)
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoPKISecretEngineConfig
+metadata:
+  name: pki-int
+  namespace: mto-extension-openbao-system
+spec:
+  path: pki-int
+  type: intermediate
+  commonName: "Demo Intermediate CA"
+  ttl: "43800h"
+  internalSign: { name: pki-root }     # root MOUNT path
+  permittedDnsDomains: ["svc.cluster.local"]
 ```
 
 ### Spec fields
@@ -302,28 +322,43 @@ spec:
 |---|---|---|---|
 | `spec.path` | string | yes | PKI mount path. Must match an existing `OpenBaoSecretEngine` of kind=pki at the same path. |
 | `spec.openbaoNamespace` | string | no | X-Vault-Namespace target. Empty = root. |
-| `spec.pkiType` | enum | yes | Currently only `root` accepted. |
+| `spec.type` | enum | no | `root` (default) or `intermediate`. |
+| `spec.privateKeyType` | enum | no | `internal` (default) or `exported`. |
 | `spec.commonName` | string | yes | X.509 CN of the generated CA cert. |
 | `spec.ttl` | duration | no | CA cert validity. Bao default is short — set explicitly for any production CA. |
-| `spec.keyType` | enum | no | `rsa` / `ec` / `ed25519`. Default rsa. |
-| `spec.keyBits` | int | no | RSA: 2048\|3072\|4096. EC: 224\|256\|384\|521. Ignored for ed25519. |
-| `spec.subject` | object | no | Multi-valued X.509 subject fields (Organization, OU, Country, …). |
-| `spec.urls` | object | no | AIA / CRL / OCSP distribution points published in every issued cert. |
+| `spec.keyType` | enum | no | `rsa` (default) or `ec`. |
+| `spec.keyBits` | int | no | Key size; default 2048. |
+| `spec.maxPathLength` | int | no | CA pathlen basic constraint; default -1 (no limit). |
+| `spec.altNames` / `spec.IPSans` / `spec.URISans` / `spec.otherSans` | string | no | Comma-separated SANs. |
+| `spec.excludeCnFromSans` | bool | no | Omit the CN from generated SANs. |
+| `spec.permittedDnsDomains` | []string | no | X.509 name-constraints DNS allow-list, applied at signing. |
+| `spec.ou` / `spec.organization` / `spec.country` / `spec.locality` / `spec.province` / `spec.streetAddress` / `spec.postalCode` / `spec.serialNumber` | string | no | Flat (single-valued) X.509 subject fields. |
+| `spec.format` / `spec.privateKeyFormat` | enum / string | no | Output formats; `format` ∈ `pem` (default) / `pem_bundle` / `der`. |
+| `spec.issuingCertificates` / `spec.CRLDistributionPoints` / `spec.ocspServers` | []string | no | AIA / CRL / OCSP distribution points published in every issued cert. |
+| `spec.CRLExpiry` | duration | no | CRL rotation period; default `72h`. |
+| `spec.CRLDisable` | bool | no | Turn off CRL building. |
+| `spec.internalSign` | object | intermediate | Signing CA: `name` = its bao **mount path**; `openbaoNamespace` = its namespace (empty → this CR's own namespace; set it to sign cross-namespace, e.g. a platform CA). Mutually exclusive with `externalSignSecret`. |
+| `spec.externalSignSecret` | objectRef | intermediate | Secret holding the externally-signed cert. Mutually exclusive with `internalSign`. |
+| `spec.certificateKey` | string | no | Key within `externalSignSecret` holding the signed cert; default `tls.crt`. |
+
+`type=intermediate` requires **exactly one** of `internalSign` / `externalSignSecret`; `type=root` rejects both.
 
 ### Status
 
 | Field | Description |
 |---|---|
-| `conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError`. |
-| `baoWritten` | True after first successful CA generate. |
+| `conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError` / `AwaitingExternalSignature` / `InternalError`. |
+| `generated` / `exported` / `signed` | Intermediate-bootstrap booleans; all true once an intermediate is Active. |
+| `baoWritten` | True after first successful CA write. |
 | `lastWrittenBaoName` / `lastWrittenOpenBaoNamespace` | Identity of the last successful write; rename-cleanup is skipped (IsDeletable=false). |
-| `phase` | `""` before first generate, `Active` after. |
-| `caSerialNumber` | X.509 serial of the active CA, captured from bao on initial generate. |
+| `phase` | `""` before activation, `Active` after. An intermediate awaiting its external signature is surfaced via the `Ready` condition (reason `AwaitingExternalSignature`), not `phase`. |
+| `caSerialNumber` | X.509 serial of the active CA, captured from bao after generate / set-signed. |
 
 ### Operational notes
 
-- **Idempotent on existing CA.** BaoWrite re-probes via ReadPKICA; if a CA exists, only URLs are updated. Generate is never called twice on the same mount.
-- **Drift correction.** URL config is the only mutable surface once the CA is active. CR-spec changes to URL fields are applied; CR-spec changes to CA fields (commonName, ttl, keyType, keyBits, subject) are **silently ignored** because regenerating would destroy the private key — change those by creating a new mount + new CR.
+- **Idempotent on existing CA.** BaoWrite re-probes via ReadPKICA; if a CA exists, only URLs are updated. Generate / sign is never run twice on the same mount.
+- **External-sign generates the CSR exactly once.** While awaiting the offline signature the operator does not regenerate — the existing CSR Secret gates regeneration, so a retried signature uses the same key.
+- **Drift correction.** URL config is the only mutable surface once the CA is active. CR-spec changes to URL fields are applied; CR-spec changes to CA fields (commonName, ttl, keyType, keyBits, subject, name constraints) are **silently ignored** because regenerating would destroy the private key — change those by creating a new mount + new CR.
 - **Collision.** Two CRs at the same `(spec.path, spec.openbaoNamespace)` tuple → older `creationTimestamp` wins; loser `Ready=False, reason=NameCollision`.
 - **Force-delete footgun.** `kubectl delete --grace-period=0 --force` releases the finalizer without the operator running cleanup. Same effect as the normal delete in this case — bao state is preserved either way.
 
