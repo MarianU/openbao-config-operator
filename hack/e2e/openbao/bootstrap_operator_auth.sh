@@ -54,6 +54,16 @@ kcurl_code() {
   | sed -n '1s/^\([0-9][0-9][0-9]\).*/\1/p'
 }
 
+# Sends no X-Vault-Token, matching the operator's own login request: login is
+# an unauthenticated path, and the bootstrap token's grants are irrelevant to
+# whether the operator can get in.
+kcurl_anon() {
+  kubectl -n "${OPENBAO_NS}" run "curl-$$-${RANDOM}" --image=curlimages/curl:8.10.1 \
+    --restart=Never --rm -i --quiet -- \
+    -sS -H "Content-Type: application/json" "$@" \
+  | sed -E '/^pod ".*" deleted$/d' | awk '/^[{[]/{p=1} p'
+}
+
 echo ">> Verifying bootstrap token"
 kcurl_json "${VAULT_ADDR}/v1/auth/token/lookup-self" >/dev/null
 
@@ -146,6 +156,77 @@ esac
 
 READ_ROLE=$(kcurl_code "${VAULT_ADDR}/v1/auth/${AUTH_MOUNT}/role/${OPERATOR_ROLE}")
 [ "${READ_ROLE}" = "200" ] || { echo "Role failed to install (HTTP ${READ_ROLE})" >&2; exit 1; }
+
+# Every value written above is half of a pair whose other half lives in the
+# operator Deployment: the role's audience and bound SA against the projected
+# token volume and serviceAccountName, and AUTH_MOUNT/OPERATOR_ROLE against
+# BAO_AUTH_MOUNT/BAO_AUTH_ROLE. A readable role proves none of that.
+#
+# So the probe below takes every input from the Deployment, never from this
+# script's own variables — reusing them would make it agree with itself and
+# pass through exactly the mismatch it exists to catch. A login is also the
+# only check that exercises the reviewer JWT and bao's TokenReview access.
+# Costs one operator token, which expires after its TTL (the bootstrap policy
+# grants no revoke).
+echo ">> Verifying the operator can log in"
+DEPLOY_JSON=$(kubectl -n "${OPERATOR_NS}" get deploy -l control-plane=controller-manager \
+  -o json 2>/dev/null | jq -c '.items[0] // empty' 2>/dev/null || true)
+DEPLOY_METHOD=$(printf '%s' "${DEPLOY_JSON}" | jq -r \
+  '.spec.template.spec.containers[0].env[]? | select(.name=="BAO_AUTH_METHOD") | .value' 2>/dev/null || true)
+
+if [ -z "${DEPLOY_JSON}" ]; then
+  echo "   SKIPPED — no controller-manager Deployment in ${OPERATOR_NS} yet."
+  echo "   Re-run this script once the operator is deployed to verify the login."
+elif [ "${DEPLOY_METHOD}" != "kubernetes" ]; then
+  echo "   SKIPPED — the Deployment runs BAO_AUTH_METHOD=${DEPLOY_METHOD:-token},"
+  echo "   so it does not use this login path."
+else
+  # Read the pod's half of each pair. Mount and role fall back to the client's
+  # own defaults, which apply when the Deployment leaves the env unset.
+  DEP_SA=$(printf '%s' "${DEPLOY_JSON}" | jq -r '.spec.template.spec.serviceAccountName // empty')
+  DEP_AUD=$(printf '%s' "${DEPLOY_JSON}" | jq -r \
+    '[.spec.template.spec.volumes[]?.projected.sources[]?.serviceAccountToken.audience
+      | select(. != null and . != "")] | first // empty')
+  DEP_MOUNT=$(printf '%s' "${DEPLOY_JSON}" | jq -r \
+    '.spec.template.spec.containers[0].env[]? | select(.name=="BAO_AUTH_MOUNT") | .value' || true)
+  DEP_ROLE=$(printf '%s' "${DEPLOY_JSON}" | jq -r \
+    '.spec.template.spec.containers[0].env[]? | select(.name=="BAO_AUTH_ROLE") | .value' || true)
+  DEP_MOUNT=${DEP_MOUNT:-k8s-operator}
+  DEP_ROLE=${DEP_ROLE:-mto-extension-openbao}
+
+  [ -n "${DEP_AUD}" ] || {
+    echo "The Deployment projects no audience-bound ServiceAccount token, so its" >&2
+    echo "JWT would also be valid against the API server. Expected a projected" >&2
+    echo "volume with serviceAccountToken.audience set." >&2
+    exit 1
+  }
+
+  PROBE_JWT=$(kubectl -n "${OPERATOR_NS}" create token "${DEP_SA}" \
+    --audience="${DEP_AUD}" --duration=10m 2>/dev/null || true)
+  [ -n "${PROBE_JWT}" ] || {
+    echo "Could not mint a ServiceAccount token for ${OPERATOR_NS}/${DEP_SA}" >&2
+    exit 1
+  }
+  PROBE_BODY=$(jq -n --arg role "${DEP_ROLE}" --arg jwt "${PROBE_JWT}" '{role:$role, jwt:$jwt}')
+  PROBE_OUT=$(kcurl_anon -X POST "${VAULT_ADDR}/v1/auth/${DEP_MOUNT}/login" \
+    --data "${PROBE_BODY}" || true)
+  PROBE_POLICIES=$(printf '%s' "${PROBE_OUT}" | jq -rc '.auth.token_policies // empty' 2>/dev/null || true)
+  if [ -z "${PROBE_POLICIES}" ]; then
+    echo "Login FAILED — the mount, policy and role were written, but the operator" >&2
+    echo "cannot authenticate with them. bao said:" >&2
+    printf '%s' "${PROBE_OUT}" | jq -r '.errors[]?' 2>/dev/null | sed 's/^/  /' >&2 \
+      || printf '  %s\n' "${PROBE_OUT}" >&2
+    cat >&2 <<EOF
+                  written here      operator Deployment
+  audience        ${AUDIENCE}       ${DEP_AUD}
+  serviceaccount  ${OPERATOR_SA}    ${DEP_SA}
+  auth mount      ${AUTH_MOUNT}     ${DEP_MOUNT}
+  role            ${OPERATOR_ROLE}  ${DEP_ROLE}
+EOF
+    exit 1
+  fi
+  echo "   OK — ${OPERATOR_NS}/${DEP_SA} logged in at auth/${DEP_MOUNT}/login, policies: ${PROBE_POLICIES}"
+fi
 
 echo ">> Done. The operator authenticates at auth/${AUTH_MOUNT}/login with role '${OPERATOR_ROLE}'."
 echo "   No token Secret is created; the bootstrap token can now expire or be revoked."
