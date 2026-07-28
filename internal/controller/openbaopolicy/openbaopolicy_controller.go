@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,18 +24,6 @@ const OpenBaoPolicyFinalizer = "openbaopolicy.security.mto.stakater.com/finalize
 
 type OpenBaoPolicyReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoPolicy]
-}
-
-// NewOpenBaoPolicyReconciler constructs the reconciler. The bao address and
-// token come from VAULT_ADDR / VAULT_TOKEN (or BAO_ADDR / BAO_TOKEN) at
-// startup; missing env is fatal so misconfiguration surfaces at process
-// start, not during the first Reconcile.
-func NewOpenBaoPolicyReconciler(mgr ctrl.Manager) (*OpenBaoPolicyReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoPolicyReconcilerWithClient(mgr, bao), nil
 }
 
 // NewOpenBaoPolicyReconcilerWithClient is the test-friendly constructor.
@@ -154,19 +141,4 @@ func (r *OpenBaoPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.OpenBaoPolicy{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoPolicyReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

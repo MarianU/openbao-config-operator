@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	obxv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
 	openbaoauthmethod "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaoauthmethod"
 	openbaocertcfg "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthengineconfig"
 	openbaocertrole "github.com/stakater-ab/mto-extension-openbao/internal/controller/openbaocertauthenginerole"
@@ -182,149 +183,61 @@ func main() {
 	}
 }
 
-// setupReconcilers wires every controller into the manager. Split out
-// of main() to keep cyclomatic complexity below the project lint
-// threshold; the body grows linearly as new primitives are added.
+// setupReconcilers wires every controller into the manager. All reconcilers
+// share one bao client: auth mode (static token vs. in-cluster Kubernetes
+// login) is selected once from the environment by baoclient.NewClientFromEnv.
+// Only configuration errors are fatal here — bao reachability is checked
+// per-reconcile so a sealed or still-starting bao surfaces as CR conditions
+// that heal on requeue, not a crash-looping process.
 func setupReconcilers(mgr ctrl.Manager) error {
 	// +kubebuilder:scaffold:builder
 
-	openBaoPolicyReconciler, err := openbaopolicy.NewOpenBaoPolicyReconciler(mgr)
+	bao, err := baoclient.NewClientFromEnv()
 	if err != nil {
 		return err
 	}
-	if err := openBaoPolicyReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
+	setupLog.Info("bao client configured", "authMethod", baoAuthMethod())
 
-	openBaoKARReconciler, err := openbaokar.NewOpenBaoKubernetesAuthRoleReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoKARReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoSecretEngineReconciler, err := openbaose.NewOpenBaoSecretEngineReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoSecretEngineReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoNamespaceReconciler, err := openbaonamespace.NewOpenBaoNamespaceReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoNamespaceReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoPKIConfigReconciler, err := openbaopkic.NewOpenBaoPKISecretEngineConfigReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoPKIConfigReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoPKIRoleReconciler, err := openbaopkir.NewOpenBaoPKISecretEngineRoleReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoPKIRoleReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	return setupIdentityAndAuthReconcilers(mgr)
-}
-
-// setupIdentityAndAuthReconcilers wires the ST3 identity + auth
-// primitives. Split from setupReconcilers for the same complexity
-// reason — keep both helpers under the lint threshold as the family
-// grows.
-func setupIdentityAndAuthReconcilers(mgr ctrl.Manager) error {
 	hmac, err := bootstrapHMACComputer(mgr)
 	if err != nil {
 		return err
 	}
-	openBaoGroupReconciler, err := openbaogroup.NewOpenBaoGroupReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoGroupReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
 
-	openBaoGroupAliasReconciler, err := openbaogroupalias.NewOpenBaoGroupAliasReconciler(mgr)
-	if err != nil {
-		return err
+	reconcilers := []interface {
+		SetupWithManager(ctrl.Manager) error
+	}{
+		openbaopolicy.NewOpenBaoPolicyReconcilerWithClient(mgr, bao),
+		openbaokar.NewOpenBaoKubernetesAuthRoleReconcilerWithClient(mgr, bao),
+		openbaose.NewOpenBaoSecretEngineReconcilerWithClient(mgr, bao),
+		openbaonamespace.NewOpenBaoNamespaceReconcilerWithClient(mgr, bao),
+		openbaopkic.NewOpenBaoPKISecretEngineConfigReconcilerWithClient(mgr, bao),
+		openbaopkir.NewOpenBaoPKISecretEngineRoleReconcilerWithClient(mgr, bao),
+		openbaogroup.NewOpenBaoGroupReconcilerWithClient(mgr, bao),
+		openbaogroupalias.NewOpenBaoGroupAliasReconcilerWithClient(mgr, bao),
+		openbaoitr.NewOpenBaoIdentityTokenRoleReconcilerWithClient(mgr, bao),
+		openbaoauthmethod.NewOpenBaoAuthMethodReconcilerWithClient(mgr, bao),
+		openbaocertcfg.NewOpenBaoCertAuthEngineConfigReconcilerWithClient(mgr, bao),
+		openbaocertrole.NewOpenBaoCertAuthEngineRoleReconcilerWithClient(mgr, bao),
+		openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconcilerWithClient(mgr, bao, hmac),
+		openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconcilerWithClient(mgr, bao),
+		openbaok8scfg.NewOpenBaoKubernetesAuthEngineConfigReconcilerWithClient(mgr, bao, hmac),
+		openbaotk.NewOpenBaoTransitKeyReconcilerWithClient(mgr, bao),
 	}
-	if err := openBaoGroupAliasReconciler.SetupWithManager(mgr); err != nil {
-		return err
+	for _, r := range reconcilers {
+		if err := r.SetupWithManager(mgr); err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
-	openBaoITRReconciler, err := openbaoitr.NewOpenBaoIdentityTokenRoleReconciler(mgr)
-	if err != nil {
-		return err
+// baoAuthMethod reports the effective auth mode for the startup log.
+// Mirrors the default in baoclient.NewClientFromEnv.
+func baoAuthMethod() string {
+	if m := os.Getenv("BAO_AUTH_METHOD"); m != "" {
+		return m
 	}
-	if err := openBaoITRReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoAuthMethodReconciler, err := openbaoauthmethod.NewOpenBaoAuthMethodReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoAuthMethodReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoCertCfgReconciler, err := openbaocertcfg.NewOpenBaoCertAuthEngineConfigReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoCertCfgReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoCertRoleReconciler, err := openbaocertrole.NewOpenBaoCertAuthEngineRoleReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoCertRoleReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoJWTCfgReconciler, err := openbaojwtcfg.NewOpenBaoJWTOIDCAuthEngineConfigReconciler(mgr, hmac)
-	if err != nil {
-		return err
-	}
-	if err := openBaoJWTCfgReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoJWTRoleReconciler, err := openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	if err := openBaoJWTRoleReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoK8sCfgReconciler, err := openbaok8scfg.NewOpenBaoKubernetesAuthEngineConfigReconciler(mgr, hmac)
-	if err != nil {
-		return err
-	}
-	if err := openBaoK8sCfgReconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	openBaoTransitKeyReconciler, err := openbaotk.NewOpenBaoTransitKeyReconciler(mgr)
-	if err != nil {
-		return err
-	}
-	return openBaoTransitKeyReconciler.SetupWithManager(mgr)
+	return "token"
 }
 
 // bootstrapHMACComputer loads or generates the HMAC key used by the

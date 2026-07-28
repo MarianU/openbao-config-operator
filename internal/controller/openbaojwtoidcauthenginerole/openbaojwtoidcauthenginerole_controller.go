@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,14 +22,6 @@ const OpenBaoJWTOIDCAuthEngineRoleFinalizer = "openbaojwtoidcauthenginerole.secu
 
 type OpenBaoJWTOIDCAuthEngineRoleReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoJWTOIDCAuthEngineRole]
-}
-
-func NewOpenBaoJWTOIDCAuthEngineRoleReconciler(mgr ctrl.Manager) (*OpenBaoJWTOIDCAuthEngineRoleReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoJWTOIDCAuthEngineRoleReconcilerWithClient(mgr, bao), nil
 }
 
 func NewOpenBaoJWTOIDCAuthEngineRoleReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client) *OpenBaoJWTOIDCAuthEngineRoleReconciler {
@@ -140,19 +131,4 @@ func (r *OpenBaoJWTOIDCAuthEngineRoleReconciler) SetupWithManager(mgr ctrl.Manag
 		For(&v1alpha1.OpenBaoJWTOIDCAuthEngineRole{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoJWTOIDCAuthEngineRoleReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

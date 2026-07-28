@@ -180,6 +180,19 @@ openbao-provision-creds:
 	POLICY_FILE=$(POLICY_FILE) \
 	./hack/e2e/openbao/provision_credentials.sh
 
+# Bootstraps the operator's own kubernetes-auth identity (mount, config,
+# operator-manage policy, role). The operator then logs in with its
+# ServiceAccount instead of reading a token from a Secret. Idempotent.
+# VAULT_TOKEN=root matches the dev-mode openbao-install; production runs the
+# script directly with a temp bootstrap token (see bootstrap-policy.hcl).
+.PHONY: openbao-bootstrap-auth
+openbao-bootstrap-auth:
+	OPENBAO_NS=$(OPENBAO_NS) \
+	OPERATOR_NS=$(OPERATOR_NS) \
+	VAULT_ADDR=$(VAULT_ADDR) \
+	VAULT_TOKEN=root \
+	./hack/e2e/openbao/bootstrap_operator_auth.sh
+
 .PHONY: operator-deploy
 operator-deploy:
 	kubectl create ns $(OPERATOR_NS) --dry-run=client -o yaml | kubectl apply -f -
@@ -258,7 +271,7 @@ load-image: ## Load local image into Kind cluster if it exists locally, otherwis
 	$(MAKE) cluster ACTION=load-image
 
 .PHONY: deploy
-deploy: kustomize setup-cluster openbao-install openbao-provision-creds install
+deploy: kustomize setup-cluster openbao-install openbao-provision-creds openbao-bootstrap-auth install
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG) && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -

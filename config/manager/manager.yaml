@@ -65,11 +65,15 @@ spec:
           - --health-probe-bind-address=:8081
         
         env:
-          - name: VAULT_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: openbao-token
-                key: token
+          # The operator holds no bao credential: it logs in at
+          # auth/k8s-operator/login with the projected ServiceAccount token
+          # below (see hack/e2e/openbao/bootstrap_operator_auth.sh for the
+          # bao-side mount/policy/role). Set BAO_AUTH_METHOD=token plus a
+          # VAULT_TOKEN env to fall back to static-token mode.
+          - name: BAO_AUTH_METHOD
+            value: kubernetes
+          - name: BAO_AUTH_JWT_PATH
+            value: /var/run/secrets/openbao/token
           - name: VAULT_ADDR
             valueFrom:
               configMapKeyRef:
@@ -78,6 +82,10 @@ spec:
         image: controller:latest
         imagePullPolicy: IfNotPresent
         name: manager
+        volumeMounts:
+          - name: bao-sa-token
+            mountPath: /var/run/secrets/openbao
+            readOnly: true
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -104,5 +112,17 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
+      volumes:
+        # Audience-bound projected SA token for bao login: useless against
+        # the API server (wrong audience), and the pod's API-server token is
+        # equally useless against bao. Kubelet rotates it; the client
+        # re-reads the file on every login.
+        - name: bao-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: openbao
+                  expirationSeconds: 3600
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

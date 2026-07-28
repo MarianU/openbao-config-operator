@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,14 +22,6 @@ const OpenBaoAuthMethodFinalizer = "openbaoauthmethod.security.mto.stakater.com/
 
 type OpenBaoAuthMethodReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoAuthMethod]
-}
-
-func NewOpenBaoAuthMethodReconciler(mgr ctrl.Manager) (*OpenBaoAuthMethodReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoAuthMethodReconcilerWithClient(mgr, bao), nil
 }
 
 func NewOpenBaoAuthMethodReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client) *OpenBaoAuthMethodReconciler {
@@ -188,19 +179,4 @@ func (r *OpenBaoAuthMethodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.OpenBaoAuthMethod{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoAuthMethodReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }
