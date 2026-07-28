@@ -9,12 +9,11 @@
 # do not re-add it there without a failing call that proves the need.
 #
 # The deny stanzas at the bottom are the anti-lockout guard: the operator
-# manages sys/auth/* for tenants, and without them a user-authored CR
-# targeting the operator's own login mount could delete or reconfigure the
-# door the operator walks in through. Deny beats every allow in bao policy
-# evaluation, so these win over the sys/auth/* grant above them.
-# auth/k8s-operator/login stays reachable — login is an unauthenticated path,
-# unaffected by this token's policy.
+# manages sys/auth/* and sys/policies/acl/* for tenants, and without them a
+# user-authored CR could reach the operator's own login mount or its own
+# policy. Deny beats every allow in bao policy evaluation, so these win over
+# the grants above them. auth/k8s-operator/login stays reachable — login is
+# an unauthenticated path, unaffected by this token's policy.
 
 # mounts & auth listing
 path "sys/mounts"            { capabilities = ["read","list"] }
@@ -104,7 +103,7 @@ path "+/+/issuers"           { capabilities = ["read","list"] }
 path "+/+/issuers/*"         { capabilities = ["create","read","update","delete","list"] }
 path "+/+/config/*"          { capabilities = ["create","read","update","delete","list"] }
 
-# ---- anti-lockout guard: the operator's own login mount ----
+# ---- anti-lockout guard: the operator's own identity ----
 # Deny wins over every allow above. No CR reconciled with this token can
 # delete, tune, or reconfigure the mount/role the operator logs in through.
 path "sys/auth/k8s-operator"      { capabilities = ["deny"] }
@@ -112,3 +111,10 @@ path "sys/auth/k8s-operator/*"    { capabilities = ["deny"] }
 path "auth/k8s-operator/config"   { capabilities = ["deny"] }
 path "auth/k8s-operator/role"     { capabilities = ["deny"] }
 path "auth/k8s-operator/role/*"   { capabilities = ["deny"] }
+
+# ...nor these two policies. bao does not bound a policy's contents by what
+# the writer holds, so a CR claiming one of these names picks the operator's
+# own permissions outright, and deleting that CR strips them. Reserved names:
+# the sys/policies/acl/* grant above covers every other policy.
+path "sys/policies/acl/operator-manage" { capabilities = ["deny"] }
+path "sys/policies/acl/obx-bootstrap"   { capabilities = ["deny"] }
