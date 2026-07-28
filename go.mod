@@ -3,7 +3,7 @@ module github.com/stakater-ab/mto-extension-openbao
 go 1.24.0
 
 require (
-	github.com/go-logr/logr v1.4.2
+	github.com/go-logr/logr v1.4.4
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/onsi/ginkgo/v2 v2.22.2
 	github.com/onsi/gomega v1.36.2
