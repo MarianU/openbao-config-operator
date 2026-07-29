@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: openbao-config-operator
     control-plane: controller-manager
-  name: openbao-config-operator-controller-manager-metrics-service
+  name: openbao-config-operator-metrics-service
 spec:
   ports:
   - name: https

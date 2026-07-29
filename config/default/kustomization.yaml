@@ -18,7 +18,8 @@ resources:
 - ../crd
 - ../rbac
 - ../manager
-- ../samples
+# ../samples is deliberately not included: sample CRs are examples, not part of an
+# install. config/manifests pulls them in separately for the CSV's alm-examples.
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
 # crd/kustomization.yaml
 #- ../webhook
