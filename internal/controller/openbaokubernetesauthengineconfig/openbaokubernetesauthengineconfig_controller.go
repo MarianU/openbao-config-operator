@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,14 +30,6 @@ const OpenBaoKubernetesAuthEngineConfigFinalizer = "openbaokubernetesauthenginec
 type OpenBaoKubernetesAuthEngineConfigReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoKubernetesAuthEngineConfig]
 	cl client.Client
-}
-
-func NewOpenBaoKubernetesAuthEngineConfigReconciler(mgr ctrl.Manager, hmac hmacstore.Computer) (*OpenBaoKubernetesAuthEngineConfigReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoKubernetesAuthEngineConfigReconcilerWithClient(mgr, bao, hmac), nil
 }
 
 func NewOpenBaoKubernetesAuthEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client, hmac hmacstore.Computer) *OpenBaoKubernetesAuthEngineConfigReconciler {
@@ -204,19 +195,4 @@ func matchesCASecretRef(ref *v1alpha1.KubernetesCaSecretRef, defaultNS string, s
 		ns = defaultNS
 	}
 	return ns == sec.Namespace && ref.Name == sec.Name
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoKubernetesAuthEngineConfigReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

@@ -55,7 +55,13 @@ path "+/keys/*"             { capabilities = ["create","read","update","delete",
 # and reads /<mount>/cert/ca etc. The OpenBaoPKISecretEngineRole
 # controller manages /<mount>/roles/<name>. Mount path is
 # operator-supplied so the leading `+` is the mount segment.
+# The intermediate-CA paths cover both the controller's Mode-2 flow and
+# the e2e harness acting as the "offline signer" in the Mode-3 spec
+# (pkiconfig_test.go calls SignIntermediate against the root mount).
 path "+/root/generate/*"    { capabilities = ["create","read","update","sudo"] }
+path "+/root/sign-intermediate"  { capabilities = ["create","update"] }
+path "+/intermediate/generate/*" { capabilities = ["create","update"] }
+path "+/intermediate/set-signed" { capabilities = ["create","update"] }
 path "+/cert/*"             { capabilities = ["read"] }
 path "+/roles"              { capabilities = ["read","list"] }
 path "+/roles/*"            { capabilities = ["create","read","update","delete","list"] }
@@ -82,6 +88,9 @@ path "+/auth/+/role/*"       { capabilities = ["create","read","update","delete"
 path "+/+/keys"              { capabilities = ["read","list"] }
 path "+/+/keys/*"            { capabilities = ["create","read","update","delete","list"] }
 path "+/+/root/generate/*"   { capabilities = ["create","read","update","sudo"] }
+path "+/+/root/sign-intermediate"  { capabilities = ["create","update"] }
+path "+/+/intermediate/generate/*" { capabilities = ["create","update"] }
+path "+/+/intermediate/set-signed" { capabilities = ["create","update"] }
 path "+/+/cert/*"            { capabilities = ["read"] }
 path "+/+/roles"             { capabilities = ["read","list"] }
 path "+/+/roles/*"           { capabilities = ["create","read","update","delete","list"] }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,17 +24,6 @@ const OpenBaoSecretEngineFinalizer = "openbaosecretengine.security.mto.stakater.
 
 type OpenBaoSecretEngineReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoSecretEngine]
-}
-
-// NewOpenBaoSecretEngineReconciler constructs the reconciler. Bao address
-// and token come from VAULT_ADDR / VAULT_TOKEN (or BAO_ADDR / BAO_TOKEN)
-// at startup.
-func NewOpenBaoSecretEngineReconciler(mgr ctrl.Manager) (*OpenBaoSecretEngineReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoSecretEngineReconcilerWithClient(mgr, bao), nil
 }
 
 // NewOpenBaoSecretEngineReconcilerWithClient is the test-friendly constructor.
@@ -205,19 +193,4 @@ func (r *OpenBaoSecretEngineReconciler) SetupWithManager(mgr ctrl.Manager) error
 		For(&v1alpha1.OpenBaoSecretEngine{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoSecretEngineReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

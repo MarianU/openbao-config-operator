@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -29,14 +28,6 @@ const OpenBaoGroupAliasFinalizer = "openbaogroupalias.security.mto.stakater.com/
 type OpenBaoGroupAliasReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoGroupAlias]
 	cl client.Client
-}
-
-func NewOpenBaoGroupAliasReconciler(mgr ctrl.Manager) (*OpenBaoGroupAliasReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoGroupAliasReconcilerWithClient(mgr, bao), nil
 }
 
 func NewOpenBaoGroupAliasReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client) *OpenBaoGroupAliasReconciler {
@@ -283,19 +274,4 @@ func (r *OpenBaoGroupAliasReconciler) aliasesReferencingGroup(ctx context.Contex
 		}
 	}
 	return out
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoGroupAliasReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

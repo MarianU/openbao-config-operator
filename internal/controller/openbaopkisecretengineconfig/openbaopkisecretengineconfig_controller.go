@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -48,16 +47,6 @@ const caBundleKey = "ca.crt"
 
 type OpenBaoPKISecretEngineConfigReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoPKISecretEngineConfig]
-}
-
-// NewOpenBaoPKISecretEngineConfigReconciler constructs the reconciler.
-// Bao address + token come from VAULT_ADDR / VAULT_TOKEN at startup.
-func NewOpenBaoPKISecretEngineConfigReconciler(mgr ctrl.Manager) (*OpenBaoPKISecretEngineConfigReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoPKISecretEngineConfigReconcilerWithClient(mgr, bao), nil
 }
 
 // NewOpenBaoPKISecretEngineConfigReconcilerWithClient is the
@@ -710,19 +699,4 @@ func (r *OpenBaoPKISecretEngineConfigReconciler) SetupWithManager(mgr ctrl.Manag
 		For(&v1alpha1.OpenBaoPKISecretEngineConfig{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoPKISecretEngineConfigReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

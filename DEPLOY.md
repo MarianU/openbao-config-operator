@@ -1,5 +1,11 @@
 # Deployment
 
+> The operator ships no OpenBao credential: it authenticates with its
+> own ServiceAccount via Kubernetes auth. Installs from this bundle or
+> catalog need the one-time bootstrap (auth mount + policy + login role)
+> to have run against the target OpenBao server first — see
+> [OpenBao authentication](README.md#openbao-authentication).
+
 ## Manual Deployment
 For local development and testing, you can build and push the operator image directly to a Docker repository.
 

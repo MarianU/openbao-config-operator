@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,14 +22,6 @@ const OpenBaoCertAuthEngineConfigFinalizer = "openbaocertauthengineconfig.securi
 
 type OpenBaoCertAuthEngineConfigReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoCertAuthEngineConfig]
-}
-
-func NewOpenBaoCertAuthEngineConfigReconciler(mgr ctrl.Manager) (*OpenBaoCertAuthEngineConfigReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoCertAuthEngineConfigReconcilerWithClient(mgr, bao), nil
 }
 
 func NewOpenBaoCertAuthEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Client) *OpenBaoCertAuthEngineConfigReconciler {
@@ -136,19 +127,4 @@ func (r *OpenBaoCertAuthEngineConfigReconciler) SetupWithManager(mgr ctrl.Manage
 		For(&v1alpha1.OpenBaoCertAuthEngineConfig{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoCertAuthEngineConfigReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }
