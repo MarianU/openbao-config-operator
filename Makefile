@@ -4,7 +4,11 @@
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
 VERSION ?= 0.0.1
-OPERATOR_NAME ?= mto-extension-openbao
+# Must equal the GitHub repository name. Stakater's shared CI derives the image
+# it advertises on the pull request and pulls back during e2e from the
+# repository name alone, so an image pushed under any other name is one nothing
+# downstream can find.
+OPERATOR_NAME ?= openbao-config-operator
 CATALOG_DIR_PATH ?= catalog
 DOCKER_REPO_BASE ?= ghcr.io/stakater
 ifeq ($(strip $(DOCKER_REPO_BASE)),)
@@ -34,7 +38,7 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 # This variable is used to construct full image tags for bundle and catalog images.
 #
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# stakater.cloud/mto-extension-openbao-bundle:$VERSION and stakater.cloud/mto-extension-openbao-catalog:$VERSION.
+# stakater.cloud/openbao-config-operator-bundle:$VERSION and stakater.cloud/openbao-config-operator-catalog:$VERSION.
 IMAGE_TAG_BASE ?= $(DOCKER_REPO_BASE)/$(OPERATOR_NAME)
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
@@ -124,7 +128,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 OPENBAO_NS   ?= openbao
-OPERATOR_NS  ?= mto-extension-openbao-system
+OPERATOR_NS  ?= openbao-config-operator-system
 VAULT_ADDR   ?= http://openbao.$(OPENBAO_NS).svc.cluster.local:8200
 POLICY_FILE  ?= test/policies/obx-e2e-manage.hcl
 TOKEN_SECRET ?= mto-openbao-token
@@ -241,10 +245,10 @@ PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name mto-extension-openbao-builder
-	$(CONTAINER_TOOL) buildx use mto-extension-openbao-builder
+	- $(CONTAINER_TOOL) buildx create --name openbao-config-operator-builder
+	$(CONTAINER_TOOL) buildx use openbao-config-operator-builder
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm mto-extension-openbao-builder
+	- $(CONTAINER_TOOL) buildx rm openbao-config-operator-builder
 	rm Dockerfile.cross
 
 .PHONY: build-installer
