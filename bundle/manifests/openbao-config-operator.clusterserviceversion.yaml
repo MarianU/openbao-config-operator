@@ -8,23 +8,6 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoAuthMethod",
           "metadata": {
-            "name": "openbao-config-operator-tenant-oidc",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "config": {
-              "defaultLeaseTtl": "1h",
-              "maxLeaseTtl": "24h"
-            },
-            "description": "Tenant OIDC auth mount",
-            "path": "oidc",
-            "type": "oidc"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoAuthMethod",
-          "metadata": {
             "name": "tenant-oidc",
             "namespace": "openbao-config-operator-system"
           },
@@ -49,43 +32,6 @@ metadata:
             "enableIdentityAliasMetadata": true,
             "ocspCacheSize": 200,
             "path": "cert"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoCertAuthEngineConfig",
-          "metadata": {
-            "name": "openbao-config-operator-cert",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "enableIdentityAliasMetadata": true,
-            "ocspCacheSize": 200,
-            "path": "cert"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoCertAuthEngineRole",
-          "metadata": {
-            "name": "openbao-config-operator-team-a-mtls",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "allowedCommonNames": [
-              "team-a-client"
-            ],
-            "certificateRef": {
-              "key": "ca.crt",
-              "name": "team-a-ca"
-            },
-            "displayName": "team-a-mtls",
-            "path": "cert",
-            "tokenMaxTtl": "24h",
-            "tokenPolicies": [
-              "team-a-reader"
-            ],
-            "tokenTtl": "1h"
           }
         },
         {
@@ -130,34 +76,6 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoGroup",
           "metadata": {
-            "name": "openbao-config-operator-oidc-admins",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "policies": [
-              "oidc-admin"
-            ],
-            "type": "external"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoGroup",
-          "metadata": {
-            "name": "openbao-config-operator-platform-admins",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "policies": [
-              "platform-admin"
-            ],
-            "type": "internal"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoGroup",
-          "metadata": {
             "name": "platform-admins",
             "namespace": "openbao-config-operator-system"
           },
@@ -185,21 +103,6 @@ metadata:
         },
         {
           "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoGroupAlias",
-          "metadata": {
-            "name": "openbao-config-operator-alice-oidc-admin",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "canonicalGroupRef": {
-              "name": "oidc-admins"
-            },
-            "mountAccessor": "REPLACE_ME_WITH_OIDC_ACCESSOR",
-            "name": "alice@example.com"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoIdentityTokenRole",
           "metadata": {
             "name": "aws-tokens",
@@ -210,38 +113,6 @@ metadata:
             "key": "platform",
             "template": "{\n  \"sub\": \"{{identity.entity.id}}\",\n  \"name\": \"{{identity.entity.name}}\"\n}\n",
             "ttl": "1h"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoIdentityTokenRole",
-          "metadata": {
-            "name": "openbao-config-operator-aws-tokens",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "clientId": "arn:aws:iam::123456789012:role/openbao-federated",
-            "key": "platform",
-            "template": "{\n  \"sub\": \"{{identity.entity.id}}\",\n  \"name\": \"{{identity.entity.name}}\"\n}\n",
-            "ttl": "1h"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoJWTOIDCAuthEngineConfig",
-          "metadata": {
-            "name": "openbao-config-operator-tenant-oidc",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "defaultRole": "tenant",
-            "oidcClientId": "bao-tenant-client",
-            "oidcClientSecretRef": {
-              "key": "oidcClientSecret",
-              "name": "oidc-client-secret"
-            },
-            "oidcDiscoveryUrl": "https://accounts.example.com",
-            "path": "oidc"
           }
         },
         {
@@ -260,36 +131,6 @@ metadata:
             },
             "oidcDiscoveryUrl": "https://accounts.example.com",
             "path": "oidc"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoJWTOIDCAuthEngineRole",
-          "metadata": {
-            "name": "openbao-config-operator-tenant",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "allowedRedirectUris": [
-              "https://bao.example.com/ui/vault/auth/oidc/oidc/callback"
-            ],
-            "boundAudiences": [
-              "bao-tenant-client"
-            ],
-            "groupsClaim": "groups",
-            "oidcScopes": [
-              "profile",
-              "email",
-              "groups"
-            ],
-            "path": "oidc",
-            "roleType": "oidc",
-            "tokenMaxTtl": "24h",
-            "tokenPolicies": [
-              "tenant"
-            ],
-            "tokenTtl": "1h",
-            "userClaim": "email"
           }
         },
         {
@@ -326,27 +167,6 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoKubernetesAuthEngineConfig",
           "metadata": {
-            "name": "openbao-config-operator-tenant-k8s-auth",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "issuer": "kubernetes/serviceaccount",
-            "kubernetesCaCertRef": {
-              "key": "ca.crt",
-              "name": "openbao-token-reviewer"
-            },
-            "kubernetesHost": "https://kubernetes.default.svc:443",
-            "path": "kubernetes",
-            "tokenReviewerJwtRef": {
-              "key": "token",
-              "name": "openbao-token-reviewer"
-            }
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoKubernetesAuthEngineConfig",
-          "metadata": {
             "name": "tenant-k8s-auth",
             "namespace": "openbao-config-operator-system"
           },
@@ -362,59 +182,6 @@ metadata:
               "key": "token",
               "name": "openbao-token-reviewer"
             }
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoKubernetesAuthRole",
-          "metadata": {
-            "name": "openbao-config-operator-prod-deployers",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "path": "kubernetes",
-            "policies": [
-              "prod-deploy-policy"
-            ],
-            "targetNamespaces": {
-              "targetNamespaces": [
-                "prod-app-1",
-                "prod-app-2"
-              ]
-            },
-            "targetServiceAccounts": [
-              "deployer"
-            ],
-            "tokenMaxTTL": "2h",
-            "tokenTTL": "1h",
-            "tokenType": "service"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoKubernetesAuthRole",
-          "metadata": {
-            "name": "openbao-config-operator-team-a-readers",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "audience": "vault",
-            "path": "kubernetes",
-            "policies": [
-              "team-a-secret-reader"
-            ],
-            "targetNamespaces": {
-              "targetNamespaceSelector": {
-                "matchLabels": {
-                  "stakater.com/tenant": "team-a"
-                }
-              }
-            },
-            "targetServiceAccounts": [
-              "default"
-            ],
-            "tokenMaxTTL": "24h",
-            "tokenTTL": "1h"
           }
         },
         {
@@ -493,93 +260,6 @@ metadata:
         },
         {
           "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoNamespace",
-          "metadata": {
-            "name": "openbao-config-operator-acme",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": null
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoNamespace",
-          "metadata": {
-            "name": "openbao-config-operator-acme-sub",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "name": "sub",
-            "openbaoNamespace": "acme/"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoPKISecretEngineConfig",
-          "metadata": {
-            "name": "openbao-config-operator-pki-intermediate",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "TTL": "43800h",
-            "commonName": "Demo Intermediate CA",
-            "internalSign": {
-              "name": "pki-root"
-            },
-            "path": "pki-int",
-            "permittedDnsDomains": [
-              "svc.cluster.local"
-            ],
-            "type": "intermediate"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoPKISecretEngineConfig",
-          "metadata": {
-            "name": "openbao-config-operator-pki-intermediate-external",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "TTL": "43800h",
-            "certificateKey": "tls.crt",
-            "commonName": "Demo Offline-Signed Intermediate CA",
-            "externalSignSecret": {
-              "name": "demo-signed-ca"
-            },
-            "path": "pki-ext",
-            "permittedDnsDomains": [
-              "demo-api.svc.cluster.local"
-            ],
-            "type": "intermediate"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoPKISecretEngineConfig",
-          "metadata": {
-            "name": "openbao-config-operator-pki-root",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "CRLDistributionPoints": [
-              "https://bao.example.com/v1/pki-root/crl"
-            ],
-            "TTL": "87600h",
-            "commonName": "Demo Root CA",
-            "country": "US",
-            "issuingCertificates": [
-              "https://bao.example.com/v1/pki-root/ca"
-            ],
-            "keyBits": 4096,
-            "keyType": "rsa",
-            "organization": "Stakater Demo",
-            "ou": "Platform",
-            "path": "pki-root",
-            "type": "root"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
             "name": "pki-intermediate",
@@ -648,26 +328,6 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineRole",
           "metadata": {
-            "name": "openbao-config-operator-web-server",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "allowSubdomains": true,
-            "allowedDomains": [
-              "*.demo.example.com"
-            ],
-            "keyBits": 2048,
-            "keyType": "rsa",
-            "maxTtl": "8760h",
-            "path": "pki",
-            "serverFlag": true,
-            "ttl": "720h"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoPKISecretEngineRole",
-          "metadata": {
             "name": "web-server",
             "namespace": "openbao-config-operator-system"
           },
@@ -688,35 +348,11 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPolicy",
           "metadata": {
-            "name": "openbao-config-operator-secret-reader",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "policy": "path \"secret/data/public/*\" {\n  capabilities = [\"read\", \"list\"]\n}\npath \"secret/metadata/public/*\" {\n  capabilities = [\"list\"]\n}\n"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoPolicy",
-          "metadata": {
             "name": "secret-reader",
             "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "policy": "path \"secret/data/public/*\" {\n  capabilities = [\"read\", \"list\"]\n}\npath \"secret/metadata/public/*\" {\n  capabilities = [\"list\"]\n}\n"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoSecretEngine",
-          "metadata": {
-            "name": "openbao-config-operator-secret-kv",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "description": "cluster-shared kv-v2 secret engine",
-            "kvV2": {},
-            "path": "secret"
           }
         },
         {
@@ -746,25 +382,10 @@ metadata:
             "path": "transit",
             "type": "aes256-gcm96"
           }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoTransitKey",
-          "metadata": {
-            "name": "openbao-config-operator-app-key",
-            "namespace": "openbao-config-operator-system"
-          },
-          "spec": {
-            "autoRotatePeriod": "720h",
-            "deletionAllowed": true,
-            "name": "app-key",
-            "path": "transit",
-            "type": "aes256-gcm96"
-          }
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-07-29T12:06:49Z"
+    createdAt: "2026-07-29T13:06:26Z"
     operators.operatorframework.io/builder: operator-sdk-v1.33.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: openbao-config-operator.v0.0.1

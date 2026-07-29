@@ -385,6 +385,7 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 HELM ?= $(shell command -v helm || echo $(PWD)/bin/helm)
+HELMIFY ?= $(LOCALBIN)/helmify
 KIND ?= $(LOCALBIN)/kind
 
 ## Tool Versions
@@ -392,6 +393,7 @@ KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v1.64.4
+HELMIFY_VERSION ?= v0.4.20
 KIND_VERSION ?= v0.30.0
 
 .PHONY: kustomize
@@ -465,8 +467,17 @@ download-helm-mk: ## Download shared helm.mk if missing.
 		curl -fsSL $(HELM_MK_URL) -o $(HELM_MK); \
 	fi
 
+# helm.mk logs in to ghcr.io with GIT_USER/GIT_TOKEN; the CI chart-push action only
+# exports GHCR_USERNAME/GHCR_TOKEN, so fall back to those when GIT_* is unset.
+GIT_USER  ?= $(GHCR_USERNAME)
+GIT_TOKEN ?= $(GHCR_TOKEN)
+
 HELM_MK_CMD = GOBIN=$(LOCALBIN) PATH="$(LOCALBIN):$$PATH" $(MAKE) -f $(HELM_MK)
+# helm.mk references $(KUSTOMIZE) but never defines it, so it has to be passed in.
 HELM_MK_ARGS = \
+	KUSTOMIZE=$(KUSTOMIZE) \
+	GIT_USER=$(GIT_USER) \
+	GIT_TOKEN=$(GIT_TOKEN) \
 	OPERATOR_NAME=$(OPERATOR_NAME) \
 	HELM_CHART_NAME=$(HELM_CHART_NAME) \
 	HELM_CHART_DIR=$(HELM_CHART_DIR) \
@@ -479,8 +490,8 @@ HELM_MK_ARGS = \
 helm-release: helm-release-operator helm-release-mto-bootstrap helm-release-mto ## Release operator + mto-bootstrap + mto charts to OCI.
 
 .PHONY: helm-release-operator
-helm-release-operator: helmify kustomize download-helm-mk ## Helmify config/default and release the operator chart.
-	$(HELM_MK_CMD) helm-release $(HELM_MK_ARGS)
+helm-release-operator: helmify kustomize yq download-helm-mk ## Helmify config/default and release the operator chart.
+	@$(HELM_MK_CMD) helm-release $(HELM_MK_ARGS)
 
 .PHONY: helm-release-mto-bootstrap
 helm-release-mto-bootstrap: helm ## Lint, package and push openbao-config-mto-bootstrap.
