@@ -162,6 +162,7 @@ test-e2e:
 		go test ./test/e2e/ -v -ginkgo.v; \
 	RC=$$?; \
 	kill $$(cat .pf.pid) >/dev/null 2>&1 || true; rm -f .pf.pid; \
+	if [ $$RC -ne 0 ]; then $(MAKE) e2e-diagnostics; fi; \
 	exit $$RC
 
 .PHONY: openbao-install
@@ -270,13 +271,72 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 load-image: ## Load local image into Kind cluster if it exists locally, otherwise it will be pulled
 	$(MAKE) cluster ACTION=load-image
 
+# Wait for the controller rollout, dumping cluster state to stdout if it stalls
+# and retrying once after a clean restart.
+#
+# The dump goes to stdout rather than to files under e2e-logs/ on purpose: this
+# runs in `deploy`, which is upstream of `test-e2e`, so a failure here aborts the
+# job before any artifact-uploading step is reached. Printing means the evidence
+# lands in the workflow log, where it survives regardless.
+#
+# The retry is not just defensive. A private image on a cold Kind node has no
+# local layer to reuse, and one fixed window gives a slow pull no second chance;
+# ImagePullBackOff also burns through a short window in two or three attempts.
+define rollout-controller-with-retry
+@bash -ceu '\
+	ns="$(OPERATOR_NS)"; \
+	dep="$(OPERATOR_NAME)-controller-manager"; \
+	echo ">>> Waiting for rollout (90s fast path)..."; \
+	if ! $(KUBECTL) -n "$$ns" rollout status deploy/"$$dep" --timeout=90s; then \
+	  echo ">>> Rollout stalled - collecting debug info before restart"; \
+	  echo "---- Deployment describe ----"; \
+	  $(KUBECTL) -n "$$ns" describe deploy/"$$dep" || true; \
+	  echo "---- Pods (wide) ----"; \
+	  $(KUBECTL) -n "$$ns" get pods -l control-plane=controller-manager -o wide || true; \
+	  echo "---- Pod describe (image pull and config errors surface here) ----"; \
+	  $(KUBECTL) -n "$$ns" describe pods -l control-plane=controller-manager || true; \
+	  echo "---- Events (recent 20) ----"; \
+	  $(KUBECTL) -n "$$ns" get events --sort-by=.lastTimestamp | tail -n 20 || true; \
+	  echo "---- Pod logs (last 50, empty if no container started) ----"; \
+	  for p in $$( $(KUBECTL) -n "$$ns" get pods -l control-plane=controller-manager -o name 2>/dev/null ); do \
+	    echo "-- $$p --"; \
+	    $(KUBECTL) -n "$$ns" logs "$$p" --tail=50 2>/dev/null || true; \
+	  done; \
+	  echo ">>> End of debug info"; \
+	  echo ">>> Performing clean restart (scale 0 -> 1)..."; \
+	  $(KUBECTL) -n "$$ns" scale deploy/"$$dep" --replicas=0; \
+	  for i in $$(seq 1 24); do \
+	    cnt="$$( $(KUBECTL) -n "$$ns" get pods -l control-plane=controller-manager --no-headers 2>/dev/null | wc -l | tr -d " " )"; \
+	    [ "$$cnt" = "0" ] && break; \
+	    sleep 5; \
+	  done; \
+	  $(KUBECTL) -n "$$ns" scale deploy/"$$dep" --replicas=1; \
+	  echo ">>> Retrying rollout (210s)..."; \
+	  $(KUBECTL) -n "$$ns" rollout status deploy/"$$dep" --timeout=210s; \
+	fi; \
+	$(KUBECTL) -n "$$ns" wait --for=condition=Available deploy/"$$dep" --timeout=120s; \
+	echo ">>> Deployment $$dep successfully rolled out and ready."; \
+	'
+endef
+
+.PHONY: e2e-diagnostics
+e2e-diagnostics: ## Dump cluster state into ./e2e-logs, which CI uploads as an artifact on failure.
+	mkdir -p e2e-logs
+	-$(KUBECTL) -n $(OPERATOR_NS) get pods -o wide > e2e-logs/operator-pods.txt 2>&1
+	-$(KUBECTL) -n $(OPERATOR_NS) describe pods >> e2e-logs/operator-pods.txt 2>&1
+	-$(KUBECTL) -n $(OPERATOR_NS) logs deploy/$(OPERATOR_NAME)-controller-manager --tail=6000 > e2e-logs/controller.log 2>&1
+	-$(KUBECTL) -n $(OPERATOR_NS) logs deploy/$(OPERATOR_NAME)-controller-manager --previous --tail=3000 > e2e-logs/controller-previous.log 2>&1
+	-$(KUBECTL) -n $(OPENBAO_NS) get pods -o wide > e2e-logs/openbao-pods.txt 2>&1
+	-$(KUBECTL) get events -A --sort-by=.lastTimestamp > e2e-logs/events.txt 2>&1
+	-$(KUBECTL) get openbaopolicies,openbaosecretengines,openbaonamespaces -A -o yaml > e2e-logs/openbao-crs.yaml 2>&1
+
 .PHONY: deploy
 deploy: kustomize setup-cluster openbao-install openbao-provision-creds openbao-bootstrap-auth install
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG) && \
 	$(KUSTOMIZE) edit set configmap controller-manager-config --from-literal=VAULT_ADDR='$(VAULT_ADDR)' --namespace $(OPERATOR_NS)
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 	$(KUBECTL) wait --for=condition=Established crd/openbaopolicies.security.mto.stakater.com --timeout=60s
-	$(KUBECTL) -n $(OPERATOR_NS) rollout status deployment/mto-extension-openbao-controller-manager --timeout=180s
+	$(call rollout-controller-with-retry)
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
