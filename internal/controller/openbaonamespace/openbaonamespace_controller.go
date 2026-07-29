@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,15 +24,6 @@ const OpenBaoNamespaceFinalizer = "openbaonamespace.security.mto.stakater.com/fi
 
 type OpenBaoNamespaceReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoNamespace]
-}
-
-// NewOpenBaoNamespaceReconciler constructs the reconciler.
-func NewOpenBaoNamespaceReconciler(mgr ctrl.Manager) (*OpenBaoNamespaceReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoNamespaceReconcilerWithClient(mgr, bao), nil
 }
 
 // NewOpenBaoNamespaceReconcilerWithClient is the test-friendly constructor.
@@ -152,19 +142,4 @@ func (r *OpenBaoNamespaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.OpenBaoNamespace{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoNamespaceReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

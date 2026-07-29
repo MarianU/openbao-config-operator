@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,18 +33,6 @@ const OpenBaoKubernetesAuthRoleFinalizer = "openbaokubernetesauthrole.security.m
 
 type OpenBaoKubernetesAuthRoleReconciler struct {
 	*resource.VaultResource[*v1alpha1.OpenBaoKubernetesAuthRole]
-}
-
-// NewOpenBaoKubernetesAuthRoleReconciler constructs the reconciler. The bao
-// address and token come from VAULT_ADDR / VAULT_TOKEN (or BAO_ADDR /
-// BAO_TOKEN) at startup; missing env is fatal so misconfiguration surfaces
-// at process start, not during the first Reconcile.
-func NewOpenBaoKubernetesAuthRoleReconciler(mgr ctrl.Manager) (*OpenBaoKubernetesAuthRoleReconciler, error) {
-	bao, err := newBaoFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return NewOpenBaoKubernetesAuthRoleReconcilerWithClient(mgr, bao), nil
 }
 
 // NewOpenBaoKubernetesAuthRoleReconcilerWithClient is the test-friendly
@@ -293,19 +280,4 @@ func (r *OpenBaoKubernetesAuthRoleReconciler) mapNamespaceToCRs(ctx context.Cont
 		out = append(out, ctrlreconcile.Request{NamespacedName: types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}})
 	}
 	return out
-}
-
-func newBaoFromEnv() (baoclient.Client, error) {
-	addr, ok := os.LookupEnv("VAULT_ADDR")
-	if !ok || addr == "" {
-		addr = os.Getenv("BAO_ADDR")
-	}
-	token, ok := os.LookupEnv("VAULT_TOKEN")
-	if !ok || token == "" {
-		token = os.Getenv("BAO_TOKEN")
-	}
-	if addr == "" || token == "" {
-		return nil, fmt.Errorf("set VAULT_ADDR/VAULT_TOKEN (or BAO_ADDR/BAO_TOKEN) for OpenBaoKubernetesAuthRoleReconciler")
-	}
-	return baoclient.NewHTTPClient(addr, token)
 }

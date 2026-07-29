@@ -60,10 +60,24 @@ spec:
                 items:
                   type: string
                 type: array
+              boundClaims:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  BoundClaims gates login on JWT claim values. Each key is a
+                  claim name (e.g. "groups", "email"); the value is the list of
+                  accepted strings. A login token must carry every listed claim
+                  with a value matching one of the entries (interpretation
+                  controlled by BoundClaimsType). Empty disables the filter —
+                  any token passing BoundAudiences / BoundSubject is accepted.
+                type: object
               boundClaimsType:
                 description: |-
-                  BoundClaimsType controls how boundClaims is interpreted:
-                  "string" (default) for exact-match, "glob" for wildcards.
+                  BoundClaimsType controls how BoundClaims values are matched
+                  against inbound JWT claim values: "string" (default) for
+                  exact-match, "glob" for shell-style wildcards.
                 enum:
                 - string
                 - glob

@@ -516,35 +516,107 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
+            "name": "mto-extension-openbao-pki-intermediate",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "TTL": "43800h",
+            "commonName": "Demo Intermediate CA",
+            "internalSign": {
+              "name": "pki-root"
+            },
+            "path": "pki-int",
+            "permittedDnsDomains": [
+              "svc.cluster.local"
+            ],
+            "type": "intermediate"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineConfig",
+          "metadata": {
+            "name": "mto-extension-openbao-pki-intermediate-external",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "TTL": "43800h",
+            "certificateKey": "tls.crt",
+            "commonName": "Demo Offline-Signed Intermediate CA",
+            "externalSignSecret": {
+              "name": "demo-signed-ca"
+            },
+            "path": "pki-ext",
+            "permittedDnsDomains": [
+              "demo-api.svc.cluster.local"
+            ],
+            "type": "intermediate"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineConfig",
+          "metadata": {
             "name": "mto-extension-openbao-pki-root",
             "namespace": "mto-extension-openbao-system"
           },
           "spec": {
+            "CRLDistributionPoints": [
+              "https://bao.example.com/v1/pki-root/crl"
+            ],
+            "TTL": "87600h",
             "commonName": "Demo Root CA",
+            "country": "US",
+            "issuingCertificates": [
+              "https://bao.example.com/v1/pki-root/ca"
+            ],
             "keyBits": 4096,
             "keyType": "rsa",
-            "path": "pki",
-            "pkiType": "root",
-            "subject": {
-              "country": [
-                "US"
-              ],
-              "organization": [
-                "Stakater Demo"
-              ],
-              "ou": [
-                "Platform"
-              ]
+            "organization": "Stakater Demo",
+            "ou": "Platform",
+            "path": "pki-root",
+            "type": "root"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineConfig",
+          "metadata": {
+            "name": "pki-intermediate",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "TTL": "43800h",
+            "commonName": "Demo Intermediate CA",
+            "internalSign": {
+              "name": "pki-root"
             },
-            "ttl": "87600h",
-            "urls": {
-              "crlDistributionPoints": [
-                "https://bao.example.com/v1/pki/crl"
-              ],
-              "issuingCertificates": [
-                "https://bao.example.com/v1/pki/ca"
-              ]
-            }
+            "path": "pki-int",
+            "permittedDnsDomains": [
+              "svc.cluster.local"
+            ],
+            "type": "intermediate"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoPKISecretEngineConfig",
+          "metadata": {
+            "name": "pki-intermediate-external",
+            "namespace": "mto-extension-openbao-system"
+          },
+          "spec": {
+            "TTL": "43800h",
+            "certificateKey": "tls.crt",
+            "commonName": "Demo Offline-Signed Intermediate CA",
+            "externalSignSecret": {
+              "name": "demo-signed-ca"
+            },
+            "path": "pki-ext",
+            "permittedDnsDomains": [
+              "demo-api.svc.cluster.local"
+            ],
+            "type": "intermediate"
           }
         },
         {
@@ -555,31 +627,21 @@ metadata:
             "namespace": "mto-extension-openbao-system"
           },
           "spec": {
+            "CRLDistributionPoints": [
+              "https://bao.example.com/v1/pki-root/crl"
+            ],
+            "TTL": "87600h",
             "commonName": "Demo Root CA",
+            "country": "US",
+            "issuingCertificates": [
+              "https://bao.example.com/v1/pki-root/ca"
+            ],
             "keyBits": 4096,
             "keyType": "rsa",
-            "path": "pki",
-            "pkiType": "root",
-            "subject": {
-              "country": [
-                "US"
-              ],
-              "organization": [
-                "Stakater Demo"
-              ],
-              "ou": [
-                "Platform"
-              ]
-            },
-            "ttl": "87600h",
-            "urls": {
-              "crlDistributionPoints": [
-                "https://bao.example.com/v1/pki/crl"
-              ],
-              "issuingCertificates": [
-                "https://bao.example.com/v1/pki/ca"
-              ]
-            }
+            "organization": "Stakater Demo",
+            "ou": "Platform",
+            "path": "pki-root",
+            "type": "root"
           }
         },
         {
@@ -702,7 +764,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-05-18T10:51:20Z"
+    createdAt: "2026-07-28T12:46:01Z"
     operators.operatorframework.io/builder: operator-sdk-v1.41.1
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: mto-extension-openbao.v0.0.1
@@ -865,20 +927,21 @@ spec:
         - apiGroups:
           - ""
           resources:
-          - namespaces
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - ""
-          resources:
+          - configmaps
           - secrets
           verbs:
           - create
           - get
           - list
           - update
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - namespaces
+          verbs:
+          - get
+          - list
           - watch
         - apiGroups:
           - security.mto.stakater.com
@@ -989,11 +1052,10 @@ spec:
                 command:
                 - /manager
                 env:
-                - name: VAULT_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      key: token
-                      name: mto-openbao-token
+                - name: BAO_AUTH_METHOD
+                  value: kubernetes
+                - name: BAO_AUTH_JWT_PATH
+                  value: /var/run/secrets/openbao/token
                 - name: VAULT_ADDR
                   valueFrom:
                     configMapKeyRef:
@@ -1026,12 +1088,24 @@ spec:
                   capabilities:
                     drop:
                     - ALL
+                volumeMounts:
+                - mountPath: /var/run/secrets/openbao
+                  name: bao-sa-token
+                  readOnly: true
               imagePullSecrets:
               - name: saap-dockerconfigjson
               securityContext:
                 runAsNonRoot: true
               serviceAccountName: mto-extension-openbao-controller-manager
               terminationGracePeriodSeconds: 10
+              volumes:
+              - name: bao-sa-token
+                projected:
+                  sources:
+                  - serviceAccountToken:
+                      audience: openbao
+                      expirationSeconds: 3600
+                      path: token
       permissions:
       - rules:
         - apiGroups:
