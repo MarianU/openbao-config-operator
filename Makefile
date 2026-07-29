@@ -58,7 +58,10 @@ OPERATOR_SDK_VERSION ?= v1.41.1
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_TAG_BASE):v$(VERSION)$(GIT_TAG)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.31.0
+# Track the apiserver minor that the target OpenShift release ships (4.20 -> 1.33),
+# so unit tests exercise the same API surface production does. Overridable so a
+# skew run can point at another minor without editing this file.
+ENVTEST_K8S_VERSION ?= 1.33.0
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
