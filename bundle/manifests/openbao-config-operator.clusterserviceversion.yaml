@@ -8,8 +8,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoAuthMethod",
           "metadata": {
-            "name": "mto-extension-openbao-tenant-oidc",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-tenant-oidc",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "config": {
@@ -26,7 +26,7 @@ metadata:
           "kind": "OpenBaoAuthMethod",
           "metadata": {
             "name": "tenant-oidc",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "config": {
@@ -43,7 +43,7 @@ metadata:
           "kind": "OpenBaoCertAuthEngineConfig",
           "metadata": {
             "name": "cert",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "enableIdentityAliasMetadata": true,
@@ -55,8 +55,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoCertAuthEngineConfig",
           "metadata": {
-            "name": "mto-extension-openbao-cert",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-cert",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "enableIdentityAliasMetadata": true,
@@ -68,8 +68,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoCertAuthEngineRole",
           "metadata": {
-            "name": "mto-extension-openbao-team-a-mtls",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-team-a-mtls",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "allowedCommonNames": [
@@ -93,7 +93,7 @@ metadata:
           "kind": "OpenBaoCertAuthEngineRole",
           "metadata": {
             "name": "team-a-mtls",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "allowedCommonNames": [
@@ -116,8 +116,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoGroup",
           "metadata": {
-            "name": "mto-extension-openbao-oidc-admins",
-            "namespace": "mto-extension-openbao-system"
+            "name": "oidc-admins",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "policies": [
@@ -130,8 +130,22 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoGroup",
           "metadata": {
-            "name": "mto-extension-openbao-platform-admins",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-oidc-admins",
+            "namespace": "openbao-config-operator-system"
+          },
+          "spec": {
+            "policies": [
+              "oidc-admin"
+            ],
+            "type": "external"
+          }
+        },
+        {
+          "apiVersion": "security.mto.stakater.com/v1alpha1",
+          "kind": "OpenBaoGroup",
+          "metadata": {
+            "name": "openbao-config-operator-platform-admins",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "policies": [
@@ -144,22 +158,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoGroup",
           "metadata": {
-            "name": "oidc-admins",
-            "namespace": "mto-extension-openbao-system"
-          },
-          "spec": {
-            "policies": [
-              "oidc-admin"
-            ],
-            "type": "external"
-          }
-        },
-        {
-          "apiVersion": "security.mto.stakater.com/v1alpha1",
-          "kind": "OpenBaoGroup",
-          "metadata": {
             "name": "platform-admins",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "policies": [
@@ -173,7 +173,7 @@ metadata:
           "kind": "OpenBaoGroupAlias",
           "metadata": {
             "name": "alice-oidc-admin",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "canonicalGroupRef": {
@@ -187,8 +187,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoGroupAlias",
           "metadata": {
-            "name": "mto-extension-openbao-alice-oidc-admin",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-alice-oidc-admin",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "canonicalGroupRef": {
@@ -203,7 +203,7 @@ metadata:
           "kind": "OpenBaoIdentityTokenRole",
           "metadata": {
             "name": "aws-tokens",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "clientId": "arn:aws:iam::123456789012:role/openbao-federated",
@@ -216,8 +216,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoIdentityTokenRole",
           "metadata": {
-            "name": "mto-extension-openbao-aws-tokens",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-aws-tokens",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "clientId": "arn:aws:iam::123456789012:role/openbao-federated",
@@ -230,8 +230,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoJWTOIDCAuthEngineConfig",
           "metadata": {
-            "name": "mto-extension-openbao-tenant-oidc",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-tenant-oidc",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "defaultRole": "tenant",
@@ -249,7 +249,7 @@ metadata:
           "kind": "OpenBaoJWTOIDCAuthEngineConfig",
           "metadata": {
             "name": "tenant-oidc",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "defaultRole": "tenant",
@@ -266,8 +266,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoJWTOIDCAuthEngineRole",
           "metadata": {
-            "name": "mto-extension-openbao-tenant",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-tenant",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "allowedRedirectUris": [
@@ -297,7 +297,7 @@ metadata:
           "kind": "OpenBaoJWTOIDCAuthEngineRole",
           "metadata": {
             "name": "tenant",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "allowedRedirectUris": [
@@ -326,8 +326,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoKubernetesAuthEngineConfig",
           "metadata": {
-            "name": "mto-extension-openbao-tenant-k8s-auth",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-tenant-k8s-auth",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "issuer": "kubernetes/serviceaccount",
@@ -348,7 +348,7 @@ metadata:
           "kind": "OpenBaoKubernetesAuthEngineConfig",
           "metadata": {
             "name": "tenant-k8s-auth",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "issuer": "kubernetes/serviceaccount",
@@ -368,8 +368,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoKubernetesAuthRole",
           "metadata": {
-            "name": "mto-extension-openbao-prod-deployers",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-prod-deployers",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "path": "kubernetes",
@@ -394,8 +394,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoKubernetesAuthRole",
           "metadata": {
-            "name": "mto-extension-openbao-team-a-readers",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-team-a-readers",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "audience": "vault",
@@ -422,7 +422,7 @@ metadata:
           "kind": "OpenBaoKubernetesAuthRole",
           "metadata": {
             "name": "prod-deployers",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "path": "kubernetes",
@@ -448,7 +448,7 @@ metadata:
           "kind": "OpenBaoKubernetesAuthRole",
           "metadata": {
             "name": "team-a-readers",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "audience": "vault",
@@ -475,7 +475,7 @@ metadata:
           "kind": "OpenBaoNamespace",
           "metadata": {
             "name": "acme",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": null
         },
@@ -484,7 +484,7 @@ metadata:
           "kind": "OpenBaoNamespace",
           "metadata": {
             "name": "acme-sub",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "name": "sub",
@@ -495,8 +495,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoNamespace",
           "metadata": {
-            "name": "mto-extension-openbao-acme",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-acme",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": null
         },
@@ -504,8 +504,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoNamespace",
           "metadata": {
-            "name": "mto-extension-openbao-acme-sub",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-acme-sub",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "name": "sub",
@@ -516,8 +516,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
-            "name": "mto-extension-openbao-pki-intermediate",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-pki-intermediate",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "TTL": "43800h",
@@ -536,8 +536,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
-            "name": "mto-extension-openbao-pki-intermediate-external",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-pki-intermediate-external",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "TTL": "43800h",
@@ -557,8 +557,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
-            "name": "mto-extension-openbao-pki-root",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-pki-root",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "CRLDistributionPoints": [
@@ -583,7 +583,7 @@ metadata:
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
             "name": "pki-intermediate",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "TTL": "43800h",
@@ -603,7 +603,7 @@ metadata:
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
             "name": "pki-intermediate-external",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "TTL": "43800h",
@@ -624,7 +624,7 @@ metadata:
           "kind": "OpenBaoPKISecretEngineConfig",
           "metadata": {
             "name": "pki-root",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "CRLDistributionPoints": [
@@ -648,8 +648,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPKISecretEngineRole",
           "metadata": {
-            "name": "mto-extension-openbao-web-server",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-web-server",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "allowSubdomains": true,
@@ -669,7 +669,7 @@ metadata:
           "kind": "OpenBaoPKISecretEngineRole",
           "metadata": {
             "name": "web-server",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "allowSubdomains": true,
@@ -688,8 +688,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoPolicy",
           "metadata": {
-            "name": "mto-extension-openbao-secret-reader",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-secret-reader",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "policy": "path \"secret/data/public/*\" {\n  capabilities = [\"read\", \"list\"]\n}\npath \"secret/metadata/public/*\" {\n  capabilities = [\"list\"]\n}\n"
@@ -700,7 +700,7 @@ metadata:
           "kind": "OpenBaoPolicy",
           "metadata": {
             "name": "secret-reader",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "policy": "path \"secret/data/public/*\" {\n  capabilities = [\"read\", \"list\"]\n}\npath \"secret/metadata/public/*\" {\n  capabilities = [\"list\"]\n}\n"
@@ -710,8 +710,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoSecretEngine",
           "metadata": {
-            "name": "mto-extension-openbao-secret-kv",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-secret-kv",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "description": "cluster-shared kv-v2 secret engine",
@@ -724,7 +724,7 @@ metadata:
           "kind": "OpenBaoSecretEngine",
           "metadata": {
             "name": "secret-kv",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "description": "cluster-shared kv-v2 secret engine",
@@ -737,7 +737,7 @@ metadata:
           "kind": "OpenBaoTransitKey",
           "metadata": {
             "name": "app-key",
-            "namespace": "mto-extension-openbao-system"
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "autoRotatePeriod": "720h",
@@ -751,8 +751,8 @@ metadata:
           "apiVersion": "security.mto.stakater.com/v1alpha1",
           "kind": "OpenBaoTransitKey",
           "metadata": {
-            "name": "mto-extension-openbao-app-key",
-            "namespace": "mto-extension-openbao-system"
+            "name": "openbao-config-operator-app-key",
+            "namespace": "openbao-config-operator-system"
           },
           "spec": {
             "autoRotatePeriod": "720h",
@@ -764,10 +764,10 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-07-28T12:46:01Z"
-    operators.operatorframework.io/builder: operator-sdk-v1.41.1
+    createdAt: "2026-07-29T12:06:49Z"
+    operators.operatorframework.io/builder: operator-sdk-v1.33.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
-  name: mto-extension-openbao.v0.0.1
+  name: openbao-config-operator.v0.0.1
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -1024,13 +1024,13 @@ spec:
           - subjectaccessreviews
           verbs:
           - create
-        serviceAccountName: mto-extension-openbao-controller-manager
+        serviceAccountName: openbao-config-operator-controller-manager
       deployments:
       - label:
           app.kubernetes.io/managed-by: kustomize
-          app.kubernetes.io/name: mto-extension-openbao
+          app.kubernetes.io/name: openbao-config-operator
           control-plane: controller-manager
-        name: mto-extension-openbao-controller-manager
+        name: openbao-config-operator-controller-manager
         spec:
           replicas: 1
           selector:
@@ -1060,8 +1060,8 @@ spec:
                   valueFrom:
                     configMapKeyRef:
                       key: VAULT_ADDR
-                      name: mto-extension-openbao-controller-manager-config-c22hgd88dg
-                image: ghcr.io/stakater/mto-extension-openbao:v0.0.1
+                      name: openbao-config-operator-controller-manager-config-c22hgd88dg
+                image: ghcr.io/stakater/openbao-config-operator:v0.0.1
                 imagePullPolicy: IfNotPresent
                 livenessProbe:
                   httpGet:
@@ -1096,7 +1096,7 @@ spec:
               - name: saap-dockerconfigjson
               securityContext:
                 runAsNonRoot: true
-              serviceAccountName: mto-extension-openbao-controller-manager
+              serviceAccountName: openbao-config-operator-controller-manager
               terminationGracePeriodSeconds: 10
               volumes:
               - name: bao-sa-token
@@ -1139,7 +1139,7 @@ spec:
           verbs:
           - create
           - patch
-        serviceAccountName: mto-extension-openbao-controller-manager
+        serviceAccountName: openbao-config-operator-controller-manager
     strategy: deployment
   installModes:
   - supported: false
@@ -1158,7 +1158,7 @@ spec:
   - Tenancy
   links:
   - name: Mto Extension Openbao
-    url: https://mto-extension-openbao.domain
+    url: https://openbao-config-operator.domain
   maintainers:
   - email: hello@stakater.com
     name: Stakater
