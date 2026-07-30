@@ -512,6 +512,10 @@ helm-lint: helm ## Lint the two hand-maintained charts (operator chart is auto-g
 	$(HELM) lint $(MTO_BOOTSTRAP_CHART_DIR) --strict
 	$(HELM) lint $(MTO_CHART_DIR) --strict --set tenant=lint-only
 
+.PHONY: helm-render-test
+helm-render-test: helm yq ## Verify the tenant chart's component slices (golden, disjoint, union, purity).
+	HELM=$(HELM) YQ=$(YQ_BIN) hack/chart-render-tests.sh
+
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
 # $2 - package url which can be installed
@@ -578,7 +582,8 @@ endif
 endif
 
 .PHONY: yq
-YQ_VERSION := v4.13.0
+# hack/chart-render-tests.sh needs the splitDoc operator (yq >= 4.25).
+YQ_VERSION := v4.44.3
 YQ_BIN := $(LOCALBIN)/yq
 yq:
 ifeq (,$(wildcard $(YQ_BIN)))
