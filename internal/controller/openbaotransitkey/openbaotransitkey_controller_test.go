@@ -825,3 +825,53 @@ func TestTransitKey_LatestVersion_RefreshedOnReconcile(t *testing.T) {
 	require.Equal(t, 3, getKey(t, r, tk.Name).Status.LatestVersion,
 		"Backfill mutator must refresh observed status on no-drift reconcile")
 }
+
+// vanishingTransitBao models the key being deleted out-of-band after the
+// create and config writes but before the confirming re-read. Both writes
+// report success and store nothing, so only the final read finds no key —
+// which is the one call whose not-found reaches the status unwrapped.
+type vanishingTransitBao struct{ *fakeBao }
+
+func (f *vanishingTransitBao) WriteTransitKey(context.Context, string, string,
+	baoclient.TransitKeySpec, ...baoclient.CallOption) error {
+	f.writes++
+	return nil
+}
+
+func (f *vanishingTransitBao) UpdateTransitKeyConfig(context.Context, string, string,
+	baoclient.TransitKeySpec, ...baoclient.CallOption) error {
+	f.configs++
+	return nil
+}
+
+// The post-write re-read is a secondary read inside BaoWrite, so a not-found
+// there is never translated to resource.ErrBaoNotFound and reaches the status
+// condition directly. Unwrapped it read as the bare sentinel, which looks like
+// the CR's own object never existed rather than like a lost race.
+func TestPostWriteReReadNotFoundNamesTheKey(t *testing.T) {
+	t.Parallel()
+
+	fb := &vanishingTransitBao{fakeBao: newFakeBao()}
+	k := sampleKey("vanishing")
+	k.Spec.OpenBaoNamespace = "team-a"
+	k.Finalizers = []string{OpenBaoTransitKeyFinalizer}
+
+	r := buildReconciler(t, fb.fakeBao, k)
+	// Swap in the vanishing behaviour now that the handlers are built against
+	// the embedded fake's map.
+	r.VaultResource.Handlers = OpenBaoTransitKeyHandlers(r.Client, fb)
+
+	res := reconcile(t, r, "vanishing")
+	require.Equal(t, resource.ErrorBackoff, res.RequeueAfter)
+
+	cond := readyCond(t, getKey(t, r, "vanishing"))
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, resource.ReasonNotFound, cond.Reason)
+	require.Contains(t, cond.Message, "re-reading transit key after write",
+		"message must name the operation")
+	require.Contains(t, cond.Message, mount+"/vanishing",
+		"message must name the mount and key")
+	require.Contains(t, cond.Message, `openbao namespace "team-a"`,
+		"the base must add the openbao namespace — it is in no SDK error string")
+}

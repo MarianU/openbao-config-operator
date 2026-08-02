@@ -597,7 +597,9 @@ type Namespace struct {
 
 // ErrNotFound is the sentinel returned by every Get* when the object does
 // not exist on the bao side. Callers use errors.Is to match.
-var ErrNotFound = errors.New("bao object not found")
+// The text names this layer to keep it traceable apart from
+// resource.ErrBaoNotFound.
+var ErrNotFound = errors.New("bao client: object not found")
 
 // ErrDeletionNotAllowed is returned by DeleteTransitKey when bao refuses
 // the delete because the bao-side key has deletion_allowed=false. Bao's

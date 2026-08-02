@@ -257,7 +257,7 @@ func publishCABundle(ctx context.Context, cl client.Client, scheme *runtime.Sche
 	}
 	ca, err := bao.ReadPKICA(ctx, p.Spec.Path, ns)
 	if err != nil {
-		return err
+		return resource.BaoOpErr("reading CA to publish the CA-bundle ConfigMap", p.Spec.Path, err)
 	}
 	if ca == nil || strings.TrimSpace(ca.Certificate) == "" {
 		return nil
@@ -400,9 +400,19 @@ func baoWriteIntermediateExternal(ctx context.Context, cl client.Client, scheme 
 // readCASerial reads the active CA after set-signed to capture its serial.
 // Designed-in fallback: we don't depend on set-signed's response shape.
 func readCASerial(ctx context.Context, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (string, error) {
+	const op = "reading CA serial after set-signed"
 	ca, err := bao.ReadPKICA(ctx, p.Spec.Path, ns)
-	if err != nil {
-		return "", err
+	switch {
+	case errors.Is(err, baoclient.ErrNotFound):
+		// set-signed succeeded but the mount has no issuer: the stored CSR came
+		// from a key bao no longer holds. Regenerating is the only recovery,
+		// and the CSR Secret is what gates it.
+		return "", resource.BaoOpErr(op, p.Spec.Path,
+			fmt.Errorf("%w — mount has no issuer, so the stored CSR does not match any key in bao; "+
+				"delete Secret %q in namespace %q to regenerate the CSR",
+				err, csrSecretName(p), p.Namespace))
+	case err != nil:
+		return "", resource.BaoOpErr(op, p.Spec.Path, err)
 	}
 	if ca == nil {
 		return "", nil

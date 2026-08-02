@@ -933,3 +933,48 @@ func (f *fakeBao) UpdateTransitKeyConfig(ctx context.Context, mount, name string
 func (f *fakeBao) DeleteTransitKey(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
 	return nil
 }
+
+// nonPersistingRootBao generates a root CA and returns its response, but does
+// not leave it readable on the mount. That reproduces the window where the CA
+// is gone by the time publishCABundle reads it back — the same class of
+// secondary-read failure as M4, on the other ReadPKICA call site.
+type nonPersistingRootBao struct{ *fakeBao }
+
+func (f *nonPersistingRootBao) GenerateRootPKI(ctx context.Context, mount string,
+	in baoclient.PKIRootGenerateInput, opts ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
+	f.generates++
+	f.callOrder = append(f.callOrder, "generate-root")
+	return &baoclient.PKICAResponse{
+		SerialNumber: "fake-serial-1",
+		Certificate:  "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n",
+	}, nil
+}
+
+// publishCABundle's ReadPKICA is a secondary read inside BaoWrite, so like
+// readCASerial its not-found is never translated to resource.ErrBaoNotFound
+// and lands in the status verbatim. The message must say the read was for the
+// published bundle, otherwise it is indistinguishable from M4's.
+func TestPublishCABundleNotFoundNamesTheMount(t *testing.T) {
+	t.Parallel()
+
+	fb := &nonPersistingRootBao{fakeBao: newFakeBao()}
+	c := sampleConfig("bundle-gone")
+	c.Spec.PublishCABundleConfigMap = caBundleCMName
+	c.Spec.OpenBaoNamespace = "team-a"
+	c.Finalizers = []string{OpenBaoPKISecretEngineConfigFinalizer}
+
+	r := buildReconciler(t, fb.fakeBao, c)
+	r.VaultResource.Handlers = OpenBaoPKISecretEngineConfigHandlers(r.Client, r.Scheme, fb)
+
+	res := reconcile(t, r, "bundle-gone")
+	require.Equal(t, resource.ErrorBackoff, res.RequeueAfter)
+
+	cond := meta(getCfg(t, r, "bundle-gone"))
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, resource.ReasonNotFound, cond.Reason)
+	require.Contains(t, cond.Message, "reading CA to publish the CA-bundle ConfigMap",
+		"message must distinguish this read from readCASerial's")
+	require.Contains(t, cond.Message, pkiPath, "message must name the mount")
+	require.Contains(t, cond.Message, `openbao namespace "team-a"`)
+}

@@ -11,10 +11,12 @@ import (
 
 	"github.com/go-logr/logr"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,6 +25,10 @@ import (
 
 	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject"
 )
+
+// EventRecorder reports a denied write to its own log rather than to the
+// caller, so without this grant events silently never appear.
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // ConditionReady is the canonical condition type written by the base.
 const ConditionReady = "Ready"
@@ -112,8 +118,9 @@ type Handlers[T VaultCR] struct {
 type StatusMutator[T VaultCR] func(T)
 
 // ErrBaoNotFound is returned by BaoGet when the primitive's bao-side object
-// does not exist. The base treats this as "needs to be created".
-var ErrBaoNotFound = errors.New("bao object not found")
+// does not exist. The base treats this as "needs to be created". The text
+// names this layer to keep it traceable apart from baoclient.ErrNotFound.
+var ErrBaoNotFound = errors.New("reconciler: bao object does not exist")
 
 // VaultResource is the shared reconciler. Primitives wrap it by composition.
 type VaultResource[T VaultCR] struct {
@@ -121,6 +128,9 @@ type VaultResource[T VaultCR] struct {
 	Scheme        *runtime.Scheme
 	Handlers      Handlers[T]
 	FinalizerName string
+	// Recorder emits an Event on Ready transitions. Optional: nil disables
+	// emission, so tests can build VaultResource as a struct literal.
+	Recorder record.EventRecorder
 }
 
 // New constructs a VaultResource. FinalizerName follows the Kubernetes
@@ -131,6 +141,12 @@ func New[T VaultCR](mgr ctrl.Manager, finalizer string, h Handlers[T]) *VaultRes
 		Scheme:        mgr.GetScheme(),
 		Handlers:      h,
 		FinalizerName: finalizer,
+		// One name for all primitives; the Event's involvedObject carries the
+		// Kind. GetEventRecorder writes to events.k8s.io/v1 instead of core/v1,
+		// so migrating needs an events.k8s.io RBAC grant deployed first or
+		// events stop appearing entirely.
+		//nolint:staticcheck // SA1019: migration gated on RBAC, see above.
+		Recorder: mgr.GetEventRecorderFor("openbao-config-operator"),
 	}
 }
 
@@ -400,8 +416,65 @@ func (r *VaultResource[T]) setReadyAndMaybeMarkWritten(ctx context.Context, key 
 // after baoWritten + identity advancement, so primitive-specific
 // status fields land in the same MergeFrom patch — no side-channel
 // status writes that can silently fail.
+// maxEventMsgLen keeps Events readable in kubectl's table output. Not a
+// platform limit; the condition keeps the full text.
+const maxEventMsgLen = 512
+
+func truncateForEvent(msg string) string {
+	if len(msg) <= maxEventMsgLen {
+		return msg
+	}
+	return msg[:maxEventMsgLen] + "… (full message in status.conditions)"
+}
+
+// emitReadyEvent records an Event when the Ready condition transitions. No-op
+// when Recorder is nil.
+//
+// Gating on the transition is what bounds volume: patchStatusOnce runs on every
+// reconcile, so an ungated emit would be one Event per CR per PeriodicInterval
+// forever, and one per ErrorBackoff for a wedged CR. A first-ever success is
+// deliberately silent — Ready=True and baoWritten latch permanently, so an
+// Event would duplicate durable state. A recovery is not, because the patch
+// writing Ready=True erases the message explaining the failure.
+func (r *VaultResource[T]) emitReadyEvent(obj T, hadPrev bool, prevStatus metav1.ConditionStatus,
+	prevReason string, status metav1.ConditionStatus, reason, msg string) {
+	if r.Recorder == nil {
+		return
+	}
+	switch {
+	case status == metav1.ConditionFalse &&
+		(!hadPrev || prevStatus != metav1.ConditionFalse || prevReason != reason):
+		// Reason, not message: messages carry varying detail (serials, bao
+		// bodies) and comparing them would defeat the gate.
+		r.Recorder.Event(obj, corev1.EventTypeWarning, reason, truncateForEvent(msg))
+	case status == metav1.ConditionTrue && hadPrev && prevStatus == metav1.ConditionFalse:
+		r.Recorder.Event(obj, corev1.EventTypeNormal, ReasonReconciled, "bao object converged")
+	}
+}
+
+// baoIdentitySuffix renders the CR's bao-side identity for appending to a
+// failure message. Root is named explicitly so a message never reads
+// `openbao namespace ""`.
+func baoIdentitySuffix(obj VaultCR) string {
+	if ns := obj.OpenBaoNamespace(); ns != "" {
+		return fmt.Sprintf(" [bao object %q, openbao namespace %q]", obj.BaoName(), ns)
+	}
+	return fmt.Sprintf(" [bao object %q, openbao root namespace]", obj.BaoName())
+}
+
 func (r *VaultResource[T]) patchStatusOnce(ctx context.Context, key client.ObjectKey, status metav1.ConditionStatus, reason, msg string, markWritten bool, curName, curNS string, mutator StatusMutator[T]) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	// Hoisted for the Event: the prior condition is only visible inside the
+	// closure, but the Event must be emitted after the patch succeeds. Each
+	// attempt overwrites, so a conflict retry reports what actually landed.
+	var (
+		emitObj    T
+		emitMsg    string
+		hadPrev    bool
+		prevStatus metav1.ConditionStatus
+		prevReason string
+	)
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cur := r.Handlers.NewInstance()
 		if err := r.Get(ctx, key, cur); err != nil {
 			return err
@@ -411,12 +484,30 @@ func (r *VaultResource[T]) patchStatusOnce(ctx context.Context, key client.Objec
 			return fmt.Errorf("deep copy of %T is not a client.Object", cur)
 		}
 
+		// The openbao namespace travels as an X-Vault-Namespace header, so it
+		// appears in no SDK error string. Composed here rather than per
+		// callsite so a new primitive cannot omit it. New variable, not msg:
+		// this closure re-runs on conflict and would append once per attempt.
+		condMsg := msg
+		if status == metav1.ConditionFalse {
+			condMsg += baoIdentitySuffix(cur)
+		}
+
 		conds := cur.GetConditions()
+
+		// Captured before SetStatusCondition overwrites it.
+		if p := apimeta.FindStatusCondition(conds, ConditionReady); p != nil {
+			hadPrev, prevStatus, prevReason = true, p.Status, p.Reason
+		} else {
+			hadPrev = false
+		}
+		emitObj, emitMsg = cur, condMsg
+
 		apimeta.SetStatusCondition(&conds, metav1.Condition{
 			Type:               ConditionReady,
 			Status:             status,
 			Reason:             reason,
-			Message:            msg,
+			Message:            condMsg,
 			ObservedGeneration: cur.GetGeneration(),
 		})
 		cur.SetConditions(conds)
@@ -441,4 +532,14 @@ func (r *VaultResource[T]) patchStatusOnce(ctx context.Context, key client.Objec
 
 		return r.Status().Patch(ctx, cur, client.MergeFrom(origObj))
 	})
+	if err != nil {
+		// No Event on a failed write: one announcing a recovery that was never
+		// persisted would outlive the condition as a lie.
+		return err
+	}
+
+	// Emitted outside the retry closure so a conflict retry cannot fire
+	// duplicate Events for a single transition.
+	r.emitReadyEvent(emitObj, hadPrev, prevStatus, prevReason, status, reason, emitMsg)
+	return nil
 }
