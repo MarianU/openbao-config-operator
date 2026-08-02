@@ -11,9 +11,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
@@ -24,7 +27,7 @@ import (
 // +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaopkisecretengineconfigs,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaopkisecretengineconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaopkisecretengineconfigs/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 
 // OpenBaoPKISecretEngineConfigFinalizer follows the Kubernetes
@@ -41,6 +44,9 @@ const csrSecretKey = "csr"
 // spec.certificateKey is empty (matches the CRD default).
 const defaultCertificateKey = "tls.crt"
 
+// reasonCARegenerated is the Event reason for an auto-healed intermediate CA.
+const reasonCARegenerated = "IntermediateCARegenerated"
+
 // caBundleKey is the ConfigMap data key the published CA cert PEM is written
 // under (the conventional trust-bundle key cert-manager trust-manager sources).
 const caBundleKey = "ca.crt"
@@ -55,7 +61,8 @@ func NewOpenBaoPKISecretEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao b
 	return &OpenBaoPKISecretEngineConfigReconciler{
 		VaultResource: resource.New[*v1alpha1.OpenBaoPKISecretEngineConfig](
 			mgr, OpenBaoPKISecretEngineConfigFinalizer,
-			OpenBaoPKISecretEngineConfigHandlers(mgr.GetClient(), mgr.GetScheme(), bao)),
+			OpenBaoPKISecretEngineConfigHandlers(mgr.GetClient(), mgr.GetScheme(), bao,
+				resource.EventRecorderFor(mgr))),
 	}
 }
 
@@ -67,7 +74,10 @@ func NewOpenBaoPKISecretEngineConfigReconcilerWithClient(mgr ctrl.Manager, bao b
 // is present. This holds for both type=root and type=intermediate — an
 // intermediate's CA only appears after set-signed, so until then ReadPKICA
 // returns ErrNotFound and the create/sign path keeps running.
-func OpenBaoPKISecretEngineConfigHandlers(cl client.Client, scheme *runtime.Scheme, bao baoclient.Client) resource.Handlers[*v1alpha1.OpenBaoPKISecretEngineConfig] {
+//
+// rec reports what the base's Ready-transition Event cannot: that a CA was
+// regenerated rather than merely recovered. Optional; nil skips the Event.
+func OpenBaoPKISecretEngineConfigHandlers(cl client.Client, scheme *runtime.Scheme, bao baoclient.Client, rec record.EventRecorder) resource.Handlers[*v1alpha1.OpenBaoPKISecretEngineConfig] {
 	return resource.Handlers[*v1alpha1.OpenBaoPKISecretEngineConfig]{
 		NewInstance: func() *v1alpha1.OpenBaoPKISecretEngineConfig {
 			return &v1alpha1.OpenBaoPKISecretEngineConfig{}
@@ -165,7 +175,7 @@ func OpenBaoPKISecretEngineConfigHandlers(cl client.Client, scheme *runtime.Sche
 				return finishActive(ctx, cl, scheme, bao, p, ns, serial, false)
 			case v1alpha1.PKITypeIntermediate:
 				if hasInternalSign(p) {
-					return baoWriteIntermediateInternal(ctx, cl, scheme, bao, p, ns)
+					return baoWriteIntermediateInternal(ctx, cl, scheme, bao, rec, p, ns)
 				}
 				return baoWriteIntermediateExternal(ctx, cl, scheme, bao, p, ns)
 			default:
@@ -321,10 +331,27 @@ func readPublishedCABundle(ctx context.Context, cl client.Client, namespace, nam
 // ensure the CSR (generate once, persist in a Secret) → sign it with the root
 // mount referenced by internalSign.Name (in the CR's own openbaoNamespace) →
 // set-signed → read the resulting CA serial.
-func baoWriteIntermediateInternal(ctx context.Context, cl client.Client, scheme *runtime.Scheme, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (resource.StatusMutator[*v1alpha1.OpenBaoPKISecretEngineConfig], error) {
-	csr, err := ensureCSRSecret(ctx, cl, scheme, bao, p, ns)
+func baoWriteIntermediateInternal(ctx context.Context, cl client.Client, scheme *runtime.Scheme, bao baoclient.Client, rec record.EventRecorder, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (resource.StatusMutator[*v1alpha1.OpenBaoPKISecretEngineConfig], error) {
+	csr, reused, err := ensureCSRSecret(ctx, cl, scheme, bao, p, ns)
 	if err != nil {
 		return nil, err
+	}
+	// Before the sign call, so a mount whose key is gone costs no signature
+	// from the signing CA (cross-namespace and audited in hierarchy mode) and
+	// imports no keyless issuer. Bao signs here with no human in the loop, so a
+	// mismatched CSR has nothing to protect.
+	var regenerated bool
+	if reused {
+		hasKey, err := mountHoldsKey(ctx, bao, p, ns)
+		if err != nil {
+			return nil, err
+		}
+		if !hasKey {
+			if csr, err = regenerateCSRSecret(ctx, cl, bao, p, ns); err != nil {
+				return nil, err
+			}
+			regenerated = true
+		}
 	}
 	rootMount := strings.Trim(p.Spec.InternalSign.Name, "/")
 	// The CSR is generated (above) and bound (below) in the intermediate's own
@@ -358,6 +385,9 @@ func baoWriteIntermediateInternal(ctx context.Context, cl client.Client, scheme 
 	if err != nil {
 		return nil, err
 	}
+	if regenerated {
+		reportCARegenerated(ctx, rec, p, serial)
+	}
 	return finishActive(ctx, cl, scheme, bao, p, ns, serial, true)
 }
 
@@ -373,7 +403,7 @@ func baoWriteIntermediateExternal(ctx context.Context, cl client.Client, scheme 
 	}
 	if !exists {
 		// First pass: generate the CSR and persist it for the offline signer.
-		if _, err := ensureCSRSecret(ctx, cl, scheme, bao, p, ns); err != nil {
+		if _, _, err := ensureCSRSecret(ctx, cl, scheme, bao, p, ns); err != nil {
 			return nil, err
 		}
 		return nil, awaitingErr(p)
@@ -386,6 +416,20 @@ func baoWriteIntermediateExternal(ctx context.Context, cl client.Client, scheme 
 			return nil, awaitingErr(p)
 		}
 		return nil, err
+	}
+	// Here rather than earlier so the passes spent waiting cost nothing.
+	// Regenerating would replace the private key and invalidate the very
+	// certificate someone signed offline, so report and stop before set-signed.
+	hasKey, err := mountHoldsKey(ctx, bao, p, ns)
+	if err != nil {
+		return nil, err
+	}
+	if !hasKey {
+		return nil, resource.BaoOpErr("binding the externally-signed certificate", p.Spec.Path,
+			fmt.Errorf("%w — mount holds no private key, so the signed certificate in secret %q "+
+				"cannot be bound; the CSR in secret %q was generated from a key bao no longer has. "+
+				"Delete secret %q to generate a new CSR, then have it signed again by the offline root",
+				baoclient.ErrNotFound, externalSignSecretName(p), csrSecretName(p), csrSecretName(p)))
 	}
 	if err := bao.SetSignedIntermediate(ctx, p.Spec.Path, signedCert, ns); err != nil {
 		return nil, err
@@ -425,6 +469,42 @@ func csrSecretName(p *v1alpha1.OpenBaoPKISecretEngineConfig) string {
 	return p.Name + csrSecretSuffix
 }
 
+// externalSignSecretName names the Secret the offline-signed certificate is
+// read from. Empty when unset, which IsValid rejects for type=intermediate.
+func externalSignSecretName(p *v1alpha1.OpenBaoPKISecretEngineConfig) string {
+	if p.Spec.ExternalSignSecret == nil {
+		return ""
+	}
+	return p.Spec.ExternalSignSecret.Name
+}
+
+// reportCARegenerated records that the operator minted replacement CA material
+// without being asked to.
+//
+// Warning, not Normal: the CR ends up Ready, but certificates the previous CA
+// signed cannot be renewed and must be re-issued. Name constraints are in the
+// message because the replacement is built from the CR's current spec, so it is
+// not necessarily like-for-like.
+//
+// Unlike the base's Event, this one is not suppressed when the status patch
+// fails: it reports a bao-side fact that holds either way.
+func reportCARegenerated(ctx context.Context, rec record.EventRecorder, p *v1alpha1.OpenBaoPKISecretEngineConfig, serial string) {
+	domains := "none"
+	if len(p.Spec.PermittedDnsDomains) > 0 {
+		domains = strings.Join(p.Spec.PermittedDnsDomains, ",")
+	}
+	msg := fmt.Sprintf(
+		"regenerated the intermediate CSR for mount %q because bao held no private key for the stored one, "+
+			"and signed a replacement CA (serial %s, permittedDnsDomains: %s). "+
+			"Certificates issued by the previous CA must be re-issued",
+		p.Spec.Path, serial, domains)
+	log.FromContext(ctx).Info(msg, "mount", p.Spec.Path, "caSerial", serial,
+		"openbaoNamespace", p.OpenBaoNamespace())
+	if rec != nil {
+		rec.Event(p, corev1.EventTypeWarning, reasonCARegenerated, msg)
+	}
+}
+
 // csrSecretExists reports whether the CSR Secret is present, without reading
 // its body. A read failure other than NotFound is a controller-side error.
 func csrSecretExists(ctx context.Context, cl client.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig) (bool, error) {
@@ -444,24 +524,28 @@ func csrSecretExists(ctx context.Context, cl client.Client, p *v1alpha1.OpenBaoP
 // persisting it in an owner-ref'd Secret on first call. If the Secret already
 // exists its stored CSR is returned verbatim — never regenerated — so a retry
 // after a downstream failure reuses the same key (R4).
-func ensureCSRSecret(ctx context.Context, cl client.Client, scheme *runtime.Scheme, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (string, error) {
+//
+// reused reports which of those two happened: a stored CSR is only as good as
+// the key bao still holds for it, a fresh one always matches. Callers gate the
+// mountHoldsKey probe on it so a first bring-up costs no extra call.
+func ensureCSRSecret(ctx context.Context, cl client.Client, scheme *runtime.Scheme, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (csr string, reused bool, err error) {
 	var sec corev1.Secret
-	err := cl.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: csrSecretName(p)}, &sec)
+	err = cl.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: csrSecretName(p)}, &sec)
 	switch {
 	case err == nil:
-		if csr := strings.TrimSpace(string(sec.Data[csrSecretKey])); csr != "" {
-			return csr, nil
+		if stored := strings.TrimSpace(string(sec.Data[csrSecretKey])); stored != "" {
+			return stored, true, nil
 		}
-		return "", fmt.Errorf("%w: CSR secret %q exists but has no %q key", resource.ErrInternal, csrSecretName(p), csrSecretKey)
+		return "", false, fmt.Errorf("%w: CSR secret %q exists but has no %q key", resource.ErrInternal, csrSecretName(p), csrSecretKey)
 	case apierrors.IsNotFound(err):
 		// Generate + create below.
 	default:
-		return "", fmt.Errorf("%w: reading CSR secret %q: %v", resource.ErrInternal, csrSecretName(p), err)
+		return "", false, fmt.Errorf("%w: reading CSR secret %q: %v", resource.ErrInternal, csrSecretName(p), err)
 	}
 
-	csr, err := bao.GenerateIntermediateCSR(ctx, p.Spec.Path, intermediateGenInput(p), ns)
+	csr, err = bao.GenerateIntermediateCSR(ctx, p.Spec.Path, intermediateGenInput(p), ns)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	newSec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -471,18 +555,75 @@ func ensureCSRSecret(ctx context.Context, cl client.Client, scheme *runtime.Sche
 		Data: map[string][]byte{csrSecretKey: []byte(csr)},
 	}
 	if err := controllerutil.SetControllerReference(p, newSec, scheme); err != nil {
-		return "", fmt.Errorf("%w: setting owner reference on CSR secret %q: %v", resource.ErrInternal, csrSecretName(p), err)
+		return "", false, fmt.Errorf("%w: setting owner reference on CSR secret %q: %v", resource.ErrInternal, csrSecretName(p), err)
 	}
 	if err := cl.Create(ctx, newSec); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Raced with another reconcile that created the Secret; re-read it.
 			if gErr := cl.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: csrSecretName(p)}, &sec); gErr == nil {
 				if c := strings.TrimSpace(string(sec.Data[csrSecretKey])); c != "" {
-					return c, nil
+					return c, true, nil
 				}
 			}
 		}
-		return "", fmt.Errorf("%w: creating CSR secret %q: %v", resource.ErrInternal, csrSecretName(p), err)
+		return "", false, fmt.Errorf("%w: creating CSR secret %q: %v", resource.ErrInternal, csrSecretName(p), err)
+	}
+	return csr, false, nil
+}
+
+// mountHoldsKey reports whether the PKI mount still holds key material.
+//
+// The CSR Secret lives in Kubernetes and survives a mount being emptied, so a
+// stored CSR can outlive its key. Signing it and calling set-signed both
+// succeed and import a certificate bao cannot match to a key, leaving the mount
+// without a default issuer and the CR unable to complete.
+//
+// Only ErrNotFound means "no key": a 403 read as an empty mount would re-key a
+// healthy intermediate whose policy merely lost a grant.
+//
+// Answers "any key at all", not "the key for this CSR" — bao exposes no public
+// key for a stored key. A mount that lost its key and then had one generated
+// out of band still lands on readCASerial's not-found.
+func mountHoldsKey(ctx context.Context, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (bool, error) {
+	_, err := bao.ListPKIKeys(ctx, p.Spec.Path, ns)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, baoclient.ErrNotFound):
+		return false, nil
+	default:
+		return false, resource.BaoOpErr("listing PKI keys to check the stored CSR", p.Spec.Path, err)
+	}
+}
+
+// regenerateCSRSecret generates a new key + CSR on the mount and overwrites the
+// stored CSR. Overwrite rather than delete-and-recreate so the Secret is never
+// absent for anything watching it.
+//
+// The Update carries the Get's resourceVersion, so a concurrent writer loses
+// rather than silently winning; the retry reapplies the same CSR, still the one
+// matching the newest pending key. If it ultimately fails, bao holds a key the
+// stored CSR does not match and the next pass lands on readCASerial's
+// not-found — degraded and self-reporting, not silent.
+func regenerateCSRSecret(ctx context.Context, cl client.Client, bao baoclient.Client, p *v1alpha1.OpenBaoPKISecretEngineConfig, ns baoclient.CallOption) (string, error) {
+	csr, err := bao.GenerateIntermediateCSR(ctx, p.Spec.Path, intermediateGenInput(p), ns)
+	if err != nil {
+		return "", err
+	}
+	key := client.ObjectKey{Namespace: p.Namespace, Name: csrSecretName(p)}
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var sec corev1.Secret
+		if err := cl.Get(ctx, key, &sec); err != nil {
+			return err
+		}
+		if sec.Data == nil {
+			sec.Data = map[string][]byte{}
+		}
+		sec.Data[csrSecretKey] = []byte(csr)
+		return cl.Update(ctx, &sec)
+	}); err != nil {
+		return "", fmt.Errorf("%w: overwriting CSR secret %q with the regenerated CSR: %v",
+			resource.ErrInternal, csrSecretName(p), err)
 	}
 	return csr, nil
 }

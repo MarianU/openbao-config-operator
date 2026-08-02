@@ -1400,6 +1400,87 @@ func TestReadPKICA_404_ReturnsErrNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// ---- ListPKIKeys ----
+//
+// The 404 and 200 shapes below are what OpenBao 2.6.1 returns, measured live.
+
+// The SDK renders a list as GET <path>?list=true, not the LIST verb. Bao maps
+// both to the `list` capability, so the existing `+/keys` grant covers it —
+// verified with a token holding only `operator-manage`. Pinned because dropping
+// the query turns this into a key read, a different path in bao's ACL.
+func TestListPKIKeys_ListsKeysPathWithListQuery(t *testing.T) {
+	t.Parallel()
+	var gotPath, gotMethod, gotList string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		gotList = r.URL.Query().Get("list")
+		_, _ = w.Write([]byte(`{"data":{"keys":["159d8970-ead6-2621-2676-05bae0dc8b69"]}}`))
+	})
+	keys, err := c.ListPKIKeys(context.Background(), "pki-int")
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki-int/keys", gotPath)
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.Equal(t, "true", gotList, "without list=true this reads a key instead of listing them")
+	require.Equal(t, []string{"159d8970-ead6-2621-2676-05bae0dc8b69"}, keys)
+}
+
+func TestListPKIKeys_TrimsMountSlashes(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"data":{"keys":["k1"]}}`))
+	})
+	_, err := c.ListPKIKeys(context.Background(), "/pki-int/")
+	require.NoError(t, err)
+	require.Equal(t, "/v1/pki-int/keys", gotPath)
+}
+
+func TestListPKIKeys_404_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":[]}`, http.StatusNotFound)
+	})
+	_, err := c.ListPKIKeys(context.Background(), "pki-int")
+	require.ErrorIs(t, err, ErrNotFound,
+		"an empty PKI mount answers 404; that is the signal a stored CSR has no key behind it")
+}
+
+// 200 with an empty list means the same as 404, so both reach callers as one
+// signal.
+func TestListPKIKeys_EmptyList_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"keys":[]}}`))
+	})
+	_, err := c.ListPKIKeys(context.Background(), "pki-int")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// Callers regenerate CA material on ErrNotFound, so a 403 read as "no keys"
+// would re-key a healthy intermediate whose policy merely lost a grant.
+func TestListPKIKeys_403_IsNotNotFound(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
+	})
+	_, err := c.ListPKIKeys(context.Background(), "pki-int")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrNotFound)
+	var se *StatusError
+	require.ErrorAs(t, err, &se, "status must survive for ClassifyErr")
+	require.Equal(t, http.StatusForbidden, se.StatusCode)
+}
+
+func TestListPKIKeys_RejectsEmptyMount(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("must not hit bao when mount is empty")
+	})
+	_, err := c.ListPKIKeys(context.Background(), "  ")
+	require.ErrorContains(t, err, "mount path is empty")
+}
+
 // ---- WritePKIURLs / ReadPKIURLs ----
 
 func TestWritePKIURLs_PostsAllThreeArrays(t *testing.T) {

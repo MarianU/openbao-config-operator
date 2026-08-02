@@ -88,6 +88,10 @@ type Client interface {
 	SignIntermediate(ctx context.Context, rootMount, csr string, in PKISignIntermediateInput, opts ...CallOption) (string, error)
 	SetSignedIntermediate(ctx context.Context, mount, certificate string, opts ...CallOption) error
 
+	// ListPKIKeys reports the key IDs a PKI mount holds; ErrNotFound when it
+	// holds none.
+	ListPKIKeys(ctx context.Context, mount string, opts ...CallOption) ([]string, error)
+
 	// PKI roles (post-mount, post-CA). Roles define what certs may be
 	// issued from a given PKI mount.
 	WritePKIRole(ctx context.Context, mount, name string, spec PKIRoleSpec, opts ...CallOption) error
@@ -1320,6 +1324,33 @@ func (c *sdkClient) SetSignedIntermediate(ctx context.Context, mount, certificat
 		return wrapStatus(err)
 	}
 	return nil
+}
+
+// ListPKIKeys lists the key IDs at <mount>/keys, ErrNotFound when the mount
+// holds none. Bao answers 404 both for an empty mount and for one that does
+// not exist, and the SDK renders that as a nil response rather than an error.
+//
+// Presence is the answer, not the values: bao exposes no public key for a
+// stored key, so this cannot say which key matches a given CSR.
+func (c *sdkClient) ListPKIKeys(ctx context.Context, mount string, opts ...CallOption) ([]string, error) {
+	mount = strings.Trim(strings.TrimSpace(mount), "/")
+	if mount == "" {
+		return nil, errors.New("mount path is empty")
+	}
+	resp, err := c.clientFor(opts).Logical().ListWithContext(ctx, mount+"/keys")
+	if err != nil {
+		// 403 above all must stay an error: read as "no keys" it would
+		// regenerate CA material on a policy gap.
+		return nil, wrapStatus(err)
+	}
+	if resp == nil || resp.Data == nil {
+		return nil, ErrNotFound
+	}
+	keys := asStringSlice(resp.Data["keys"])
+	if len(keys) == 0 {
+		return nil, ErrNotFound
+	}
+	return keys, nil
 }
 
 // ReadPKICA fetches the active CA cert at <mount>/cert/ca. Returns

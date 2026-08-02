@@ -141,13 +141,19 @@ func New[T VaultCR](mgr ctrl.Manager, finalizer string, h Handlers[T]) *VaultRes
 		Scheme:        mgr.GetScheme(),
 		Handlers:      h,
 		FinalizerName: finalizer,
-		// One name for all primitives; the Event's involvedObject carries the
-		// Kind. GetEventRecorder writes to events.k8s.io/v1 instead of core/v1,
-		// so migrating needs an events.k8s.io RBAC grant deployed first or
-		// events stop appearing entirely.
-		//nolint:staticcheck // SA1019: migration gated on RBAC, see above.
-		Recorder: mgr.GetEventRecorderFor("openbao-config-operator"),
+		Recorder:      EventRecorderFor(mgr),
 	}
+}
+
+// EventRecorderFor returns the recorder the base emits Ready transitions
+// through. Primitives that report an Event of their own take it from here, so
+// the source name and the events-API choice have one site.
+//
+// GetEventRecorder writes events.k8s.io/v1 instead of core/v1; migrating needs
+// that RBAC grant deployed first or Events stop appearing entirely.
+func EventRecorderFor(mgr ctrl.Manager) record.EventRecorder {
+	//nolint:staticcheck // SA1019: migration gated on RBAC, see above.
+	return mgr.GetEventRecorderFor("openbao-config-operator")
 }
 
 // Reconcile implements the shared lifecycle.
