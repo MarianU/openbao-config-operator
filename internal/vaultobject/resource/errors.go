@@ -2,6 +2,7 @@ package resource
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
@@ -75,6 +76,17 @@ var ErrDeleteBlocked = errors.New("bao delete blocked")
 // with fmt.Errorf("%w: ...", ErrAwaitingExternalSignature, ...) for context.
 var ErrAwaitingExternalSignature = errors.New("awaiting external signature")
 
+// BaoOpErr annotates a bao error with the operation and the bao object the
+// call addressed. The %w is load-bearing: without it the base's ErrBaoNotFound
+// create-path check stops matching and a missing object is never created.
+//
+// target is not necessarily the CR's own identity — a cross-namespace sign
+// addresses a different mount. The base appends the CR's identity, so callers
+// do not repeat it.
+func BaoOpErr(op, target string, err error) error {
+	return fmt.Errorf("%s at %q: %w", op, target, err)
+}
+
 // ClassifyErr maps a bao client error to a Reason. Detection is structured:
 // the wrapper at internal/client tags every SDK error with HTTP status via
 // *baoclient.StatusError, so we never have to string-match an error
@@ -101,6 +113,12 @@ func ClassifyErr(err error) string {
 	}
 	if errors.Is(err, ErrInternal) {
 		return ReasonInternalError
+	}
+	// Get wrappers coalesce 404 (and bao's 400 "no default issuer") into a
+	// bare sentinel, which is not a *StatusError — without this it falls
+	// through and reports as a generic BaoError.
+	if errors.Is(err, baoclient.ErrNotFound) || errors.Is(err, ErrBaoNotFound) {
+		return ReasonNotFound
 	}
 	var se *baoclient.StatusError
 	if errors.As(err, &se) {

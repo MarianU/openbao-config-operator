@@ -148,6 +148,9 @@ func (f *fakeBao) SignIntermediate(ctx context.Context, rootMount, csr string, i
 func (f *fakeBao) SetSignedIntermediate(ctx context.Context, mount, certificate string, opts ...baoclient.CallOption) error {
 	return nil
 }
+func (f *fakeBao) ListPKIKeys(ctx context.Context, mount string, opts ...baoclient.CallOption) ([]string, error) {
+	return nil, baoclient.ErrNotFound
+}
 func (f *fakeBao) ReadPKICA(ctx context.Context, m string, o ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
 	return nil, baoclient.ErrNotFound
 }

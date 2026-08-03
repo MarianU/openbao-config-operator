@@ -3,6 +3,7 @@ package openbaopkisecretengineconfig
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -27,6 +29,9 @@ const (
 	pkiPath        = "pki"
 	testCommonName = "Test CA"
 	caBundleCMName = "team-a-ca"
+	// eventBuffer sizes the fake recorder's channel. FakeRecorder drops rather
+	// than blocks once full, so this must exceed what any one test emits.
+	eventBuffer = 32
 )
 
 // fakeBao models PKI mount state in-memory. Only the four PKI methods
@@ -37,12 +42,17 @@ const (
 type fakeBao struct {
 	caBySerial map[string]*baoclient.PKICAResponse // keyed "<openbaoNs>|<mount>"
 	urls       map[string]*baoclient.PKIURLsInput  // same key
-	nextSerial int
+	// keysByMount is the mount's key store, same key shape.
+	// GenerateIntermediateCSR adds an entry; a mount with none answers
+	// ErrNotFound, as real bao does.
+	keysByMount map[string][]string
+	nextSerial  int
 
 	generateErr error
 	readCAErr   error
 	writeURLErr error
 	readURLErr  error
+	listKeysErr error
 
 	// intermediate-flow injection + capture
 	genCSRErr           error
@@ -61,13 +71,14 @@ type fakeBao struct {
 	callOrder []string
 
 	generates, readCAs, writeURLs, readURLs int
-	genCSRs, signs, setSigneds              int
+	genCSRs, signs, setSigneds, listKeys    int
 }
 
 func newFakeBao() *fakeBao {
 	return &fakeBao{
-		caBySerial: map[string]*baoclient.PKICAResponse{},
-		urls:       map[string]*baoclient.PKIURLsInput{},
+		caBySerial:  map[string]*baoclient.PKICAResponse{},
+		urls:        map[string]*baoclient.PKIURLsInput{},
+		keysByMount: map[string][]string{},
 	}
 }
 
@@ -99,7 +110,25 @@ func (f *fakeBao) GenerateIntermediateCSR(ctx context.Context, mount string, in 
 	if f.genCSRErr != nil {
 		return "", f.genCSRErr
 	}
+	// Tracking the pending key is what lets a test model the wedge: destroy the
+	// key, keep the stored CSR.
+	k := key(baoclient.NamespaceFromOpts(opts), mount)
+	f.keysByMount[k] = append(f.keysByMount[k], fmt.Sprintf("fake-key-%d", len(f.keysByMount[k])+1))
 	return "FAKE-CSR-" + mount, nil
+}
+
+// ListPKIKeys reports the mount's key store. ErrNotFound for an empty mount
+// mirrors bao, which answers 404 rather than an empty list.
+func (f *fakeBao) ListPKIKeys(ctx context.Context, mount string, opts ...baoclient.CallOption) ([]string, error) {
+	f.listKeys++
+	if f.listKeysErr != nil {
+		return nil, f.listKeysErr
+	}
+	ids := f.keysByMount[key(baoclient.NamespaceFromOpts(opts), mount)]
+	if len(ids) == 0 {
+		return nil, baoclient.ErrNotFound
+	}
+	return ids, nil
 }
 
 func (f *fakeBao) SignIntermediate(ctx context.Context, rootMount, csr string, in baoclient.PKISignIntermediateInput, opts ...baoclient.CallOption) (string, error) {
@@ -281,11 +310,13 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		WithStatusSubresource(&v1alpha1.OpenBaoPKISecretEngineConfig{}).
 		Build()
 
+	rec := record.NewFakeRecorder(eventBuffer)
 	base := &resource.VaultResource[*v1alpha1.OpenBaoPKISecretEngineConfig]{
 		Client:        cl,
 		Scheme:        scheme,
 		FinalizerName: OpenBaoPKISecretEngineConfigFinalizer,
-		Handlers:      OpenBaoPKISecretEngineConfigHandlers(cl, scheme, fb),
+		Handlers:      OpenBaoPKISecretEngineConfigHandlers(cl, scheme, fb, rec),
+		Recorder:      rec,
 	}
 	return &OpenBaoPKISecretEngineConfigReconciler{VaultResource: base}
 }
@@ -932,4 +963,49 @@ func (f *fakeBao) UpdateTransitKeyConfig(ctx context.Context, mount, name string
 }
 func (f *fakeBao) DeleteTransitKey(ctx context.Context, mount, name string, opts ...baoclient.CallOption) error {
 	return nil
+}
+
+// nonPersistingRootBao generates a root CA and returns its response, but does
+// not leave it readable on the mount. That reproduces the window where the CA
+// is gone by the time publishCABundle reads it back — the same class of
+// secondary-read failure as M4, on the other ReadPKICA call site.
+type nonPersistingRootBao struct{ *fakeBao }
+
+func (f *nonPersistingRootBao) GenerateRootPKI(ctx context.Context, mount string,
+	in baoclient.PKIRootGenerateInput, opts ...baoclient.CallOption) (*baoclient.PKICAResponse, error) {
+	f.generates++
+	f.callOrder = append(f.callOrder, "generate-root")
+	return &baoclient.PKICAResponse{
+		SerialNumber: "fake-serial-1",
+		Certificate:  "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n",
+	}, nil
+}
+
+// publishCABundle's ReadPKICA is a secondary read inside BaoWrite, so like
+// readCASerial its not-found is never translated to resource.ErrBaoNotFound
+// and lands in the status verbatim. The message must say the read was for the
+// published bundle, otherwise it is indistinguishable from M4's.
+func TestPublishCABundleNotFoundNamesTheMount(t *testing.T) {
+	t.Parallel()
+
+	fb := &nonPersistingRootBao{fakeBao: newFakeBao()}
+	c := sampleConfig("bundle-gone")
+	c.Spec.PublishCABundleConfigMap = caBundleCMName
+	c.Spec.OpenBaoNamespace = "team-a"
+	c.Finalizers = []string{OpenBaoPKISecretEngineConfigFinalizer}
+
+	r := buildReconciler(t, fb.fakeBao, c)
+	r.VaultResource.Handlers = OpenBaoPKISecretEngineConfigHandlers(r.Client, r.Scheme, fb, r.Recorder)
+
+	res := reconcile(t, r, "bundle-gone")
+	require.Equal(t, resource.ErrorBackoff, res.RequeueAfter)
+
+	cond := meta(getCfg(t, r, "bundle-gone"))
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, resource.ReasonNotFound, cond.Reason)
+	require.Contains(t, cond.Message, "reading CA to publish the CA-bundle ConfigMap",
+		"message must distinguish this read from readCASerial's")
+	require.Contains(t, cond.Message, pkiPath, "message must name the mount")
+	require.Contains(t, cond.Message, `openbao namespace "team-a"`)
 }

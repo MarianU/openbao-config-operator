@@ -152,6 +152,60 @@ var _ = Describe("OpenBaoPKISecretEngineConfig CR → OpenBao", Ordered, func() 
 		Expect(got.Status.CASerialNumber).NotTo(BeEmpty())
 	})
 
+	// Unmount/remount is what a rename of the OpenBaoSecretEngine CR owning the
+	// path also does, so this is the production trigger, not just a dev-mode
+	// restart. Recovery must need no human: no CR edit, no Secret deletion.
+	// Runs after Mode 2 and depends on the intermediate it left Active.
+	It("self-heals the internalSign intermediate after its mount is emptied", func(ctx SpecContext) {
+		var before v1alpha1.OpenBaoPKISecretEngineConfig
+		Expect(k8s.Get(ctx, intKey, &before)).To(Succeed())
+		Expect(before.Status.CASerialNumber).NotTo(BeEmpty(), "Mode 2 must have left a CA")
+
+		By("confirming the CSR Secret is present and will survive the mount going away")
+		csrKey := types.NamespacedName{Namespace: OperatorNS, Name: intCfg + "-intermediate-csr"}
+		var csrBefore corev1.Secret
+		Expect(k8s.Get(ctx, csrKey, &csrBefore)).To(Succeed())
+
+		By("destroying the mount's key material out of band and remounting empty")
+		Expect(bao.DisableSecretEngineMount(ctx, intMnt)).To(Succeed())
+		Expect(bao.EnableSecretEngine(ctx, intMnt, baoclient.SecretEngineMountSpec{Type: "pki"})).To(Succeed())
+
+		_, err := bao.ListPKIKeys(ctx, intMnt)
+		Expect(err).To(MatchError(baoclient.ErrNotFound), "the remounted path must hold no key")
+		Expect(k8s.Get(ctx, csrKey, &csrBefore)).To(Succeed(), "the CSR Secret must have survived")
+
+		By("waiting for the operator to notice and regenerate, with no CR edit")
+		// The CR is Ready, so the next pass is the periodic interval, not the
+		// error backoff.
+		Eventually(func(g Gomega) {
+			ca, err := bao.ReadPKICA(ctx, intMnt)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(ca.SerialNumber).NotTo(BeEmpty())
+			g.Expect(ca.SerialNumber).NotTo(Equal(before.Status.CASerialNumber),
+				"a healed mount carries a new CA, not the one whose key was destroyed")
+		}).WithTimeout(7 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+		expectReady(ctx, k8s, &v1alpha1.OpenBaoPKISecretEngineConfig{}, intKey)
+
+		By("confirming the mount holds exactly the one key backing the new CA")
+		keys, err := bao.ListPKIKeys(ctx, intMnt)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(keys).To(HaveLen(1))
+
+		var after v1alpha1.OpenBaoPKISecretEngineConfig
+		Expect(k8s.Get(ctx, intKey, &after)).To(Succeed())
+		Expect(after.Status.Phase).To(Equal(v1alpha1.PhaseActive))
+		Expect(after.Status.CASerialNumber).NotTo(Equal(before.Status.CASerialNumber))
+		Expect(after.Generation).To(Equal(before.Generation),
+			"self-heal must not depend on anyone touching the spec")
+
+		By("confirming the CSR Secret was overwritten in place, never deleted")
+		var csrAfter corev1.Secret
+		Expect(k8s.Get(ctx, csrKey, &csrAfter)).To(Succeed())
+		Expect(csrAfter.Data["csr"]).NotTo(Equal(csrBefore.Data["csr"]))
+		Expect(csrAfter.UID).To(Equal(csrBefore.UID), "overwritten, not recreated")
+	})
+
 	It("waits for an offline-signed cert via externalSignSecret (Mode 3)", func(ctx SpecContext) {
 		deleteIfExists(ctx, k8s, &v1alpha1.OpenBaoPKISecretEngineConfig{
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: extCfg},

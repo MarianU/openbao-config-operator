@@ -101,7 +101,11 @@ func OpenBaoTransitKeyHandlers(cl client.Client, bao baoclient.Client) resource.
 			// rename tracker carries name+namespace only.
 			fresh, err := bao.ReadTransitKey(ctx, k.MountPath(), k.BaoName(), ns)
 			if err != nil {
-				return nil, err
+				// Reached when the key is deleted out-of-band between the write
+				// and this read; unwrapped it reads as though the CR's own
+				// object never existed.
+				return nil, resource.BaoOpErr("re-reading transit key after write",
+					k.MountPath()+"/"+k.BaoName(), err)
 			}
 			pathSnapshot := k.MountPath()
 			return func(cur *v1alpha1.OpenBaoTransitKey) {
