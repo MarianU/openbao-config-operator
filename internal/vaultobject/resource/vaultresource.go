@@ -318,6 +318,9 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			l.Info("IsDeletable=false; skipping rename cleanup of previous bao identity (intentional orphan)",
 				"previousName", prevName, "previousOpenBaoNamespace", prevNS,
 				"newName", curName, "newOpenBaoNamespace", curNS)
+			r.Recorder.Event(obj, corev1.EventTypeNormal, "BaoObjectOrphaned",
+				fmt.Sprintf("rename left the previous bao object %q in openbao namespace %q in place",
+					prevName, prevNS))
 		} else {
 			if err := r.Handlers.BaoDeleteIdentity(ctx, obj, prevName, prevNS); err != nil {
 				l.Error(err, "bao delete failed on rename cleanup path",
@@ -341,21 +344,20 @@ func (r *VaultResource[T]) handleDelete(ctx context.Context, obj T, l logr.Logge
 	}
 
 	switch {
-	case !obj.IsDeletable():
-		// Primitives can opt out of bao-side cleanup (e.g. a PKI root CA
-		// that must persist beyond the CR's lifetime). The k8s CR is still
-		// finalized and removed; the bao object is intentionally orphaned.
-		// Log so this isn't silent — operator and audit logs need to show
-		// what was left behind.
-		l.Info("IsDeletable=false; releasing finalizer without removing bao object (intentional orphan)",
-			"finalizer", r.FinalizerName)
 	case !obj.IsBaoWritten():
-		// CR has never successfully written to bao — nothing to clean
-		// up. The status.baoWritten field is the durable signal: it
-		// only flips true after a successful BaoWrite, and once set
-		// is never cleared. This avoids the orphan-leak that the
-		// transient "is Ready=True right now" check produced when a
-		// CR's Ready flipped True→False after a successful write.
+		// Never wrote to bao — nothing to clean up and nothing to orphan.
+		// Precedes !IsDeletable() so a CR that wrote nothing does not log
+		// a false "intentional orphan" audit entry. status.baoWritten is
+		// the durable signal: set only after a successful BaoWrite, never
+		// cleared.
+	case !obj.IsDeletable():
+		// Orphan-by-design (see VaultObject.IsDeletable). The CR is about
+		// to disappear, so the log line and Event are the only traces of
+		// what was left behind in bao and where.
+		l.Info("IsDeletable=false; releasing finalizer without removing bao object (intentional orphan)"+
+			baoIdentitySuffix(obj), "finalizer", r.FinalizerName)
+		r.Recorder.Event(obj, corev1.EventTypeNormal, "BaoObjectOrphaned",
+			"CR deleted without removing the bao object"+baoIdentitySuffix(obj))
 	default:
 		if err := r.Handlers.BaoDelete(ctx, obj); err != nil {
 			l.Error(err, "bao delete failed")

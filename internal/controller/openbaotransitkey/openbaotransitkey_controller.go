@@ -7,6 +7,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
@@ -95,10 +96,10 @@ func OpenBaoTransitKeyHandlers(cl client.Client, bao baoclient.Client) resource.
 
 			// Re-read so the post-write status reflects bao's observed
 			// state (LatestVersion, CreationTime, capability bools)
-			// atomically with Ready=True. The path snapshot is captured
-			// here so a simultaneous spec.name + spec.path edit can
-			// clean the previous (path, name) tuple — the base's
-			// rename tracker carries name+namespace only.
+			// atomically with Ready=True. The path snapshot keeps
+			// status.lastWrittenPath current — after a spec.path edit
+			// it is the audit trail locating the key orphaned at the
+			// previous mount.
 			fresh, err := bao.ReadTransitKey(ctx, k.MountPath(), k.BaoName(), ns)
 			if err != nil {
 				// Reached when the key is deleted out-of-band between the write
@@ -106,6 +107,14 @@ func OpenBaoTransitKeyHandlers(cl client.Client, bao baoclient.Client) resource.
 				// object never existed.
 				return nil, resource.BaoOpErr("re-reading transit key after write",
 					k.MountPath()+"/"+k.BaoName(), err)
+			}
+			// A spec.path move orphans the key at the previous mount, and
+			// the base's rename tracker carries name+namespace only — log
+			// the old path before the snapshot below overwrites it.
+			if prev := k.Status.LastWrittenPath; prev != "" && prev != k.MountPath() {
+				log.FromContext(ctx).Info("spec.path change left the previous key in place (intentional orphan)",
+					"previousPath", prev, "previousName", k.Status.LastWrittenBaoName,
+					"newPath", k.MountPath(), "newName", k.BaoName())
 			}
 			pathSnapshot := k.MountPath()
 			return func(cur *v1alpha1.OpenBaoTransitKey) {
@@ -115,32 +124,19 @@ func OpenBaoTransitKeyHandlers(cl client.Client, bao baoclient.Client) resource.
 		},
 
 		BaoDelete: func(ctx context.Context, k *v1alpha1.OpenBaoTransitKey) error {
-			ns := baoclient.WithNamespace(k.OpenBaoNamespace())
-			err := bao.DeleteTransitKey(ctx, k.MountPath(), k.BaoName(), ns)
-			if errors.Is(err, baoclient.ErrDeletionNotAllowed) {
-				return fmt.Errorf("%w: bao requires deletion_allowed=true on transit/keys/%s — "+
-					"set spec.deletionAllowed=true and re-apply, then delete the CR",
-					resource.ErrDeleteBlocked, k.BaoName())
-			}
-			return err
+			// Never reached (IsDeletable=false). Fails loudly so a future
+			// IsDeletable flip cannot silently release the finalizer.
+			return fmt.Errorf("%w: BaoDelete invoked for OpenBaoTransitKey %q — "+
+				"IsDeletable=false must keep the delete path away from bao",
+				resource.ErrInternal, k.BaoName())
 		},
 
-		BaoDeleteIdentity: func(ctx context.Context, k *v1alpha1.OpenBaoTransitKey, name, namespace string) error {
-			// Use the bao mount path that was active when (name,
-			// namespace) was last written, NOT the current spec.Path.
-			// A spec edit that changes both name AND path in one go
-			// would otherwise target the new mount and silently 404,
-			// orphaning the key at the old (path, name). The base
-			// only calls BaoDeleteIdentity after a successful
-			// BaoWrite has stamped LastWrittenPath via its returned
-			// StatusMutator, so an empty value here is a programming
-			// error — let bao surface the bad request.
-			err := bao.DeleteTransitKey(ctx, k.Status.LastWrittenPath, name, baoclient.WithNamespace(namespace))
-			if errors.Is(err, baoclient.ErrDeletionNotAllowed) {
-				return fmt.Errorf("%w: bao requires deletion_allowed=true on transit/keys/%s",
-					resource.ErrDeleteBlocked, name)
-			}
-			return err
+		BaoDeleteIdentity: func(ctx context.Context, _ *v1alpha1.OpenBaoTransitKey, name, _ string) error {
+			// Never reached: renames orphan when IsDeletable=false. Fails
+			// loudly for the same reason as BaoDelete.
+			return fmt.Errorf("%w: BaoDeleteIdentity invoked for transit key %q — "+
+				"IsDeletable=false must keep rename cleanup away from bao",
+				resource.ErrInternal, name)
 		},
 
 		CheckCollision: func(ctx context.Context, k *v1alpha1.OpenBaoTransitKey) error {

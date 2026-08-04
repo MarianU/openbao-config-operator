@@ -202,19 +202,22 @@ func OpenBaoPKISecretEngineConfigHandlers(cl client.Client, scheme *runtime.Sche
 			}
 		},
 
-		BaoDelete: func(ctx context.Context, _ *v1alpha1.OpenBaoPKISecretEngineConfig) error {
-			// Never reached: IsDeletable=false short-circuits this in the base.
-			// Wired as a safety in case a future spec change flips IsDeletable
-			// to true — without disabling the mount, we don't have a "delete
-			// CA" surface and would have to handle the no-op explicitly.
-			return nil
+		BaoDelete: func(ctx context.Context, p *v1alpha1.OpenBaoPKISecretEngineConfig) error {
+			// Never reached (IsDeletable=false). Fails loudly so a future
+			// IsDeletable flip cannot silently release the finalizer —
+			// disabling the mount is the only "delete CA" surface and it
+			// destroys the private key.
+			return fmt.Errorf("%w: BaoDelete invoked for OpenBaoPKISecretEngineConfig %q — "+
+				"IsDeletable=false must keep the delete path away from bao",
+				resource.ErrInternal, p.BaoName())
 		},
 
-		BaoDeleteIdentity: func(ctx context.Context, _ *v1alpha1.OpenBaoPKISecretEngineConfig, _, _ string) error {
-			// Never reached: the base's rename-cleanup path skips
-			// BaoDeleteIdentity when IsDeletable=false. See the type comment
-			// for the orphan-by-design rationale.
-			return nil
+		BaoDeleteIdentity: func(ctx context.Context, _ *v1alpha1.OpenBaoPKISecretEngineConfig, name, _ string) error {
+			// Never reached: renames orphan when IsDeletable=false. Fails
+			// loudly for the same reason as BaoDelete.
+			return fmt.Errorf("%w: BaoDeleteIdentity invoked for PKI mount %q — "+
+				"IsDeletable=false must keep rename cleanup away from bao",
+				resource.ErrInternal, name)
 		},
 
 		CheckCollision: func(ctx context.Context, p *v1alpha1.OpenBaoPKISecretEngineConfig) error {

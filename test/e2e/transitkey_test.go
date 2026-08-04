@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -61,7 +60,7 @@ var _ = Describe("OpenBaoTransitKey CR → OpenBao", Ordered, func() {
 			},
 		}
 		Expect(k8s.Create(ctx, cr)).To(Succeed())
-		// Cleanup is owned by the "deletes" spec — see secretengine_test.go.
+		// Cleanup is owned by the "leaves the transit key" spec below.
 
 		Eventually(func(g Gomega) {
 			info, err := bao.ReadTransitKey(ctx, mountPath, baoKey)
@@ -86,18 +85,22 @@ var _ = Describe("OpenBaoTransitKey CR → OpenBao", Ordered, func() {
 		}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 
-	It("deletes the transit key when the CR is deleted", func(ctx SpecContext) {
+	// IsDeletable=false: the CR finalizes without touching the bao key.
+	// The mount teardown in AfterAll is what removes it after the suite.
+	It("leaves the transit key in OpenBao when the CR is deleted", func(ctx SpecContext) {
 		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoTransitKey{
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: keyName},
 		})).To(Succeed())
 
 		expectGone(ctx, k8s, &v1alpha1.OpenBaoTransitKey{}, nn)
 
-		Eventually(func(g Gomega) {
-			_, err := bao.ReadTransitKey(ctx, mountPath, baoKey)
-			g.Expect(errors.Is(err, baoclient.ErrNotFound)).To(BeTrue(),
-				"expected ErrNotFound after CR delete, got %v", err)
-		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
+		// Consistently, not a single read: a delayed finalizer-driven
+		// delete would pass a one-shot check and still destroy the key.
+		Consistently(func(g Gomega) {
+			info, err := bao.ReadTransitKey(ctx, mountPath, baoKey)
+			g.Expect(err).NotTo(HaveOccurred(), "bao key must survive CR deletion")
+			g.Expect(info.Type).To(Equal("aes256-gcm96"))
+		}).WithTimeout(10 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 
 	It("rejects convergentEncryption without derived=true", func(ctx SpecContext) {

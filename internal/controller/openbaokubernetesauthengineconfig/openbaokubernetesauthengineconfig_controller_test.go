@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -257,6 +258,7 @@ func buildReconciler(t *testing.T, fb baoclient.Client, objs ...runtime.Object) 
 		Scheme:        scheme,
 		FinalizerName: OpenBaoKubernetesAuthEngineConfigFinalizer,
 		Handlers:      OpenBaoKubernetesAuthEngineConfigHandlers(cl, fb, testHMAC()),
+		Recorder:      record.NewFakeRecorder(32),
 	}
 	return &OpenBaoKubernetesAuthEngineConfigReconciler{VaultResource: base, cl: cl}
 }

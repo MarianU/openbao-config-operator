@@ -62,10 +62,11 @@ spec:
                 type: boolean
               deletionAllowed:
                 description: |-
-                  DeletionAllowed gates DELETE transit/keys/<name> on the bao side.
-                  CR deletion when this is unset or false surfaces Ready=False
-                  reason=DeleteBlocked; the user flips it true and the next
-                  reconcile completes the delete.
+                  DeletionAllowed sets bao's deletion_allowed flag on the key, gating
+                  DELETE transit/keys/<name> for callers of the bao API. It does not
+                  make CR deletion remove the key — deleting this CR always leaves the
+                  bao key in place. Set it true only to permit a deliberate, manual
+                  bao-side delete of the key; it stays in effect until set back.
                 type: boolean
               derived:
                 description: |-
@@ -218,11 +219,11 @@ spec:
                 type: string
               lastWrittenPath:
                 description: |-
-                  LastWrittenPath captures the bao mount path the controller last
-                  wrote a key into. Without this, a CR that simultaneously edits
-                  spec.name AND spec.path would orphan the old key — the rename-
-                  cleanup BaoDeleteIdentity would target the new path and silently
-                  404. Same shape as OpenBaoPKISecretEngineRole's status.
+                  LastWrittenPath is the bao mount path the controller last wrote a
+                  key into. This kind never deletes its bao object, so after a
+                  spec.path edit this is the audit trail locating the key orphaned
+                  at the previous mount. Same shape as OpenBaoPKISecretEngineRole's
+                  status.
                 type: string
               latestVersion:
                 description: |-

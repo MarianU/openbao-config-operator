@@ -109,7 +109,7 @@ func TestCRDValidation_OpenBaoTransitKey_RejectsInvalid(t *testing.T) {
 		},
 		{
 			name:    "type-ed25519-accepted",
-			mutate:  func(k *v1alpha1.OpenBaoTransitKey) { k.Spec.Type = "ed25519" },
+			mutate:  func(k *v1alpha1.OpenBaoTransitKey) { k.Spec.Type = typeEd25519 },
 			invalid: false,
 			hint:    "Enum on spec.type accepts ed25519",
 		},
