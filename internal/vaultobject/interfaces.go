@@ -28,6 +28,13 @@ type VaultObject interface {
 	IsEquivalentToDesiredState(payload map[string]any) bool
 	IsInitialized() bool
 	IsValid() (bool, error)
+	// IsDeletable reports whether CR deletion removes the bao object.
+	// True: the base calls BaoDelete on deletion and BaoDeleteIdentity on
+	// rename. False is orphan-by-design for irreplaceable bao objects (a
+	// PKI CA, a transit key): the base releases the finalizer without
+	// touching bao, skips rename cleanup, and records each orphaning with
+	// a log line and a BaoObjectOrphaned Event; removal is done against
+	// bao directly. Must be constant per type.
 	IsDeletable() bool
 	PrepareInternalValues(ctx context.Context, obj client.Object) error
 	PrepareTLSConfig(ctx context.Context, obj client.Object) error

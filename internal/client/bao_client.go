@@ -609,10 +609,12 @@ var ErrNotFound = errors.New("bao client: object not found")
 // the delete because the bao-side key has deletion_allowed=false. Bao's
 // only structured signal here is a 400 with a specific message body, so
 // the wrapper matches the body and lifts the failure into a typed
-// sentinel — controllers translate this to resource.ErrDeleteBlocked at
-// the controller layer (baoclient does not import the resource package).
-// The contract test pins the exact bao response body so a wording change
-// upstream surfaces as a test failure rather than a silent regression.
+// sentinel callers match with errors.Is. No reconciler deletes transit
+// keys (OpenBaoTransitKey orphans by design); the wrapper and sentinel
+// are kept deliberately so bao-side teardown tooling gets a structured
+// signal instead of grepping error strings. The contract test pins the
+// exact bao response body so a wording change upstream surfaces as a
+// test failure rather than a silent regression.
 var ErrDeletionNotAllowed = errors.New("bao delete not allowed for transit key")
 
 // CallOption configures a single bao API call. The only option today is
@@ -1678,8 +1680,7 @@ func (c *sdkClient) UpdateTransitKeyConfig(ctx context.Context, mount, name stri
 // DeleteTransitKey removes the bao-side key. 404 is swallowed (idempotent).
 // Bao's "deletion_allowed=false" signal is a 400 with a specific message
 // body; the wrapper matches the body and returns ErrDeletionNotAllowed so
-// callers can route the failure to ReasonDeleteBlocked without grepping
-// error strings themselves.
+// callers get a typed refusal without grepping error strings themselves.
 func (c *sdkClient) DeleteTransitKey(ctx context.Context, mount, name string, opts ...CallOption) error {
 	mount = strings.Trim(mount, "/")
 	_, err := c.clientFor(opts).Logical().DeleteWithContext(ctx, mount+"/keys/"+name)
@@ -1829,7 +1830,7 @@ func isNoDefaultIssuer(err error) bool {
 // appends the key name. The bao_client_test contract test pins the body
 // shape so a wording change upstream surfaces as a test failure rather
 // than a silent regression that'd swallow real BadRequest errors as
-// DeleteBlocked.
+// deletion-refused.
 func isDeletionNotAllowed(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "deletion is not allowed")
 }

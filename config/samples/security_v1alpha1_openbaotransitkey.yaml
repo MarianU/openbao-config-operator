@@ -14,17 +14,19 @@ spec:
   # Bao-side key name. Required.
   name: app-key
 
-  # Algorithm. Immutable post-create — editing this field after the key
-  # is written surfaces Ready=False reason=Invalid; delete the CR (and
-  # the bao-side key, after flipping deletionAllowed=true) to switch
-  # algorithms.
+  # Algorithm. Immutable post-create — editing it surfaces Ready=False
+  # reason=Invalid. A re-created CR whose spec matches the existing bao
+  # key adopts it; a divergent type fails loudly with the same Invalid.
+  # Switching algorithms therefore means a new key: delete the CR,
+  # destroy the bao-side key by hand, re-create.
   type: aes256-gcm96
 
   # AutoRotatePeriod is a Go duration string ("720h"); "0" disables.
   # bao does NOT accept "30d" — use hours.
   autoRotatePeriod: "720h"
 
-  # deletionAllowed gates DELETE on the bao side. Without this, the
-  # controller's cleanup on CR delete is rejected and the CR remains
-  # Terminating with Ready=False reason=DeleteBlocked.
-  deletionAllowed: true
+  # deletionAllowed sets bao's deletion_allowed flag, gating DELETE for
+  # callers of the bao API. It does NOT make CR deletion remove the key —
+  # this kind never deletes its bao object. Set true only to permit a
+  # deliberate `bao delete transit/keys/app-key` done by hand.
+  # deletionAllowed: true

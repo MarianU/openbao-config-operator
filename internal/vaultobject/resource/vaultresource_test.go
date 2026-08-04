@@ -165,11 +165,13 @@ func TestHandleDelete_IsDeletableFalseSkipsBaoDelete(t *testing.T) {
 		Build()
 
 	h := &recordingHandlers{}
+	rec := record.NewFakeRecorder(16)
 	r := &VaultResource[*stubCR]{
 		Client:        cl,
 		Scheme:        scheme,
 		Handlers:      h.handlers(),
 		FinalizerName: "stub.finalizer",
+		Recorder:      rec,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -177,6 +179,12 @@ func TestHandleDelete_IsDeletableFalseSkipsBaoDelete(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{}, res)
+
+	// The CR is about to disappear; the Event is the only k8s-side trace
+	// of what was left behind in bao.
+	events := drainEvents(rec)
+	require.Len(t, events, 1)
+	require.Contains(t, events[0], "BaoObjectOrphaned")
 
 	require.Equal(t, 0, h.deleteCalls,
 		"BaoDelete must not be called when IsDeletable=false (intentional bao-side orphan)")
@@ -219,11 +227,13 @@ func TestHandleDelete_NotWrittenSkipsBaoDelete(t *testing.T) {
 		Build()
 
 	h := &recordingHandlers{}
+	rec := record.NewFakeRecorder(16)
 	r := &VaultResource[*stubCR]{
 		Client:        cl,
 		Scheme:        scheme,
 		Handlers:      h.handlers(),
 		FinalizerName: "stub.finalizer",
+		Recorder:      rec,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -232,6 +242,57 @@ func TestHandleDelete_NotWrittenSkipsBaoDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, h.deleteCalls,
 		"BaoDelete must be skipped when CR has BaoWritten=false")
+	require.Empty(t, drainEvents(rec))
+}
+
+// A never-written, non-deletable CR finalizes with no orphan Event or
+// log — nothing exists in bao to orphan. Pins the handleDelete case
+// ordering (!IsBaoWritten before !IsDeletable).
+func TestHandleDelete_NeverWrittenNonDeletable_NoFalseOrphanSignal(t *testing.T) {
+	t.Parallel()
+	scheme := stubScheme(t)
+
+	now := metav1.Now()
+	obj := &stubCR{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "never-written-no-delete",
+			Namespace:         "default",
+			Finalizers:        []string{"stub.finalizer"},
+			DeletionTimestamp: &now,
+		},
+		Status:    stubStatus{BaoWritten: false},
+		Deletable: false,
+	}
+
+	cl := crfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(obj).
+		WithStatusSubresource(&stubCR{}).
+		Build()
+
+	h := &recordingHandlers{}
+	rec := record.NewFakeRecorder(16)
+	r := &VaultResource[*stubCR]{
+		Client:        cl,
+		Scheme:        scheme,
+		Handlers:      h.handlers(),
+		FinalizerName: "stub.finalizer",
+		Recorder:      rec,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "default", Name: "never-written-no-delete"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, h.deleteCalls)
+	require.Empty(t, drainEvents(rec),
+		"nothing was written, so nothing was orphaned — no Event")
+
+	got := &stubCR{}
+	err = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "never-written-no-delete"}, got)
+	if err == nil {
+		require.False(t, controllerutil.ContainsFinalizer(got, "stub.finalizer"))
+	}
 }
 
 // TestHandleDelete_WrittenThenReadyFlippedFalseStillDeletes covers the

@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -26,6 +27,9 @@ const (
 	mount       = "transit"
 	keyName     = "app-key"
 	sharedKeyNm = "shared"
+	// typeEd25519 is the "wrong algorithm" in immutability cases — any
+	// type differing from sampleKey's aes256-gcm96 works.
+	typeEd25519 = "ed25519"
 )
 
 // fakeBao keys keys (heh) by (openbaoNs, mount, name) so the same key
@@ -351,6 +355,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Scheme:        scheme,
 		FinalizerName: OpenBaoTransitKeyFinalizer,
 		Handlers:      OpenBaoTransitKeyHandlers(cl, fb),
+		Recorder:      record.NewFakeRecorder(32),
 	}
 	return &OpenBaoTransitKeyReconciler{VaultResource: base}
 }
@@ -439,9 +444,9 @@ func TestTransitKey_CreatePath_WritesKey(t *testing.T) {
 // still stamp Status.LastWrittenPath. This locks down the upgrade
 // case where an existing CR was written by a pre-LastWrittenPath
 // version of the operator and the field is empty in etcd; the next
-// reconcile should populate it without a spurious BaoWrite. A future
-// refactor that drops the Backfill stamp would silently regress the
-// rename-cleanup path (BaoDeleteIdentity reads LastWrittenPath).
+// reconcile should populate it without a spurious BaoWrite. The field
+// is the audit trail locating a key orphaned by a spec.path edit, so
+// an empty value leaves that orphan untraceable.
 func TestTransitKey_Backfill_StampsLastWrittenPath(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
@@ -549,7 +554,7 @@ func TestTransitKey_TypeImmutability_RejectedWithReasonInvalid(t *testing.T) {
 
 	// Edit spec.type after a successful write.
 	cur := getKey(t, r, tk.Name)
-	cur.Spec.Type = "ed25519"
+	cur.Spec.Type = typeEd25519
 	require.NoError(t, r.Update(context.Background(), cur))
 
 	reconcile(t, r, tk.Name)
@@ -612,10 +617,10 @@ func TestTransitKey_KeySizeImmutability_Rejected(t *testing.T) {
 	require.Contains(t, cond.Message, "keySize")
 }
 
-func TestTransitKey_DeletePath_RemovesBaoKey(t *testing.T) {
+func TestTransitKey_DeletePath_OrphansBaoKey(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
-	tk := sampleKey("app-key") // deletionAllowed=true via sampleKey
+	tk := sampleKey("app-key")
 	r := buildReconciler(t, fb, tk)
 
 	reconcile(t, r, tk.Name)
@@ -626,68 +631,157 @@ func TestTransitKey_DeletePath_RemovesBaoKey(t *testing.T) {
 	require.NoError(t, r.Delete(context.Background(), cur))
 	reconcile(t, r, tk.Name)
 
-	require.Equal(t, 1, fb.deletes)
-	require.NotContains(t, fb.keys, tkKey("", mount, "app-key"),
-		"deletionAllowed=true must let bao key be removed")
+	got := &v1alpha1.OpenBaoTransitKey{}
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: tk.Name}, got)
+	require.Error(t, err, "finalizer must be released so the CR is removed")
+	require.Equal(t, 0, fb.deletes,
+		"IsDeletable=false must keep the delete path away from bao entirely")
+	require.Contains(t, fb.keys, tkKey("", mount, "app-key"),
+		"bao key outlives the CR — key material is never destroyed by CR deletion")
 }
 
-func TestTransitKey_DeleteBlocked_FinalizerHolds(t *testing.T) {
+// spec.deletionAllowed configures bao's own gate; it is not an
+// instruction to the operator to delete.
+func TestTransitKey_DeletionAllowedTrue_StillOrphans(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	tk := sampleKey("app-key")
+	tk.Spec.DeletionAllowed = ptrBool(true)
 	r := buildReconciler(t, fb, tk)
 
 	reconcile(t, r, tk.Name)
 	reconcile(t, r, tk.Name)
+	require.True(t, fb.keys[tkKey("", mount, "app-key")].DeletionAllowed,
+		"spec.deletionAllowed must still reach bao on the write path")
 
-	// Mark this key as bao-side blocked from deletion regardless of
-	// the spec's deletionAllowed — models the case where the user
-	// flipped the gate false on the bao server out of band.
+	cur := getKey(t, r, tk.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, tk.Name)
+
+	require.Equal(t, 0, fb.deletes)
+	require.Contains(t, fb.keys, tkKey("", mount, "app-key"))
+}
+
+// A closed bao-side deletion_allowed gate must not wedge CR deletion:
+// the delete path never calls bao, so the gate cannot hold the
+// finalizer hostage.
+func TestTransitKey_DeleteNeverWedges_WhenBaoGateClosed(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	tk := sampleKey("app-key")
+	tk.Spec.DeletionAllowed = nil // bao's gate stays closed
+	r := buildReconciler(t, fb, tk)
+
+	reconcile(t, r, tk.Name)
+	reconcile(t, r, tk.Name)
 	fb.deletionBlocked[tkKey("", mount, "app-key")] = true
 
 	cur := getKey(t, r, tk.Name)
 	require.NoError(t, r.Delete(context.Background(), cur))
 	reconcile(t, r, tk.Name)
 
-	// CR must still exist (finalizer holds the deletion); bao key
-	// must still exist.
 	got := &v1alpha1.OpenBaoTransitKey{}
 	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: tk.Name}, got)
-	require.NoError(t, err)
-	require.NotNil(t, got.DeletionTimestamp, "CR is Terminating")
-	require.Contains(t, fb.keys, tkKey("", mount, "app-key"),
-		"bao key must NOT be removed when deletion is blocked")
-
-	cond := readyCond(t, got)
-	require.NotNil(t, cond)
-	require.Equal(t, resource.ReasonDeleteBlocked, cond.Reason)
-	require.Contains(t, cond.Message, "deletion_allowed=true")
+	require.Error(t, err, "CR must not be stuck Terminating behind bao's deletion_allowed gate")
+	require.Contains(t, fb.keys, tkKey("", mount, "app-key"))
 }
 
-func TestTransitKey_DeleteIdempotent_404(t *testing.T) {
+// Re-creating a CR over an existing bao key must adopt it — this is what
+// makes an accidental CR removal recoverable. The seeded key matches the
+// spec exactly, so a pure adoption issues no write of any kind.
+func TestTransitKey_ReCreate_AdoptsExistingBaoKey(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
+	fb.keys[tkKey("", mount, "app-key")] = &baoclient.TransitKeyInfo{
+		Type:               "aes256-gcm96",
+		LatestVersion:      7,
+		DeletionAllowed:    true, // matches sampleKey's spec
+		SupportsEncryption: true,
+	}
+
 	tk := sampleKey("app-key")
 	r := buildReconciler(t, fb, tk)
 
 	reconcile(t, r, tk.Name)
 	reconcile(t, r, tk.Name)
 
-	// Out-of-band: bao key disappears (administrator removed).
-	delete(fb.keys, tkKey("", mount, "app-key"))
-
-	cur := getKey(t, r, tk.Name)
-	require.NoError(t, r.Delete(context.Background(), cur))
-	reconcile(t, r, tk.Name)
-
-	// CR must finalize cleanly — fake's DeleteTransitKey returns nil
-	// on missing-key, mirroring the wrapper's 404 swallow.
-	got := &v1alpha1.OpenBaoTransitKey{}
-	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: tk.Name}, got)
-	require.True(t, err != nil, "CR must be removed after finalizer release")
+	require.Equal(t, 0, fb.writes,
+		"an existing key must be adopted, not re-created")
+	require.Equal(t, 0, fb.configs,
+		"a spec matching the bao key must issue no config write either")
+	require.Equal(t, 7, fb.keys[tkKey("", mount, "app-key")].LatestVersion,
+		"adoption must not reset the key's version history")
+	require.Equal(t, 7, getKey(t, r, tk.Name).Status.LatestVersion)
 }
 
-func TestTransitKey_NeverWrote_DeleteSkipsBao(t *testing.T) {
+// Adoption with drifted mutable fields converges them via the config
+// endpoint without touching the create path or the version history.
+func TestTransitKey_ReCreate_AdoptsAndConvergesMutableDrift(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	fb.keys[tkKey("", mount, "app-key")] = &baoclient.TransitKeyInfo{
+		Type:               "aes256-gcm96",
+		LatestVersion:      7,
+		DeletionAllowed:    false, // spec says true -> drift on a mutable field
+		SupportsEncryption: true,
+	}
+
+	tk := sampleKey("app-key")
+	r := buildReconciler(t, fb, tk)
+
+	reconcile(t, r, tk.Name)
+	reconcile(t, r, tk.Name)
+
+	require.Equal(t, 0, fb.writes, "mutable drift must not re-create the key")
+	require.Equal(t, 1, fb.configs, "mutable drift converges via /config")
+	require.True(t, fb.keys[tkKey("", mount, "app-key")].DeletionAllowed)
+	require.Equal(t, 7, fb.keys[tkKey("", mount, "app-key")].LatestVersion)
+}
+
+// Orphaning makes re-creating over a leftover key routine, so the
+// immutable-field guard must hold on that path too: a fresh CR whose
+// type diverges from the orphan's must fail loudly, not go Ready over a
+// wrong-algorithm key — and must not touch it.
+func TestTransitKey_ReCreateOverOrphan_MismatchedTypeFailsLoudly(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	fb.keys[tkKey("", mount, "app-key")] = &baoclient.TransitKeyInfo{
+		Type:               "aes256-gcm96",
+		LatestVersion:      4,
+		SupportsEncryption: true,
+	}
+
+	tk := sampleKey("app-key")
+	tk.Spec.Type = typeEd25519
+	r := buildReconciler(t, fb, tk)
+
+	reconcile(t, r, tk.Name)
+	reconcile(t, r, tk.Name)
+
+	cond := readyCond(t, getKey(t, r, tk.Name))
+	require.NotNil(t, cond)
+	require.Equal(t, resource.ReasonInvalid, cond.Reason)
+	require.Contains(t, cond.Message, "immutable")
+	require.Equal(t, 0, fb.writes, "the orphaned key must not be overwritten")
+	require.Equal(t, 0, fb.configs)
+	require.Equal(t, "aes256-gcm96", fb.keys[tkKey("", mount, "app-key")].Type)
+}
+
+// The delete handlers are unreachable while IsDeletable=false; if a
+// future change flips that, they must fail loudly instead of letting the
+// base treat nil as a successful delete and silently orphan.
+func TestTransitKey_DeleteHandlers_FailLoudIfEverReached(t *testing.T) {
+	t.Parallel()
+	h := OpenBaoTransitKeyHandlers(nil, newFakeBao())
+	k := sampleKey("app-key")
+
+	err := h.BaoDelete(context.Background(), k)
+	require.ErrorIs(t, err, resource.ErrInternal)
+	err = h.BaoDeleteIdentity(context.Background(), k, "app-key", "")
+	require.ErrorIs(t, err, resource.ErrInternal)
+}
+
+func TestTransitKey_NeverWrote_DeleteFinalizesCleanly(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	fb.writeErr = baoclient.ErrNotFound // create fails → status.baoWritten stays false
@@ -704,8 +798,10 @@ func TestTransitKey_NeverWrote_DeleteSkipsBao(t *testing.T) {
 	require.NoError(t, r.Delete(context.Background(), cur))
 	reconcile(t, r, tk.Name)
 
-	require.Equal(t, 0, fb.deletes,
-		"baoWritten=false must skip BaoDelete — no orphan call to bao")
+	require.Equal(t, 0, fb.deletes)
+	got := &v1alpha1.OpenBaoTransitKey{}
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: tk.Name}, got)
+	require.Error(t, err, "a CR that never wrote to bao must still finalize")
 }
 
 func TestTransitKey_NameCollision_DifferentMountsDoNotCollide(t *testing.T) {
@@ -762,7 +858,9 @@ func TestTransitKey_NameCollision_OlderWins(t *testing.T) {
 	require.Equal(t, resource.ReasonNameCollision, cond.Reason)
 }
 
-func TestTransitKey_Rename_CleansPrevious(t *testing.T) {
+// A rename points the CR at a new bao identity; the previous key still
+// decrypts everything from before the rename, so it is left in place.
+func TestTransitKey_Rename_OrphansPrevious(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	tk := sampleKey("orig")
@@ -780,12 +878,13 @@ func TestTransitKey_Rename_CleansPrevious(t *testing.T) {
 
 	require.Contains(t, fb.keys, tkKey("", mount, "renamed"),
 		"new identity must be present")
-	require.NotContains(t, fb.keys, tkKey("", mount, "orig"),
-		"previous identity must be cleaned up — RenameTracker fires BaoDeleteIdentity")
+	require.Contains(t, fb.keys, tkKey("", mount, "orig"),
+		"previous identity must survive the rename — no key material is destroyed")
+	require.Equal(t, 0, fb.deletes)
 	require.Equal(t, "renamed", getKey(t, r, tk.Name).Status.LastWrittenBaoName)
 }
 
-func TestTransitKey_Rename_AcrossMountPath_CleansAtOldPath(t *testing.T) {
+func TestTransitKey_Rename_AcrossMountPath_OrphansAtOldPath(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	tk := sampleKey("orig")
@@ -806,8 +905,9 @@ func TestTransitKey_Rename_AcrossMountPath_CleansAtOldPath(t *testing.T) {
 	reconcile(t, r, tk.Name)
 
 	require.Contains(t, fb.keys, tkKey("", "transit-new", "renamed"))
-	require.NotContains(t, fb.keys, tkKey("", "transit-original", "orig"),
-		"previous (path,name) must be cleaned at the OLD path — BaoDeleteIdentity uses LastWrittenPath")
+	require.Contains(t, fb.keys, tkKey("", "transit-original", "orig"),
+		"the key at the previous (path,name) must survive a mount move")
+	require.Equal(t, 0, fb.deletes)
 }
 
 func TestTransitKey_LatestVersion_RefreshedOnReconcile(t *testing.T) {
