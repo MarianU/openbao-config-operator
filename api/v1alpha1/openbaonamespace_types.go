@@ -101,7 +101,7 @@ func (d *OpenBaoNamespace) IsInitialized() bool {
 }
 
 func (d *OpenBaoNamespace) IsDeletable() bool {
-	return true
+	return d.Spec.DeletionPolicy.DeletesDataKind()
 }
 
 // PrepareInternalValues is a no-op for OpenBaoNamespace today.
@@ -141,6 +141,17 @@ func (d *OpenBaoNamespace) IsValid() (bool, error) {
 
 // OpenBaoNamespaceSpec defines the desired state of OpenBaoNamespace.
 type OpenBaoNamespaceSpec struct {
+	// DeletionPolicy controls what happens to the bao-side namespace
+	// when this CR is deleted or renamed. Retain (the default)
+	// releases the CR without touching bao: the namespace is
+	// intentionally orphaned and logged, and re-applying an identical
+	// CR adopts it. Delete removes the bao namespace — bao's delete
+	// cascades through everything inside it (mounts, auth methods,
+	// secrets, keys, child namespaces), unrecoverably.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Name is the bao-side namespace name (the local segment under
 	// spec.openbaoNamespace). Defaults to metadata.name when empty;
 	// override when the bao name must differ from the k8s resource
@@ -223,6 +234,7 @@ func (m *OpenBaoNamespace) SetLastWrittenBaoIdentity(name, namespace string) {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=obns
+// +kubebuilder:printcolumn:name="DeletionPolicy",type=string,JSONPath=`.spec.deletionPolicy`
 
 // OpenBaoNamespace is the Schema for the openbaonamespaces API.
 // Reconciles a CR to a bao-side namespace at sys/namespaces/<name>

@@ -217,7 +217,9 @@ func TestOpenBaoSecretEngine_IsInitialized_IsDeletable(t *testing.T) {
 	t.Parallel()
 	m := &OpenBaoSecretEngine{}
 	require.True(t, m.IsInitialized())
-	require.True(t, m.IsDeletable())
+	// Data-bearing kind: empty deletionPolicy means Retain. The full
+	// policy table for every kind lives in deletionpolicy_test.go.
+	require.False(t, m.IsDeletable())
 }
 
 func TestOpenBaoSecretEngine_PrepareInternalValues_NoOp(t *testing.T) {

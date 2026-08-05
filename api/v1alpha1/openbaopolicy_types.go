@@ -108,7 +108,7 @@ func (d *OpenBaoPolicy) IsInitialized() bool {
 }
 
 func (d *OpenBaoPolicy) IsDeletable() bool {
-	return true
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
 }
 
 // PrepareInternalValues is a no-op for OpenBaoPolicy. Spec validation lives
@@ -152,6 +152,17 @@ func (r *OpenBaoPolicy) IsValid() (bool, error) {
 
 // OpenBaoPolicySpec defines the desired state of OpenBaoPolicy.
 type OpenBaoPolicySpec struct {
+	// DeletionPolicy controls what happens to the bao-side object
+	// when this CR is deleted or its bao identity changes. Delete
+	// (the default) removes it, so deleting the CR revokes the access
+	// it granted. Retain releases the CR without touching bao — the
+	// grant survives as an intentional, logged orphan that no CR
+	// tracks afterward; use only where rendering churn must never
+	// drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Policy is an OpenBao policy body expressed in HCL.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1

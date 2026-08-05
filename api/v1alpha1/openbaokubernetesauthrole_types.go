@@ -199,7 +199,7 @@ func (d *OpenBaoKubernetesAuthRole) IsInitialized() bool {
 }
 
 func (d *OpenBaoKubernetesAuthRole) IsDeletable() bool {
-	return true
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
 }
 
 // PrepareInternalValues resolves spec.targetNamespaces.targetNamespaceSelector
@@ -494,6 +494,17 @@ func (i *VRole) toMap() map[string]interface{} {
 // OpenBaoKubernetesAuthRoleSpec defines the desired state of
 // OpenBaoKubernetesAuthRole.
 type OpenBaoKubernetesAuthRoleSpec struct {
+	// DeletionPolicy controls what happens to the bao-side role when
+	// this CR is deleted or its bao identity changes. Delete (the
+	// default) removes the role, so new logins through it stop;
+	// tokens already issued keep working until their TTL expires.
+	// Retain releases the CR without touching bao — the role survives
+	// as an intentional, logged orphan that no CR tracks afterward;
+	// use only where rendering churn must never drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Path is the auth mount under which the role is created. The bao
 	// path is auth/<path>/role/<name>. Plain string (not VCO's Path)
 	// because we don't need the legacy regex VCO carries.

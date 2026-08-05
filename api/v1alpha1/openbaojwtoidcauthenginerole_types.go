@@ -113,7 +113,10 @@ func (d *OpenBaoJWTOIDCAuthEngineRole) IsEquivalentToDesiredState(payload map[st
 }
 
 func (d *OpenBaoJWTOIDCAuthEngineRole) IsInitialized() bool { return true }
-func (d *OpenBaoJWTOIDCAuthEngineRole) IsDeletable() bool   { return true }
+
+func (d *OpenBaoJWTOIDCAuthEngineRole) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
+}
 
 func (d *OpenBaoJWTOIDCAuthEngineRole) PrepareInternalValues(ctx context.Context, object client.Object) error {
 	return nil
@@ -250,6 +253,17 @@ func boundClaimsCoerceList(v interface{}) ([]string, bool) {
 
 // OpenBaoJWTOIDCAuthEngineRoleSpec defines the desired state.
 type OpenBaoJWTOIDCAuthEngineRoleSpec struct {
+	// DeletionPolicy controls what happens to the bao-side role when
+	// this CR is deleted or its bao identity changes. Delete (the
+	// default) removes the role, so new logins through it stop;
+	// tokens already issued keep working until their TTL expires.
+	// Retain releases the CR without touching bao — the role survives
+	// as an intentional, logged orphan that no CR tracks afterward;
+	// use only where rendering churn must never drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Path is the bao-side jwt or oidc auth mount.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1

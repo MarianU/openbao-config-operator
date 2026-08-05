@@ -1027,10 +1027,10 @@ func TestDeleteNamespace_Swallows404(t *testing.T) {
 	require.NoError(t, c.DeleteNamespace(context.Background(), "missing"))
 }
 
-// Bao rejects DELETE on a namespace that contains live mounts/auth/policies
-// with a 400 + descriptive message. The wrapper must propagate this as a
-// *StatusError so the controller can keep its finalizer in place — the
-// "graceful block" behaviour from the operator-runtime concerns matrix.
+// A non-404 error on namespace delete (permission denied, transport
+// failure — note current bao CASCADES deletion through live children
+// rather than rejecting on them) must propagate as a *StatusError so
+// the controller can keep its finalizer in place and retry.
 func TestDeleteNamespace_PropagatesNon404(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

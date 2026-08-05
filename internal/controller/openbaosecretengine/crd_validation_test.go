@@ -11,6 +11,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -164,6 +165,42 @@ func TestCRDValidation_OpenBaoSecretEngine_RejectsInvalid(t *testing.T) {
 			invalid: true,
 			hint:    "openbaoNamespace pattern rejects uppercase",
 		},
+		{
+			name:    "deletionPolicy-delete-accepted",
+			mutate:  func(m *v1alpha1.OpenBaoSecretEngine) { m.Spec.DeletionPolicy = "Delete" },
+			invalid: false,
+			hint:    "deletionPolicy enum must admit Delete",
+		},
+		{
+			name:    "deletionPolicy-lowercase-rejected",
+			mutate:  func(m *v1alpha1.OpenBaoSecretEngine) { m.Spec.DeletionPolicy = "retain" },
+			invalid: true,
+			hint:    "deletionPolicy enum is case-sensitive",
+		},
+		{
+			name:    "deletionPolicy-bogus-rejected",
+			mutate:  func(m *v1alpha1.OpenBaoSecretEngine) { m.Spec.DeletionPolicy = "Destroy" },
+			invalid: true,
+			hint:    "deletionPolicy enum rejects values outside Retain|Delete",
+		},
+		{
+			name:    "deletionPolicy-uppercase-rejected",
+			mutate:  func(m *v1alpha1.OpenBaoSecretEngine) { m.Spec.DeletionPolicy = "DELETE" },
+			invalid: true,
+			hint:    "deletionPolicy enum rejects shouting case",
+		},
+		{
+			name:    "deletionPolicy-leading-space-rejected",
+			mutate:  func(m *v1alpha1.OpenBaoSecretEngine) { m.Spec.DeletionPolicy = " Retain" },
+			invalid: true,
+			hint:    "deletionPolicy enum does not trim whitespace",
+		},
+		{
+			name:    "deletionPolicy-trailing-space-rejected",
+			mutate:  func(m *v1alpha1.OpenBaoSecretEngine) { m.Spec.DeletionPolicy = "Delete " },
+			invalid: true,
+			hint:    "deletionPolicy enum does not trim whitespace",
+		},
 	}
 
 	for i, tc := range cases {
@@ -184,4 +221,56 @@ func TestCRDValidation_OpenBaoSecretEngine_RejectsInvalid(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A literal empty string is not the same as an absent field: YAML like
+// `deletionPolicy: ""` (e.g. a broken helm value reaching a manifest)
+// must be rejected by the enum, not silently defaulted. The typed
+// client cannot express this — omitempty drops the field — so this
+// goes through unstructured to put the empty string on the wire.
+func TestCRDValidation_OpenBaoSecretEngine_DeletionPolicyExplicitEmptyRejected(t *testing.T) {
+	cl := newEnvtestClient(t)
+	ctx := context.Background()
+
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "security.mto.stakater.com/v1alpha1",
+		"kind":       "OpenBaoSecretEngine",
+		"metadata": map[string]interface{}{
+			"name":      "mountval-empty-deletionpolicy",
+			"namespace": envtestNS,
+		},
+		"spec": map[string]interface{}{
+			"path":           secretMountPath,
+			"kvV2":           map[string]interface{}{},
+			"deletionPolicy": "",
+		},
+	}}
+	err := cl.Create(ctx, u)
+	require.Error(t, err, "explicit empty string must not be silently defaulted")
+	require.True(t, apierrors.IsInvalid(err),
+		"apiserver should reject with IsInvalid; got: %v", err)
+}
+
+// The structural-schema default must stamp Retain onto a data-bearing
+// CR created without the field — what a pre-upgrade manifest looks
+// like. The Go side treats empty as Retain regardless; this pins what
+// users see on reads.
+func TestCRDValidation_OpenBaoSecretEngine_DeletionPolicyDefaultsToRetain(t *testing.T) {
+	cl := newEnvtestClient(t)
+	ctx := context.Background()
+
+	m := &v1alpha1.OpenBaoSecretEngine{}
+	m.Name = "mountval-default-deletionpolicy"
+	m.Namespace = envtestNS
+	m.Spec.Path = secretMountPath
+	m.Spec.KvV2 = &v1alpha1.KvV2Spec{}
+	require.NoError(t, cl.Create(ctx, m))
+	defer func() {
+		_ = cl.Delete(ctx, &v1alpha1.OpenBaoSecretEngine{ObjectMeta: metav1.ObjectMeta{Name: m.Name, Namespace: envtestNS}})
+	}()
+
+	var got v1alpha1.OpenBaoSecretEngine
+	require.NoError(t, cl.Get(ctx, client.ObjectKeyFromObject(m), &got))
+	require.Equal(t, v1alpha1.DeletionPolicyRetain, got.Spec.DeletionPolicy,
+		"apiserver must default deletionPolicy to Retain on data-bearing kinds")
 }

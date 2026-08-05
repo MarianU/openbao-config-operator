@@ -245,6 +245,11 @@ var _ = Describe("OpenBaoPKISecretEngineConfig CR → OpenBao", Ordered, func() 
 		Expect(signed).To(ContainSubstring("BEGIN CERTIFICATE"))
 
 		By("placing the signed cert in the externalSignSecret")
+		// A leftover from an aborted earlier run would make a bare Create
+		// fail with AlreadyExists; clear it so the spec is re-run-safe.
+		_ = k8s.Delete(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: signSecretName},
+		})
 		Expect(k8s.Create(ctx, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: signSecretName},
 			Data:       map[string][]byte{"tls.crt": []byte(signed)},

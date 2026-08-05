@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -263,6 +264,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Scheme:        scheme,
 		FinalizerName: OpenBaoSecretEngineFinalizer,
 		Handlers:      OpenBaoSecretEngineHandlers(cl, fb),
+		Recorder:      record.NewFakeRecorder(32),
 	}
 	return &OpenBaoSecretEngineReconciler{VaultResource: base}
 }
@@ -421,10 +423,36 @@ func TestOpenBaoSecretEngine_EngineTypeChange_RejectedClearly(t *testing.T) {
 		"bao mount type must stay 'kv' — no half-applied state")
 }
 
-func TestOpenBaoSecretEngine_DeletePath_KvV2(t *testing.T) {
+// Deleting the CR under the default Retain policy releases the CR and
+// leaves the mount — and everything stored under it — in bao.
+func TestOpenBaoSecretEngine_DeletePath_DefaultRetainsMount(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	m := sampleKvV2Mount("kv")
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, 1, fb.enableSecret)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 0, fb.disableSecret, "Retain must never call DisableSecretEngineMount")
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath),
+		"the mount is an intentional orphan, not a leak")
+
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: m.Name}, &v1alpha1.OpenBaoSecretEngine{})
+	require.True(t, apierrors.IsNotFound(err), "finalizer must release even though bao is untouched")
+}
+
+// spec.deletionPolicy=Delete opts back into destructive cleanup.
+func TestOpenBaoSecretEngine_DeletePath_ExplicitDeleteUnmounts(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
 	r := buildReconciler(t, fb, m)
 
 	reconcile(t, r, envtestNS, m.Name)
@@ -440,6 +468,285 @@ func TestOpenBaoSecretEngine_DeletePath_KvV2(t *testing.T) {
 
 	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: m.Name}, &v1alpha1.OpenBaoSecretEngine{})
 	require.True(t, apierrors.IsNotFound(err))
+}
+
+// An explicit Delete on a pki-type engine unmounts past the PKI
+// config CR's own orphan-by-design guard — the engine CR owns the
+// mount, so its opt-in wins; protection is the Retain default, not a
+// hard block.
+func TestOpenBaoSecretEngine_PKIType_ExplicitDeleteUnmounts(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("pki")
+	m.Spec.KvV2 = nil
+	m.Spec.PKI = &v1alpha1.PKISpec{}
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, "pki", fb.secretMounts[mountKey("", secretMountPath)].Type)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 1, fb.disableSecret,
+		"explicit Delete must unmount a pki engine — the CA protection is the Retain default, not a hard block")
+	require.NotContains(t, fb.secretMounts, mountKey("", secretMountPath))
+}
+
+// Rename under the default Retain: the new mount is written, the
+// previous one is orphaned, and the recorded identity advances so the
+// skipped cleanup is not retried — the guard against a values edit
+// moving a mount path and destroying what lived under it.
+func TestOpenBaoSecretEngine_Rename_DefaultRetainsOldMount(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath))
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	cur.Spec.Path = secretMountPath + "-moved"
+	require.NoError(t, r.Update(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 0, fb.disableSecret, "rename under Retain must not unmount the previous path")
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath),
+		"old mount is an intentional orphan")
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath+"-moved"))
+	require.Equal(t, secretMountPath+"-moved", getMount(t, r, envtestNS, m.Name).Status.LastWrittenBaoName,
+		"recorded identity must advance so the skipped cleanup is not retried")
+}
+
+// Rename under an explicit Delete policy cleans up: the
+// previous mount is unmounted after the new identity is written.
+func TestOpenBaoSecretEngine_Rename_ExplicitDeleteCleansOldMount(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	cur.Spec.Path = secretMountPath + "-moved"
+	require.NoError(t, r.Update(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 1, fb.disableSecret, "rename under Delete must clean up the previous mount")
+	require.NotContains(t, fb.secretMounts, mountKey("", secretMountPath))
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath+"-moved"))
+}
+
+// Adoption counts as ownership: a CR created over an already-matching
+// mount never writes, but its deletionPolicy=Delete must still tear
+// the mount down — pins the never-written guard against swallowing
+// deletes on adopted objects.
+func TestOpenBaoSecretEngine_AdoptedMount_ExplicitDeleteStillCleansUp(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	// Pre-populate bao with a mount already matching the spec, as a
+	// prior Retain deletion leaves it.
+	fb.secretMounts[mountKey("", secretMountPath)] = baoclient.SecretEngineMount{
+		Type:        "kv",
+		Description: m.Spec.Description,
+		Options:     map[string]string{"version": "2"},
+	}
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, 0, fb.enableSecret, "matching mount must be adopted, not re-enabled")
+	require.True(t, getMount(t, r, envtestNS, m.Name).Status.BaoWritten,
+		"adoption must mark ownership so the deletion path can act")
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 1, fb.disableSecret, "adopted mount must still be deletable under Delete policy")
+	require.NotContains(t, fb.secretMounts, mountKey("", secretMountPath))
+}
+
+// deletionPolicy is CR lifecycle metadata, not bao state: flipping it
+// on a Ready CR must not trigger any bao write.
+func TestOpenBaoSecretEngine_DeletionPolicyFlip_NoBaoWrite(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, 1, fb.enableSecret)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	cur.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	require.NoError(t, r.Update(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 1, fb.enableSecret, "policy flip must not re-enable the mount")
+	require.Equal(t, 0, fb.tuneSecret, "policy flip must not tune the mount")
+}
+
+// A collision loser never reaches the success path and must never
+// claim the winner's bao object — deleting it, even with an explicit
+// Delete policy, must not touch the mount.
+func TestOpenBaoSecretEngine_CollisionLoser_DeletePolicyDoesNotTouchWinnersMount(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+
+	winner := sampleKvV2Mount("kv-winner")
+	winner.Namespace = nsA
+	winner.UID = uidA
+	winner.CreationTimestamp = metav1.NewTime(time.Now().Add(-1 * time.Hour))
+
+	loser := sampleKvV2Mount("kv-loser")
+	loser.Namespace = nsB
+	loser.UID = uidB
+	loser.CreationTimestamp = metav1.NewTime(time.Now())
+	loser.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+
+	r := buildReconciler(t, fb, winner, loser)
+
+	reconcile(t, r, nsA, "kv-winner")
+	reconcile(t, r, nsA, "kv-winner")
+	require.Equal(t, 1, fb.enableSecret)
+
+	reconcile(t, r, nsB, "kv-loser")
+	reconcile(t, r, nsB, "kv-loser")
+	require.False(t, getMount(t, r, nsB, "kv-loser").Status.BaoWritten,
+		"a collision loser must never mark ownership")
+
+	cur := getMount(t, r, nsB, "kv-loser")
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, nsB, "kv-loser")
+
+	require.Equal(t, 0, fb.disableSecret, "loser deletion must not touch the winner's mount")
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath))
+}
+
+// Anti-wedge escape hatch: a CR stuck Terminating on a failing Delete
+// is released by flipping to Retain — handleDelete reads the live
+// spec each pass.
+func TestOpenBaoSecretEngine_StuckDelete_FlipToRetainReleases(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	fb.disableSecretErr = &baoclient.StatusError{
+		StatusCode: http.StatusForbidden,
+		Inner:      errors.New("permission denied"),
+	}
+	m := sampleKvV2Mount("kv")
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	res := reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, 30*time.Second, res.RequeueAfter, "failing delete must retry with backoff")
+	require.Contains(t, getMount(t, r, envtestNS, m.Name).Finalizers, OpenBaoSecretEngineFinalizer,
+		"finalizer must hold while the bao delete fails")
+
+	stuck := getMount(t, r, envtestNS, m.Name)
+	stuck.Spec.DeletionPolicy = v1alpha1.DeletionPolicyRetain
+	require.NoError(t, r.Update(context.Background(), stuck))
+	reconcile(t, r, envtestNS, m.Name)
+
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: m.Name}, &v1alpha1.OpenBaoSecretEngine{})
+	require.True(t, apierrors.IsNotFound(err), "flip to Retain must release the stuck CR")
+	require.Contains(t, fb.secretMounts, mountKey("", secretMountPath),
+		"the mount is orphaned, not deleted")
+}
+
+// The opposite direction: a CR already Terminating under the default
+// Retain can still be flipped to Delete before the finalizer runs —
+// the live spec wins.
+func TestOpenBaoSecretEngine_TerminatingFlipToDelete_Cleans(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+
+	term := getMount(t, r, envtestNS, m.Name)
+	require.False(t, term.DeletionTimestamp.IsZero(), "CR should be Terminating")
+	term.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	require.NoError(t, r.Update(context.Background(), term))
+	reconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 1, fb.disableSecret, "flip to Delete while Terminating must clean up")
+	require.NotContains(t, fb.secretMounts, mountKey("", secretMountPath))
+}
+
+// Adoption with drift: a pre-existing mount whose description differs
+// takes the update path (tune), which both corrects the drift and
+// marks ownership — the subsequent Delete-policy deletion cleans up.
+func TestOpenBaoSecretEngine_AdoptWithDrift_TunesAndOwns(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	fb.secretMounts[mountKey("", secretMountPath)] = baoclient.SecretEngineMount{
+		Type:        "kv",
+		Description: "stale description from before the orphaning",
+		Options:     map[string]string{"version": "2"},
+	}
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, 0, fb.enableSecret, "existing mount must not be re-enabled")
+	require.Equal(t, 1, fb.tuneSecret, "drifted description must be corrected via tune")
+	require.True(t, getMount(t, r, envtestNS, m.Name).Status.BaoWritten)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, envtestNS, m.Name)
+	require.Equal(t, 1, fb.disableSecret)
+	require.NotContains(t, fb.secretMounts, mountKey("", secretMountPath))
+}
+
+// A rename chain (kv → kv-b → kv-c) under the default Retain orphans
+// every previous mount exactly once — LastWritten advances each hop so
+// no cleanup is retried, and nothing is ever unmounted.
+func TestOpenBaoSecretEngine_RenameChain_RetainsEveryPreviousMount(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleKvV2Mount("kv")
+	r := buildReconciler(t, fb, m)
+
+	reconcile(t, r, envtestNS, m.Name)
+	reconcile(t, r, envtestNS, m.Name)
+
+	for _, path := range []string{secretMountPath + "-b", secretMountPath + "-c"} {
+		cur := getMount(t, r, envtestNS, m.Name)
+		cur.Spec.Path = path
+		require.NoError(t, r.Update(context.Background(), cur))
+		reconcile(t, r, envtestNS, m.Name)
+	}
+
+	require.Equal(t, 0, fb.disableSecret, "no hop of the rename chain may unmount anything")
+	for _, path := range []string{secretMountPath, secretMountPath + "-b", secretMountPath + "-c"} {
+		require.Contains(t, fb.secretMounts, mountKey("", path))
+	}
+	require.Equal(t, secretMountPath+"-c", getMount(t, r, envtestNS, m.Name).Status.LastWrittenBaoName)
 }
 
 func TestOpenBaoSecretEngine_BaoForbidden(t *testing.T) {
@@ -535,6 +842,10 @@ func TestOpenBaoSecretEngine_DeleteSkipsBaoIfNeverWritten(t *testing.T) {
 	m.Name = "two-slots"
 	m.Namespace = envtestNS
 	m.Spec.Path = secretMountPath
+	// Explicit Delete so the only reason BaoDelete can be skipped is
+	// baoWritten=false — under the default Retain the assertion below
+	// would pass vacuously.
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
 	// Force IsValid to reject by setting two slots.
 	m.Spec.KvV2 = &v1alpha1.KvV2Spec{}
 	m.Spec.Transit = &v1alpha1.TransitSpec{}

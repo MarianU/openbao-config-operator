@@ -43,6 +43,20 @@ spec:
           spec:
             description: OpenBaoGroupSpec defines the desired state of OpenBaoGroup.
             properties:
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side object
+                  when this CR is deleted or its bao identity changes. Delete
+                  (the default) removes it, so deleting the CR revokes the access
+                  it granted. Retain releases the CR without touching bao — the
+                  grant survives as an intentional, logged orphan that no CR
+                  tracks afterward; use only where rendering churn must never
+                  drop live access.
+                enum:
+                - Retain
+                - Delete
+                type: string
               memberEntityIds:
                 description: |-
                   MemberEntityIds is the list of bao entity ids that belong to

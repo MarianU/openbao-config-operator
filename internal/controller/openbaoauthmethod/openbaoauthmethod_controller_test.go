@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -234,6 +235,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Scheme:        scheme,
 		FinalizerName: OpenBaoAuthMethodFinalizer,
 		Handlers:      OpenBaoAuthMethodHandlers(cl, fb),
+		Recorder:      record.NewFakeRecorder(32),
 	}
 	return &OpenBaoAuthMethodReconciler{VaultResource: base}
 }
@@ -387,10 +389,37 @@ func TestOpenBaoAuthMethod_SelfHealOnOOBDelete(t *testing.T) {
 	require.Equal(t, 2, fb.enables, "OOB delete must trigger re-enable")
 }
 
-func TestOpenBaoAuthMethod_DeletePath(t *testing.T) {
+// Deleting the CR under the default Retain policy releases the CR and
+// leaves the auth mount in bao as an intentional, logged orphan.
+func TestOpenBaoAuthMethod_DeletePath_DefaultRetains(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	m := sampleAuthMount()
+	r := buildReconciler(t, fb, m)
+
+	runReconcile(t, r, envtestNS, m.Name)
+	runReconcile(t, r, envtestNS, m.Name)
+
+	cur := getMount(t, r, envtestNS, m.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	runReconcile(t, r, envtestNS, m.Name)
+
+	require.Equal(t, 0, fb.disables, "Retain must never disable the auth mount")
+	require.Contains(t, fb.mounts, mountKey("", mountPath),
+		"the auth mount is an intentional orphan")
+	require.True(t, apierrors.IsNotFound(
+		r.Get(context.Background(),
+			types.NamespacedName{Namespace: envtestNS, Name: m.Name},
+			&v1alpha1.OpenBaoAuthMethod{})),
+		"finalizer must release even though bao is untouched")
+}
+
+// spec.deletionPolicy=Delete opts back into destructive cleanup.
+func TestOpenBaoAuthMethod_DeletePath_ExplicitDeleteDisables(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	m := sampleAuthMount()
+	m.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
 	r := buildReconciler(t, fb, m)
 
 	runReconcile(t, r, envtestNS, m.Name)

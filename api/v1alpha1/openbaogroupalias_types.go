@@ -104,7 +104,10 @@ func (d *OpenBaoGroupAlias) IsEquivalentToDesiredState(payload map[string]interf
 }
 
 func (d *OpenBaoGroupAlias) IsInitialized() bool { return true }
-func (d *OpenBaoGroupAlias) IsDeletable() bool   { return true }
+
+func (d *OpenBaoGroupAlias) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
+}
 
 // PrepareInternalValues resolves spec.canonicalGroupRef to a bao group
 // id by reading the referenced OpenBaoGroup's status.GroupID. Empty
@@ -201,6 +204,17 @@ type OpenBaoGroupRef struct {
 
 // OpenBaoGroupAliasSpec defines the desired state.
 type OpenBaoGroupAliasSpec struct {
+	// DeletionPolicy controls what happens to the bao-side object
+	// when this CR is deleted or its bao identity changes. Delete
+	// (the default) removes it, so deleting the CR revokes the access
+	// it granted. Retain releases the CR without touching bao — the
+	// grant survives as an intentional, logged orphan that no CR
+	// tracks afterward; use only where rendering churn must never
+	// drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Name is the alias name as it appears in the auth method
 	// (e.g. an OIDC subject claim, an LDAP CN, a JWT sub). Defaults
 	// to metadata.name. Aliases are not normalised — bao stores the

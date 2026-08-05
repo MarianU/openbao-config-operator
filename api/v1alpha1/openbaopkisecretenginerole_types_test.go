@@ -31,7 +31,7 @@ func TestPKIRole_BaoName_PrefersSpecNameAndLowerTrims(t *testing.T) {
 	})
 }
 
-// IsDeletable=true is the inverse of PKIConfig — deleting a role is
+// Default deletability is the inverse of PKIConfig — deleting a role is
 // safe (no key material); the bao role is just an issuance gate.
 func TestPKIRole_IsDeletable_IsTrue(t *testing.T) {
 	t.Parallel()

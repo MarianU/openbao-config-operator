@@ -69,6 +69,20 @@ spec:
                   the parent group is managed out of band (e.g. created by an
                   administrator with the bao CLI).
                 type: string
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side object
+                  when this CR is deleted or its bao identity changes. Delete
+                  (the default) removes it, so deleting the CR revokes the access
+                  it granted. Retain releases the CR without touching bao — the
+                  grant survives as an intentional, logged orphan that no CR
+                  tracks afterward; use only where rendering churn must never
+                  drop live access.
+                enum:
+                - Retain
+                - Delete
+                type: string
               mountAccessor:
                 description: |-
                   MountAccessor is the bao-side accessor of the auth mount this

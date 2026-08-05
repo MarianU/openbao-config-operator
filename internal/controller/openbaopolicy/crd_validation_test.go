@@ -167,6 +167,18 @@ func TestCRDValidation_OpenBaoPolicy_RejectsInvalid(t *testing.T) {
 			invalid: true,
 			hint:    "openbaoNamespace pattern rejects whitespace",
 		},
+		{
+			name:    "deletionPolicy-retain-accepted",
+			mutate:  func(p *v1alpha1.OpenBaoPolicy) { p.Spec.DeletionPolicy = "Retain" },
+			invalid: false,
+			hint:    "deletionPolicy enum must admit Retain",
+		},
+		{
+			name:    "deletionPolicy-lowercase-rejected",
+			mutate:  func(p *v1alpha1.OpenBaoPolicy) { p.Spec.DeletionPolicy = "delete" },
+			invalid: true,
+			hint:    "deletionPolicy enum is case-sensitive",
+		},
 	}
 
 	for i, tc := range cases {
@@ -193,6 +205,28 @@ func TestCRDValidation_OpenBaoPolicy_RejectsInvalid(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The structural-schema default must stamp Delete onto a grant CR
+// created without the field — grant kinds revoke on delete by default. The Go side treats empty as Delete regardless;
+// this pins what users see on reads.
+func TestCRDValidation_OpenBaoPolicy_DeletionPolicyDefaultsToDelete(t *testing.T) {
+	cl := newEnvtestClient(t)
+	ctx := context.Background()
+
+	p := &v1alpha1.OpenBaoPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "crdval-default-deletionpolicy", Namespace: envtestNS},
+		Spec: v1alpha1.OpenBaoPolicySpec{
+			Policy: `path "secret/data/foo/*" { capabilities = ["read"] }`,
+		},
+	}
+	require.NoError(t, cl.Create(ctx, p))
+	defer func() { _ = cl.Delete(ctx, p) }()
+
+	var got v1alpha1.OpenBaoPolicy
+	require.NoError(t, cl.Get(ctx, client.ObjectKeyFromObject(p), &got))
+	require.Equal(t, v1alpha1.DeletionPolicyDelete, got.Spec.DeletionPolicy,
+		"apiserver must default deletionPolicy to Delete on grant kinds")
 }
 
 // sanitizeName makes a test case name safe to use as a metadata.name.

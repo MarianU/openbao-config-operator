@@ -61,6 +61,20 @@ spec:
                   Audience is the JWT audience claim bao verifies on login.
                   Optional; bao defaults to no audience check when unset.
                 type: string
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side role when
+                  this CR is deleted or its bao identity changes. Delete (the
+                  default) removes the role, so new logins through it stop;
+                  tokens already issued keep working until their TTL expires.
+                  Retain releases the CR without touching bao — the role survives
+                  as an intentional, logged orphan that no CR tracks afterward;
+                  use only where rendering churn must never drop live access.
+                enum:
+                - Retain
+                - Delete
+                type: string
               name:
                 description: |-
                   Name overrides metadata.name when written to bao. Pattern is

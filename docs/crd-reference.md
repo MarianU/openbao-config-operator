@@ -11,20 +11,60 @@ lands its primitive(s).
 | `OpenBaoExtension` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cluster-level connection + defaults for OpenBao integration. Reconciled by the `ClusterAuth` and `Tenant` controllers. |
 | `OpenBaoPolicy` | `security.mto.stakater.com/v1alpha1` | Namespaced | Authors an OpenBao ACL policy at `sys/policies/acl/<name>`. Optionally scoped to an OpenBao namespace via `spec.openbaoNamespace` (X-Vault-Namespace). |
 | `OpenBaoKubernetesAuthRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | Authors an OpenBao Kubernetes-auth role at `auth/<spec.path>/role/<name>`. Binds service accounts in selected namespaces to bao policies. |
-| `OpenBaoSecretEngine` | `security.mto.stakater.com/v1alpha1` | Namespaced | Manages a bao secret-engine mount lifecycle at `sys/mounts/<path>`. Discriminated-union spec selects engine kind: `kvV2`, `transit`, `pki`. Optionally scoped via `spec.openbaoNamespace`. Auth-method mounts are out of scope for this Kind. |
-| `OpenBaoNamespace` | `security.mto.stakater.com/v1alpha1` | Namespaced | Owns a bao namespace at `sys/namespaces/<name>`. Nested via `spec.openbaoNamespace` as the parent. Delete is gracefully blocked until the bao namespace is empty. |
+| `OpenBaoSecretEngine` | `security.mto.stakater.com/v1alpha1` | Namespaced | Manages a bao secret-engine mount lifecycle at `sys/mounts/<path>`. Discriminated-union spec selects engine kind: `kvV2`, `transit`, `pki`. Optionally scoped via `spec.openbaoNamespace`. Auth-method mounts are out of scope for this Kind. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
+| `OpenBaoNamespace` | `security.mto.stakater.com/v1alpha1` | Namespaced | Owns a bao namespace at `sys/namespaces/<name>`. Nested via `spec.openbaoNamespace` as the parent. CR deletion follows `spec.deletionPolicy` (default `Retain`) — with `Delete`, bao CASCADES the namespace delete through every mount, secret and key inside. |
 | `OpenBaoPKISecretEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Generates the root CA at `<path>/root/generate/internal` and writes URL config at `<path>/config/urls`. Pairs with an existing `OpenBaoSecretEngine` of kind=pki at the same path. **IsDeletable=false**: CR delete does not disable the bao mount (would destroy the private key). |
 | `OpenBaoPKISecretEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | PKI issuance role at `<path>/roles/<name>`. Defines what certs may be issued from a PKI mount (allowed domains, key type/bits, EKU flags, TTL). Requires the mount to have a CA configured. |
 | `OpenBaoGroup` | `security.mto.stakater.com/v1alpha1` | Namespaced | Identity group at `identity/group`. `type=internal` groups bundle policies plus member entities/groups directly; `type=external` groups receive members through `OpenBaoGroupAlias` entries that map auth-method aliases into the group. Optionally scoped via `spec.openbaoNamespace`. |
 | `OpenBaoGroupAlias` | `security.mto.stakater.com/v1alpha1` | Namespaced | Identity group-alias at `identity/group-alias`. Maps a `(name, mountAccessor)` tuple from an external auth method (OIDC, JWT, LDAP, …) into a parent `type=external` `OpenBaoGroup`. Bao keys aliases by id; the controller stamps the bao-side id on `status.aliasId` for stable round-trips. |
 | `OpenBaoIdentityTokenRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | OIDC token role at `identity/oidc/role/<name>`. Mints OIDC ID tokens signed by a pre-existing identity OIDC key for federated auth (typical use: tenants pull AWS / GCP creds via OIDC trust). Optionally scoped via `spec.openbaoNamespace`. |
-| `OpenBaoAuthMethod` | `security.mto.stakater.com/v1alpha1` | Namespaced | Bao auth-method mount lifecycle at `sys/auth/<path>`. Sibling of `OpenBaoSecretEngine` for auth mounts (cert / jwt / oidc / kubernetes / approle / userpass / ldap). Stamps the bao-side mount accessor on `status.mountAccessor` so downstream CRs (notably `OpenBaoGroupAlias`) can bind to it. |
+| `OpenBaoAuthMethod` | `security.mto.stakater.com/v1alpha1` | Namespaced | Bao auth-method mount lifecycle at `sys/auth/<path>`. Sibling of `OpenBaoSecretEngine` for auth mounts (cert / jwt / oidc / kubernetes / approle / userpass / ldap). Stamps the bao-side mount accessor on `status.mountAccessor` so downstream CRs (notably `OpenBaoGroupAlias`) can bind to it. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
 | `OpenBaoCertAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cert auth mount-level configuration at `auth/<path>/config`. OCSP cache + identity-alias-metadata tunables. Pairs with an `OpenBaoAuthMethod` of `type=cert` at the same path. `IsDeletable=false` — bao has no DELETE on `/config`. |
 | `OpenBaoCertAuthEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cert auth role at `auth/<path>/certs/<name>`. Owns the trusted CA bundle (sourced from a Kubernetes Secret) plus the per-cert allow-list (allowedNames, allowedDnsSans, etc.) and the policies bao grants on a successful login. The Secret watch re-enqueues the CR on rotation. |
 | `OpenBaoJWTOIDCAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | JWT/OIDC auth mount-level configuration at `auth/<path>/config`. OIDC discovery URL or static JWKS, client id + client_secret (read from a Kubernetes Secret), bound issuer, default role. Pairs with an `OpenBaoAuthMethod` of `type=jwt` or `type=oidc`. `IsDeletable=false`. |
 | `OpenBaoJWTOIDCAuthEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | JWT/OIDC role at `auth/<path>/role/<name>`. Maps inbound JWT/OIDC claims (sub, email, groups, etc.) to the bao identity entity and grants policies on successful login. `roleType=oidc` requires `allowedRedirectUris` for the OAuth2 callback URL set. |
 | `OpenBaoKubernetesAuthEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Kubernetes auth mount-level configuration at `auth/<path>/config`. `kubernetesHost`, optional CA bundle (Secret-sourced), token-reviewer JWT (Secret-sourced), `pemKeys`, `issuer`, and bao tunables. Pairs with an `OpenBaoAuthMethod` of `type=kubernetes`. Secret-watch propagates token-reviewer JWT and CA rotations. `IsDeletable=false` — bao has no DELETE on `/config`. |
 | `OpenBaoTransitKey` | `security.mto.stakater.com/v1alpha1` | Namespaced | Transit key at `<path>/keys/<name>`. Pairs with an `OpenBaoSecretEngine` of kind=transit at the same path. `spec.type` / `spec.derived` / `spec.convergentEncryption` / `spec.keySize` are immutable post-create — editing them surfaces `Ready=False reason=Invalid`. `IsDeletable=false` — CR deletion releases the finalizer and leaves the bao key in place, because the key is the only copy of the material that decrypts everything encrypted under it. A rename orphans the previous identity for the same reason. |
+
+## Deletion policy (`spec.deletionPolicy`)
+
+Eleven kinds carry an optional `spec.deletionPolicy: Retain | Delete` deciding
+what happens to the bao-side object when the CR is deleted or its bao identity
+(name / path / openbaoNamespace) is renamed:
+
+- **`Retain`** — the CR is released (finalizer removed) without touching bao.
+  The object is an intentional orphan: the operator logs it and emits a
+  `BaoObjectOrphaned` Kubernetes Event with the kept identity. Re-applying an
+  identical CR adopts the orphan without a write.
+- **`Delete`** — the bao object is removed. For a mount or a namespace this
+  destroys all data stored under it.
+
+Defaults differ by kind group, and the operator treats an *absent* value the
+same way as each group's default — so behaviour never depends on API-server
+defaulting:
+
+| Group | Kinds | Default | Rationale |
+|---|---|---|---|
+| Data-bearing | `OpenBaoSecretEngine`, `OpenBaoNamespace`, `OpenBaoAuthMethod` | `Retain` | Deleting a mount/namespace destroys secrets, keys and CA material unrecoverably. A stale CRD or pruned field must never re-enable destruction. |
+| Grant | `OpenBaoPolicy`, `OpenBaoKubernetesAuthRole`, `OpenBaoCertAuthEngineRole`, `OpenBaoJWTOIDCAuthEngineRole`, `OpenBaoPKISecretEngineRole`, `OpenBaoGroup`, `OpenBaoGroupAlias`, `OpenBaoIdentityTokenRole` | `Delete` | Deleting a grant revokes the access it carried (mandatory policy detach). A stale CRD or pruned field must never silently stop revocation. |
+
+Kinds with hardcoded orphan-by-design semantics are unaffected:
+`OpenBaoTransitKey` and `OpenBaoPKISecretEngineConfig` always retain, and the
+three auth-config kinds have no bao DELETE endpoint at all.
+
+**Upgrade ordering warning.** The protection lives in the operator, not the
+CRD: with the new CRDs installed but an **old operator image** still running,
+`kubectl get` shows `deletionPolicy: Retain` while the running code ignores it
+and destroys on delete — the most misleading skew possible. Upgrade the
+operator image before or together with the CRDs; never leave a cluster sitting
+in the CRDs-first state.
+
+To force cleanup of a data-bearing object, set `deletionPolicy: Delete` on the
+CR *before* deleting it (the field is mutable, including while the CR is
+already Terminating — flipping a stuck `Delete` back to `Retain` also releases
+a CR wedged on a failing bao delete). The `openbao-config-mto` charts drive
+the field from `safety.deletionProtection` / `safety.grantDeletionProtection`
+values.
 
 ---
 
@@ -53,6 +93,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the bao object on CR delete/rename (revocation). `Retain` orphans it as a logged, untracked grant. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.policy` | string (HCL) | yes | — | Policy body in OpenBao's HCL syntax. |
 | `spec.name` | string | no | `metadata.name` | Name used on the bao side. Takes precedence over `metadata.name` when set; must match `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
 | `spec.openbaoNamespace` | string | no | `""` (root) | Targets an OpenBao namespace via `X-Vault-Namespace`. Accepts empty (root), single-segment (`acme`), nested (`acme/sub`), with optional trailing slash. |
@@ -134,6 +175,7 @@ Duration fields (`tokenTTL`, `tokenMaxTTL`, `tokenExplicitMaxTTL`, `tokenPeriod`
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the role on CR delete/rename — new logins stop; already-issued tokens live out their TTL. `Retain` orphans it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.path` | string | yes | — | Auth mount path. Bao writes to `auth/<path>/role/<name>`. |
 | `spec.name` | string | no | `metadata.name` | Bao-side role name. Must match `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
 | `spec.policies` | string[] | yes | — | Bao policy names this role binds. MinItems=1. |
@@ -169,7 +211,7 @@ One condition: `Ready`. Reason values the controller sets:
 | `NameCollision` | Another `OpenBaoKubernetesAuthRole` CR (different UID) targets the same `(spec.path, name)`. The older `CreationTimestamp` wins. |
 | `InternalError` | k8s apiserver lookup failed during selector resolution or the cross-CR collision check. The fault is the apiserver, not bao. |
 
-Status field `baoWritten` (bool) is the durable cleanup signal: it flips true after a successful upsert and is never cleared. The controller uses it on the deletion path to decide whether to call `BaoDelete`, so a CR that flipped `Ready=True→False` after writing (e.g. token revoked mid-life) still cleans up its bao role on delete.
+Status field `baoWritten` (bool) is the durable cleanup signal: it flips true after a successful upsert — or after adopting an already-matching bao object (an orphan left by a `Retain` deletion) — and is never cleared. The controller uses it on the deletion path to decide whether to call `BaoDelete`, so a CR that flipped `Ready=True→False` after writing (e.g. token revoked mid-life) still cleans up its bao role on delete.
 
 ### Operational notes
 
@@ -221,6 +263,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Retain` | `Retain` orphans the bao object on CR delete/rename (logged + `BaoObjectOrphaned` Event; re-applying an identical CR adopts it back). `Delete` removes it — and everything stored under it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.path` | string | yes | — | Bao-side mount path (e.g. `secret`, `pki`, `transit`). Trailing slashes stripped before the API call. Anchored Pattern allows nested paths (`kv/cluster-a`). |
 | `spec.description` | string | no | `""` | Free-form mount description; mirrored verbatim into bao. |
 | `spec.openbaoNamespace` | string | no | `""` (root) | Targets an OpenBao namespace via `X-Vault-Namespace`. |
@@ -245,8 +288,8 @@ One condition: `Ready`. Reasons:
 - **Idempotent enable.** Bao returns `400 "path is already in use"` when re-enabling at the same path. The wrapper treats this as success so reconciles after the first one are no-ops.
 - **Drift correction is event-driven.** Description and KV-v2 options are compared against the bao read shape; a CR-spec edit triggers re-upsert. Out-of-band edits to mount config are not corrected until the CR is patched, or until the next 5-minute periodic resync.
 - **Namespace isolation.** Same path in different OpenBao namespaces is not a collision — bao isolates mounts via `X-Vault-Namespace`.
-- **Rename cleanup.** Changing `spec.path` (or `spec.openbaoNamespace`) tears down the previous bao mount before recording the new identity. `status.lastWrittenBaoName` and `status.lastWrittenOpenBaoNamespace` track the last-written identity.
-- **Force-delete footgun.** `kubectl delete --grace-period=0 --force` bypasses the finalizer; clean up with a direct DELETE to `sys/mounts/<path>` via port-forward.
+- **Rename cleanup.** Changing `spec.path` (or `spec.openbaoNamespace`) follows `spec.deletionPolicy`: under the default `Retain` the previous mount is kept as a logged orphan; under `Delete` it is unmounted before the new identity is recorded. `status.lastWrittenBaoName` and `status.lastWrittenOpenBaoNamespace` track the last-written identity.
+- **Force-delete footgun.** `kubectl delete --grace-period=0 --force` bypasses the finalizer. Under the default `deletionPolicy: Retain` the outcome matches a normal delete minus the log/Event trace (the mount is kept either way); under `Delete` it skips the intended unmount — clean up with a direct DELETE to `sys/mounts/<path>` via port-forward.
 
 ### RBAC
 
@@ -349,7 +392,7 @@ spec:
 |---|---|
 | `conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError` / `AwaitingExternalSignature` / `InternalError`. |
 | `generated` / `exported` / `signed` | Intermediate-bootstrap booleans; all true once an intermediate is Active. |
-| `baoWritten` | True after first successful CA write. |
+| `baoWritten` | True after the first successful CA write, or after adopting an already-matching one. |
 | `lastWrittenBaoName` / `lastWrittenOpenBaoNamespace` | Identity of the last successful write; rename-cleanup is skipped (IsDeletable=false). |
 | `phase` | `""` before activation, `Active` after. An intermediate awaiting its external signature is surfaced via the `Ready` condition (reason `AwaitingExternalSignature`), not `phase`. |
 | `caSerialNumber` | X.509 serial of the active CA, captured from bao after generate / set-signed. |
@@ -404,6 +447,7 @@ spec:
 
 | Field | Type | Description |
 |---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the role on CR delete/rename — issuance stops; already-issued certs stay valid until expiry. `Retain` orphans it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.path` | string | PKI mount path. Must match an existing `OpenBaoSecretEngine` of kind=pki. |
 | `spec.name` | string | Bao-side role name. Defaults to `metadata.name`. |
 | `spec.openbaoNamespace` | string | X-Vault-Namespace target. |
@@ -427,7 +471,7 @@ Standard `Ready` condition. Reasons: `Reconciled`, `Invalid`, `NameCollision`, `
 
 - **Drift correction.** The drift comparator sorts list-shaped fields (`allowedDomains`, `keyUsage`, `extKeyUsage`) before compare and treats unset spec fields as "bao default" so a CR that omits `keyBits` doesn't false-positive against bao's default of 2048.
 - **Collision tuple is (mount path, role name, openbaoNamespace).** Same role name on a different mount or in a different bao namespace is not a collision.
-- **IsDeletable=true.** CR delete removes the bao role. Issued certs remain valid until they expire — bao's PKI role is just an issuance gate, not a revocation list.
+- **Deletion follows `spec.deletionPolicy`** (default `Delete`): CR delete removes the bao role and stops further issuance. Issued certs remain valid until they expire either way — bao's PKI role is an issuance gate, not a revocation list.
 
 ### RBAC
 
@@ -465,6 +509,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the bao object on CR delete/rename (revocation). `Retain` orphans it as a logged, untracked grant. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.name` | string | no | `metadata.name` | Bao-side group name. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
 | `spec.type` | enum | no | `internal` | `internal` (members held directly) or `external` (members come from `OpenBaoGroupAlias`). Immutable on bao's side. |
 | `spec.policies` | []string | no | — | Bao policy names attached to the group. |
@@ -478,7 +523,7 @@ spec:
 | Field | Description |
 |---|---|
 | `status.conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError` / `InternalError`. |
-| `status.baoWritten` | True after first successful write. Gates `BaoDelete` on the deletion path. |
+| `status.baoWritten` | True after the first successful write or adoption of an already-matching object. Gates `BaoDelete` on the deletion path. |
 | `status.lastWrittenBaoName` / `status.lastWrittenOpenBaoNamespace` | Identity tuple for rename cleanup. |
 | `status.groupId` | Bao-side group id. Stamped on first create; re-stamped if recreated. Other CRs (notably `OpenBaoGroupAlias`) reference this. |
 
@@ -537,6 +582,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the bao object on CR delete/rename (revocation). `Retain` orphans it as a logged, untracked grant. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.name` | string | no | `metadata.name` | Alias name as seen by the auth method (OIDC sub, LDAP CN, etc.). Stored verbatim — case-sensitive. |
 | `spec.mountAccessor` | string | yes | — | Bao accessor of the auth mount this alias maps from. Look up via `bao auth list -format=json`. |
 | `spec.canonicalGroupRef` | object | one of | — | `{ name, namespace }` reference to an `OpenBaoGroup` CR. Mutually exclusive with `canonicalId`. |
@@ -548,7 +594,7 @@ spec:
 | Field | Description |
 |---|---|
 | `status.conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError` / `InternalError` (parent group not yet ready). |
-| `status.baoWritten` | True after first successful write. |
+| `status.baoWritten` | True after the first successful write or adoption of an already-matching object. |
 | `status.aliasId` | Bao-side alias id. Stamped on first create; recovered via `Backfill` when status is lost. |
 | `status.lastWrittenMountAccessor` | Mount accessor the alias was last written under. Used on `mountAccessor` rename cleanup. |
 | `status.resolvedCanonicalId` | Parent group id resolved from `canonicalGroupRef` or `canonicalId`. |
@@ -619,6 +665,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the role on CR delete/rename — minting stops; already-minted tokens stay valid until expiry. `Retain` orphans it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.name` | string | no | `metadata.name` | Bao-side role name. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`. |
 | `spec.key` | string | yes | — | Name of a pre-existing OIDC key at `identity/oidc/key/<key>`. The controller does not create OIDC keys. |
 | `spec.template` | string (JSON) | no | — | JWT claims template. Bao accepts plain JSON or base64-wrapped. |
@@ -631,7 +678,7 @@ spec:
 | Field | Description |
 |---|---|
 | `status.conditions[Ready]` | `Reconciled` / `Invalid` / `NameCollision` / `Forbidden` / `BaoError`. |
-| `status.baoWritten` | True after first successful write. |
+| `status.baoWritten` | True after the first successful write or adoption of an already-matching object. |
 | `status.lastWrittenBaoName` / `status.lastWrittenOpenBaoNamespace` | Identity tuple for rename cleanup. |
 
 ### Operational notes
@@ -689,6 +736,7 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Retain` | `Retain` orphans the bao object on CR delete/rename (logged + `BaoObjectOrphaned` Event; re-applying an identical CR adopts it back). `Delete` removes it — and everything stored under it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.path` | string | yes | — | Bao-side mount path (e.g. `oidc`, `jwt`, `cert`). |
 | `spec.type` | enum | yes | — | Auth-method kind: `cert`, `jwt`, `oidc`, `kubernetes`, `approle`, `userpass`, `ldap`. Immutable on bao's side. |
 | `spec.description` | string | no | — | Free-form mount description. |
@@ -702,7 +750,7 @@ spec:
 | Field | Description |
 |---|---|
 | `status.conditions[Ready]` | Standard reasons. |
-| `status.baoWritten` | True after first successful enable. |
+| `status.baoWritten` | True after the first successful enable or adoption of an already-matching mount. |
 | `status.lastWrittenBaoName` / `status.lastWrittenOpenBaoNamespace` | Identity tuple for rename cleanup. |
 | `status.mountAccessor` | Bao-side mount accessor. Stamped on first reconcile and refreshed via `Backfill` on every no-drift read. |
 
@@ -797,6 +845,7 @@ See [config/samples/security_v1alpha1_openbaocertauthenginerole.yaml](../config/
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the role on CR delete/rename — new logins stop; already-issued tokens live out their TTL. `Retain` orphans it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.path` | string | yes | — | Cert auth mount path. |
 | `spec.name` | string | no | `metadata.name` | Bao-side cert entry name. |
 | `spec.certificateRef` | object | yes | — | `{ name, namespace, key }` reference to a Secret holding the PEM bundle. `key` defaults to `ca.crt`. |
@@ -905,6 +954,7 @@ See [config/samples/security_v1alpha1_openbaojwtoidcauthenginerole.yaml](../conf
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `spec.deletionPolicy` | string enum | no | `Delete` | `Delete` removes the role on CR delete/rename — new logins stop; already-issued tokens live out their TTL. `Retain` orphans it. See [Deletion policy](#deletion-policy-specdeletionpolicy). |
 | `spec.path` | string | yes | — | JWT/OIDC auth mount path. |
 | `spec.name` | string | no | `metadata.name` | Bao role name. |
 | `spec.roleType` | enum | yes | — | `jwt` or `oidc`. |

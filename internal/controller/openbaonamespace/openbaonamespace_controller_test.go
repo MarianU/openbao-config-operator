@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -226,6 +227,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Scheme:        scheme,
 		FinalizerName: OpenBaoNamespaceFinalizer,
 		Handlers:      OpenBaoNamespaceHandlers(cl, fb),
+		Recorder:      record.NewFakeRecorder(32),
 	}
 	return &OpenBaoNamespaceReconciler{VaultResource: base}
 }
@@ -340,10 +342,38 @@ func TestOpenBaoNamespace_SelfHealOnOutOfBandDelete(t *testing.T) {
 	require.Contains(t, fb.namespaces, nsKey("", "acme"))
 }
 
-func TestOpenBaoNamespace_DeletePath(t *testing.T) {
+// Deleting the CR under the default Retain policy releases the CR and
+// leaves the bao namespace — and every mount, secret and key inside
+// it — untouched. Bao's namespace delete cascades, so Retain is the
+// guard between an MTO Tenant deletion and total tenant data loss.
+func TestOpenBaoNamespace_DeletePath_DefaultRetains(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	n := sampleNamespace("to-keep")
+	r := buildReconciler(t, fb, n)
+
+	reconcile(t, r, envtestNS, n.Name)
+	reconcile(t, r, envtestNS, n.Name)
+	require.Equal(t, 1, fb.creates)
+
+	cur := getNS(t, r, envtestNS, n.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, envtestNS, n.Name)
+
+	require.Equal(t, 0, fb.deletes, "Retain must never call DeleteNamespace")
+	require.Contains(t, fb.namespaces, nsKey("", "to-keep"),
+		"the bao namespace is an intentional orphan")
+
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: n.Name}, &v1alpha1.OpenBaoNamespace{})
+	require.True(t, apierrors.IsNotFound(err), "finalizer must release even though bao is untouched")
+}
+
+// spec.deletionPolicy=Delete opts back into destructive cleanup.
+func TestOpenBaoNamespace_DeletePath_ExplicitDeleteRemoves(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
 	n := sampleNamespace("to-delete")
+	n.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
 	r := buildReconciler(t, fb, n)
 
 	reconcile(t, r, envtestNS, n.Name)
@@ -361,11 +391,12 @@ func TestOpenBaoNamespace_DeletePath(t *testing.T) {
 	require.True(t, apierrors.IsNotFound(err))
 }
 
-// Bao rejects DELETE on a namespace with live children (mounts, auth,
-// child namespaces). The wrapper surfaces the 400 as *StatusError; the
-// shared base keeps the finalizer in place when BaoDelete returns
-// non-nil — the CR stays in Terminating until the children are
-// removed and the next reconcile retries successfully.
+// A failed bao delete under deletionPolicy=Delete keeps the finalizer:
+// the CR stays in Terminating with the bao error on status and the
+// next reconcile retries. The error here mimics a rejected delete —
+// note current bao versions cascade a namespace delete rather than
+// rejecting on live children, so this path guards permission and
+// transport failures (and older bao behaviour), not a children check.
 func TestOpenBaoNamespace_DeleteBlockedByChildren_KeepsFinalizer(t *testing.T) {
 	t.Parallel()
 	fb := newFakeBao()
@@ -374,6 +405,7 @@ func TestOpenBaoNamespace_DeleteBlockedByChildren_KeepsFinalizer(t *testing.T) {
 		Inner:      errors.New(`{"errors":["namespace contains nested namespaces"]}`),
 	}
 	n := sampleNamespace("has-children")
+	n.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
 	r := buildReconciler(t, fb, n)
 
 	reconcile(t, r, envtestNS, n.Name)
@@ -396,7 +428,42 @@ func TestOpenBaoNamespace_DeleteBlockedByChildren_KeepsFinalizer(t *testing.T) {
 		"the bao error message must surface in the user-visible status")
 }
 
-// Once children are gone, the next reconcile completes the delete and
+// The anti-wedge escape hatch on the most destructive kind: a
+// namespace CR stuck Terminating on a failing bao delete can be
+// flipped to Retain — the next reconcile releases the finalizer and
+// leaves the bao namespace in place.
+func TestOpenBaoNamespace_StuckDelete_FlipToRetainReleases(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	fb.deleteErr = &baoclient.StatusError{
+		StatusCode: http.StatusForbidden,
+		Inner:      errors.New("permission denied"),
+	}
+	n := sampleNamespace("stuck-then-kept")
+	n.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
+	r := buildReconciler(t, fb, n)
+
+	reconcile(t, r, envtestNS, n.Name)
+	reconcile(t, r, envtestNS, n.Name)
+
+	cur := getNS(t, r, envtestNS, n.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	res := reconcile(t, r, envtestNS, n.Name)
+	require.Equal(t, 30*time.Second, res.RequeueAfter)
+	require.Contains(t, getNS(t, r, envtestNS, n.Name).Finalizers, OpenBaoNamespaceFinalizer)
+
+	stuck := getNS(t, r, envtestNS, n.Name)
+	stuck.Spec.DeletionPolicy = v1alpha1.DeletionPolicyRetain
+	require.NoError(t, r.Update(context.Background(), stuck))
+	reconcile(t, r, envtestNS, n.Name)
+
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: envtestNS, Name: n.Name}, &v1alpha1.OpenBaoNamespace{})
+	require.True(t, apierrors.IsNotFound(err), "flip to Retain must release the stuck CR")
+	require.Contains(t, fb.namespaces, nsKey("", "stuck-then-kept"),
+		"the bao namespace is orphaned, not deleted")
+}
+
+// Once the delete stops failing, the next reconcile completes it and
 // removes the finalizer.
 func TestOpenBaoNamespace_DeleteUnblocksAfterChildrenGone(t *testing.T) {
 	t.Parallel()
@@ -406,6 +473,7 @@ func TestOpenBaoNamespace_DeleteUnblocksAfterChildrenGone(t *testing.T) {
 		Inner:      errors.New("namespace contains mounts"),
 	}
 	n := sampleNamespace("eventually-empty")
+	n.Spec.DeletionPolicy = v1alpha1.DeletionPolicyDelete
 	r := buildReconciler(t, fb, n)
 
 	reconcile(t, r, envtestNS, n.Name)

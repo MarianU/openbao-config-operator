@@ -179,7 +179,7 @@ func (d *OpenBaoSecretEngine) IsInitialized() bool {
 }
 
 func (d *OpenBaoSecretEngine) IsDeletable() bool {
-	return true
+	return d.Spec.DeletionPolicy.DeletesDataKind()
 }
 
 // PrepareInternalValues is a no-op for OpenBaoSecretEngine today —
@@ -242,6 +242,17 @@ type PKISpec struct {
 // OpenBaoSecretEngine. Exactly one of the engine-type slots must be
 // set; IsValid + the CRD's XValidation rule enforce the XOR.
 type OpenBaoSecretEngineSpec struct {
+	// DeletionPolicy controls what happens to the bao-side mount when
+	// this CR is deleted or its bao identity (spec.path /
+	// spec.openbaoNamespace) changes. Retain (the default) releases
+	// the CR without touching bao: the mount is intentionally orphaned
+	// and logged, and re-applying an identical CR adopts it. Delete
+	// disables the mount, which destroys everything stored under it —
+	// KV secrets, transit keys, or a PKI CA and its private key.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Path is the bao-side mount path (e.g. "secret", "transit",
 	// "pki"). Trailing slashes are accepted but stripped before the
 	// bao API call.
@@ -340,6 +351,7 @@ func (m *OpenBaoSecretEngine) SetLastWrittenBaoIdentity(name, namespace string) 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=obse
+// +kubebuilder:printcolumn:name="DeletionPolicy",type=string,JSONPath=`.spec.deletionPolicy`
 // +kubebuilder:validation:XValidation:rule="[has(self.spec.kvV2), has(self.spec.transit), has(self.spec.pki)].filter(x, x).size() == 1",message="exactly one of spec.kvV2, spec.transit, spec.pki must be set"
 
 // OpenBaoSecretEngine is the Schema for the openbaosecretengines API.

@@ -84,17 +84,42 @@ var _ = Describe("OpenBaoAuthMethod CR → OpenBao", Ordered, func() {
 		}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 
-	It("disables the auth mount when the CR is deleted", func(ctx SpecContext) {
+	It("retains the auth mount when the CR is deleted (default deletionPolicy)", func(ctx SpecContext) {
 		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoAuthMethod{
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: amName},
 		})).To(Succeed())
 
 		expectGone(ctx, k8s, &v1alpha1.OpenBaoAuthMethod{}, nn)
 
+		// Retain is the default: the auth mount must survive the CR.
+		am, err := bao.GetAuthMethod(ctx, path)
+		Expect(err).NotTo(HaveOccurred(),
+			"auth mount must be retained after CR delete under the default policy")
+		Expect(am.Type).To(Equal(amType))
+	})
+
+	It("adopts the retained auth mount and disables it when deletionPolicy=Delete", func(ctx SpecContext) {
+		cr := &v1alpha1.OpenBaoAuthMethod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: amName},
+			Spec: v1alpha1.OpenBaoAuthMethodSpec{
+				Path:           path,
+				Type:           amType,
+				Description:    "e2e jwt mount updated",
+				DeletionPolicy: v1alpha1.DeletionPolicyDelete,
+			},
+		}
+		Expect(k8s.Create(ctx, cr)).To(Succeed())
+		expectReady(ctx, k8s, &v1alpha1.OpenBaoAuthMethod{}, nn)
+
+		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoAuthMethod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: amName},
+		})).To(Succeed())
+		expectGone(ctx, k8s, &v1alpha1.OpenBaoAuthMethod{}, nn)
+
 		Eventually(func(g Gomega) {
 			_, err := bao.GetAuthMethod(ctx, path)
 			g.Expect(errors.Is(err, baoclient.ErrNotFound)).To(BeTrue(),
-				"expected ErrNotFound after CR delete, got %v", err)
+				"expected ErrNotFound after CR delete with deletionPolicy=Delete, got %v", err)
 		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 

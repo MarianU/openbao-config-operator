@@ -16,6 +16,7 @@ metadata:
               "defaultLeaseTtl": "1h",
               "maxLeaseTtl": "24h"
             },
+            "deletionPolicy": "Retain",
             "description": "Tenant OIDC auth mount",
             "path": "oidc",
             "type": "oidc"
@@ -254,6 +255,7 @@ metadata:
             "namespace": "openbao-config-operator-system"
           },
           "spec": {
+            "deletionPolicy": "Retain",
             "name": "sub",
             "openbaoNamespace": "acme/"
           }
@@ -363,6 +365,7 @@ metadata:
             "namespace": "openbao-config-operator-system"
           },
           "spec": {
+            "deletionPolicy": "Retain",
             "description": "cluster-shared kv-v2 secret engine",
             "kvV2": {},
             "path": "secret"
@@ -384,7 +387,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-08-04T10:21:34Z"
+    createdAt: "2026-08-05T07:14:05Z"
     operators.operatorframework.io/builder: operator-sdk-v1.33.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: openbao-config-operator.v0.0.1
