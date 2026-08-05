@@ -56,3 +56,6 @@ dist/
 makefiles/
 
 
+
+# e2e run artifacts dumped by the Makefile on failure
+e2e-logs/

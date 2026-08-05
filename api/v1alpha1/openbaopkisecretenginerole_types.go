@@ -208,7 +208,10 @@ func (d *OpenBaoPKISecretEngineRole) ToBaoSpec() baoclient.PKIRoleSpec {
 }
 
 func (d *OpenBaoPKISecretEngineRole) IsInitialized() bool { return true }
-func (d *OpenBaoPKISecretEngineRole) IsDeletable() bool   { return true }
+
+func (d *OpenBaoPKISecretEngineRole) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
+}
 
 func (d *OpenBaoPKISecretEngineRole) PrepareInternalValues(ctx context.Context, object client.Object) error {
 	return nil
@@ -244,6 +247,19 @@ func (d *OpenBaoPKISecretEngineRole) IsValid() (bool, error) {
 // Field-by-field semantics live in the OpenBao docs at
 // /pki/api-docs/index.html#create-update-role.
 type OpenBaoPKISecretEngineRoleSpec struct {
+	// DeletionPolicy controls what happens to the bao-side role when
+	// this CR is deleted or its bao identity changes. Delete (the
+	// default) removes the role, stopping further certificate
+	// issuance through it; certificates already issued remain valid
+	// until they expire — deleting the role does not revoke them
+	// (CRL revocation is a separate, manual pki/revoke workflow).
+	// Retain releases the CR without touching bao — the role survives
+	// as an intentional, logged orphan that no CR tracks afterward;
+	// use only where rendering churn must never drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Path is the bao-side PKI mount (e.g. "pki", "pki/internal").
 	// Must match an existing OpenBaoSecretEngine of kind=pki at the
 	// same path; the mount must also have a CA configured (typically

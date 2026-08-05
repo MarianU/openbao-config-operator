@@ -1083,3 +1083,102 @@ func TestEventMessageTruncated(t *testing.T) {
 	require.NotNil(t, cond)
 	require.Contains(t, cond.Message, long, "the condition must keep the untruncated text")
 }
+
+// Adoption (a no-write success pass over an already-matching bao object)
+// latches status.baoWritten ONLY for primitives that wire a CheckCollision
+// hook. Without the hook there is no arbiter between two CRs targeting the
+// same bao identity — both would adopt, and deleting either would remove
+// the object under the other — so a hook-less primitive must keep the
+// write-only latch.
+func TestReconcile_AdoptionLatch_RequiresCollisionGuard(t *testing.T) {
+	t.Parallel()
+
+	adoptionHandlers := func(check func(context.Context, *stubCR) error) Handlers[*stubCR] {
+		return Handlers[*stubCR]{
+			NewInstance: func() *stubCR { return &stubCR{} },
+			// Object already present and (per stubCR's comparator) always
+			// matching: the pure-adoption path, no write ever fires.
+			BaoGet: func(context.Context, *stubCR) (map[string]any, error) {
+				return map[string]any{"name": "present"}, nil
+			},
+			BaoWrite: func(context.Context, *stubCR) (StatusMutator[*stubCR], error) {
+				t.Fatal("BaoWrite must not run on the adoption path")
+				return nil, nil
+			},
+			CheckCollision: check,
+		}
+	}
+
+	t.Run("no hook: adoption must not latch ownership", func(t *testing.T) {
+		t.Parallel()
+		obj := &stubCR{ObjectMeta: metav1.ObjectMeta{
+			Name: "adopt-unguarded", Namespace: "default", Finalizers: []string{"stub.finalizer"},
+		}}
+		r, cl := buildStub(t, obj, adoptionHandlers(nil))
+		reconcileStub(t, r, "adopt-unguarded")
+
+		got := &stubCR{}
+		require.NoError(t, cl.Get(context.Background(),
+			types.NamespacedName{Namespace: "default", Name: "adopt-unguarded"}, got))
+		require.False(t, got.Status.BaoWritten,
+			"without a collision guard, only a real write may latch ownership")
+	})
+
+	t.Run("hook wired: adoption latches ownership", func(t *testing.T) {
+		t.Parallel()
+		obj := &stubCR{ObjectMeta: metav1.ObjectMeta{
+			Name: "adopt-guarded", Namespace: "default", Finalizers: []string{"stub.finalizer"},
+		}}
+		r, cl := buildStub(t, obj,
+			adoptionHandlers(func(context.Context, *stubCR) error { return nil }))
+		reconcileStub(t, r, "adopt-guarded")
+
+		got := &stubCR{}
+		require.NoError(t, cl.Get(context.Background(),
+			types.NamespacedName{Namespace: "default", Name: "adopt-guarded"}, got))
+		require.True(t, got.Status.BaoWritten,
+			"with a collision guard, adoption establishes ownership")
+	})
+}
+
+// The rename-orphan path (bao-side cleanup disabled, identity changed)
+// must emit the BaoObjectOrphaned Event naming the kept identity — the
+// audit trail the delete-path sibling test already pins.
+func TestReconcile_RenameOrphan_EmitsEvent(t *testing.T) {
+	t.Parallel()
+
+	obj := &stubCR{ObjectMeta: metav1.ObjectMeta{
+		Name: "renamed", Namespace: "default", Finalizers: []string{"stub.finalizer"},
+	},
+		Status:    stubStatus{BaoWritten: true, LastWrittenBaoName: "old-identity"},
+		Deletable: false,
+	}
+	h := Handlers[*stubCR]{
+		NewInstance: func() *stubCR { return &stubCR{} },
+		BaoGet: func(context.Context, *stubCR) (map[string]any, error) {
+			return map[string]any{"name": "present"}, nil
+		},
+		BaoWrite: func(context.Context, *stubCR) (StatusMutator[*stubCR], error) { return nil, nil },
+		BaoDeleteIdentity: func(context.Context, *stubCR, string, string) error {
+			t.Fatal("rename cleanup must be skipped when bao-side cleanup is disabled")
+			return nil
+		},
+		CheckCollision: func(context.Context, *stubCR) error { return nil },
+	}
+	r, cl := buildStub(t, obj, h)
+	rec := record.NewFakeRecorder(16)
+	r.Recorder = rec
+
+	reconcileStub(t, r, "renamed")
+
+	events := drainEvents(rec)
+	require.NotEmpty(t, events, "rename orphaning must leave an Event trace")
+	require.Contains(t, events[0], "BaoObjectOrphaned")
+	require.Contains(t, events[0], "old-identity", "the Event must name the kept identity")
+
+	got := &stubCR{}
+	require.NoError(t, cl.Get(context.Background(),
+		types.NamespacedName{Namespace: "default", Name: "renamed"}, got))
+	require.Equal(t, "renamed", got.Status.LastWrittenBaoName,
+		"recorded identity must advance so the skipped cleanup is not retried")
+}

@@ -135,7 +135,10 @@ func stringMapOrNil(m map[string]string) map[string]string {
 }
 
 func (d *OpenBaoGroup) IsInitialized() bool { return true }
-func (d *OpenBaoGroup) IsDeletable() bool   { return true }
+
+func (d *OpenBaoGroup) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
+}
 
 func (d *OpenBaoGroup) PrepareInternalValues(ctx context.Context, object client.Object) error {
 	return nil
@@ -196,6 +199,17 @@ func copyStringMapV1(m map[string]string) map[string]string {
 
 // OpenBaoGroupSpec defines the desired state of OpenBaoGroup.
 type OpenBaoGroupSpec struct {
+	// DeletionPolicy controls what happens to the bao-side object
+	// when this CR is deleted or its bao identity changes. Delete
+	// (the default) removes it, so deleting the CR revokes the access
+	// it granted. Retain releases the CR without touching bao — the
+	// grant survives as an intentional, logged orphan that no CR
+	// tracks afterward; use only where rendering churn must never
+	// drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Name is the bao-side group name. Defaults to metadata.name.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=128

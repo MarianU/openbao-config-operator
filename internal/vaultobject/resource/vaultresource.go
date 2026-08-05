@@ -128,9 +128,19 @@ type VaultResource[T VaultCR] struct {
 	Scheme        *runtime.Scheme
 	Handlers      Handlers[T]
 	FinalizerName string
-	// Recorder emits an Event on Ready transitions. Optional: nil disables
-	// emission, so tests can build VaultResource as a struct literal.
+	// Recorder emits Events on Ready transitions and bao-object
+	// orphaning. Optional: nil skips emission (test struct literals).
+	// All emission is nil-guarded — never call r.Recorder.Event
+	// directly.
 	Recorder record.EventRecorder
+}
+
+// event emits via Recorder when one is wired; the nil-guard keeps the
+// field genuinely optional.
+func (r *VaultResource[T]) event(obj client.Object, eventtype, reason, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(obj, eventtype, reason, message)
+	}
 }
 
 // New constructs a VaultResource. FinalizerName follows the Kubernetes
@@ -254,17 +264,21 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// Drift check + create-or-update. wroteThisPass is set when we just
-	// performed a successful BaoWrite; the post-write status patch then
-	// flips status.baoWritten=true so the deletion path can distinguish
-	// "never wrote" from "wrote then drifted". A non-nil mutator from
-	// BaoWrite is applied on the freshly-fetched CR during the same
-	// status patch, so primitives can stamp server-derived fields
-	// atomically with Ready=True.
+	// Drift check + create-or-update. Every branch reaching the success
+	// patch has confirmed the bao object exists under this CR's
+	// identity — freshly written, or found already matching (adoption).
+	// Both mark status.baoWritten: the deletion path needs "an object
+	// exists", not "this CR wrote it", or a re-applied CR could never
+	// tear down the orphan it adopted. Adoption-marking is only safe
+	// under a collision guard (a tie-break loser short-circuits before
+	// this point); without CheckCollision two same-identity CRs would
+	// both adopt and either delete would pull the object out from under
+	// the other — so nil-hook primitives latch on writes only. The
+	// mutator from BaoWrite/Backfill runs inside the same status patch.
 	current, err := r.Handlers.BaoGet(ctx, obj)
 	var (
-		wroteThisPass bool
-		mutator       StatusMutator[T]
+		wrote   bool
+		mutator StatusMutator[T]
 	)
 	switch {
 	case errors.Is(err, ErrBaoNotFound):
@@ -274,7 +288,7 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			_ = r.setReady(ctx, req.NamespacedName, metav1.ConditionFalse, ClassifyErr(err), err.Error())
 			return ctrl.Result{RequeueAfter: ErrorBackoff}, nil
 		}
-		wroteThisPass = true
+		wrote = true
 	case err != nil:
 		l.Error(err, "bao get failed")
 		_ = r.setReady(ctx, req.NamespacedName, metav1.ConditionFalse, ClassifyErr(err), err.Error())
@@ -287,13 +301,14 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				_ = r.setReady(ctx, req.NamespacedName, metav1.ConditionFalse, ClassifyErr(err), err.Error())
 				return ctrl.Result{RequeueAfter: ErrorBackoff}, nil
 			}
-			wroteThisPass = true
+			wrote = true
 		} else if r.Handlers.Backfill != nil {
 			// State matches desired; ask the primitive whether any
 			// status fields need to catch up to observed bao state.
 			mutator = r.Handlers.Backfill(obj, current)
 		}
 	}
+	markOwnership := wrote || r.Handlers.CheckCollision != nil
 
 	// Rename cleanup: if the previously-written bao identity differs from
 	// the current one, the user changed spec.name (or spec.openbaoNamespace).
@@ -307,19 +322,15 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	identityChanged := prevName != "" && (prevName != curName || prevNS != curNS)
 	if identityChanged && r.Handlers.BaoDeleteIdentity != nil {
 		if !obj.IsDeletable() {
-			// Primitives that opt out of bao-side cleanup on CR delete
-			// (e.g. PKI root CAs, where deleting the mount loses the
-			// private key forever) must not have rename either: a
-			// rename of an IsDeletable=false type produces a duplicate
-			// bao object at the new identity, the old one is left in
-			// place by design. Log the orphan so audit shows what was
-			// kept, then advance LastWritten so the controller stops
-			// trying to clean up the previous identity on every loop.
-			l.Info("IsDeletable=false; skipping rename cleanup of previous bao identity (intentional orphan)",
+			// Bao-side cleanup disabled — the rename writes the new bao
+			// identity and intentionally keeps the previous object.
+			// Log + Event the orphan, then advance LastWritten so the
+			// skipped cleanup is not retried every loop.
+			l.Info("bao-side cleanup disabled; skipping rename cleanup of previous bao identity (intentional orphan)",
 				"previousName", prevName, "previousOpenBaoNamespace", prevNS,
 				"newName", curName, "newOpenBaoNamespace", curNS)
-			r.Recorder.Event(obj, corev1.EventTypeNormal, "BaoObjectOrphaned",
-				fmt.Sprintf("rename left the previous bao object %q in openbao namespace %q in place",
+			r.event(obj, corev1.EventTypeNormal, "BaoObjectOrphaned",
+				fmt.Sprintf("rename skipped bao-side cleanup of the previous object %q in openbao namespace %q",
 					prevName, prevNS))
 		} else {
 			if err := r.Handlers.BaoDeleteIdentity(ctx, obj, prevName, prevNS); err != nil {
@@ -333,8 +344,8 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	_ = r.setReadyAndMaybeMarkWritten(ctx, req.NamespacedName,
-		metav1.ConditionTrue, ReasonReconciled, "", wroteThisPass, curName, curNS, mutator)
+	_ = r.setReadyAndMarkWritten(ctx, req.NamespacedName,
+		metav1.ConditionTrue, ReasonReconciled, "", markOwnership, curName, curNS, mutator)
 	return ctrl.Result{RequeueAfter: PeriodicInterval}, nil
 }
 
@@ -345,19 +356,22 @@ func (r *VaultResource[T]) handleDelete(ctx context.Context, obj T, l logr.Logge
 
 	switch {
 	case !obj.IsBaoWritten():
-		// Never wrote to bao — nothing to clean up and nothing to orphan.
-		// Precedes !IsDeletable() so a CR that wrote nothing does not log
-		// a false "intentional orphan" audit entry. status.baoWritten is
-		// the durable signal: set only after a successful BaoWrite, never
-		// cleared.
-	case !obj.IsDeletable():
-		// Orphan-by-design (see VaultObject.IsDeletable). The CR is about
-		// to disappear, so the log line and Event are the only traces of
-		// what was left behind in bao and where.
-		l.Info("IsDeletable=false; releasing finalizer without removing bao object (intentional orphan)"+
+		// Never confirmed a bao object — nothing to clean up or orphan.
+		// Precedes !IsDeletable() so a CR that never reconciled
+		// successfully doesn't log a false orphan entry. Logged because
+		// this branch also fires if baoWritten is ever lost (e.g. a
+		// status-pruning CRD reapply) — silently releasing a grant kind
+		// here would be a revocation that quietly didn't happen.
+		l.Info("no bao object was ever confirmed for this CR; releasing finalizer without bao cleanup"+
 			baoIdentitySuffix(obj), "finalizer", r.FinalizerName)
-		r.Recorder.Event(obj, corev1.EventTypeNormal, "BaoObjectOrphaned",
-			"CR deleted without removing the bao object"+baoIdentitySuffix(obj))
+	case !obj.IsDeletable():
+		// Bao-side cleanup disabled — orphan-by-design kind or
+		// deletionPolicy=Retain. The CR is about to disappear; the log
+		// and Event are the only traces of what was kept in bao.
+		l.Info("bao-side cleanup disabled; releasing finalizer without removing bao object (intentional orphan)"+
+			baoIdentitySuffix(obj), "finalizer", r.FinalizerName)
+		r.event(obj, corev1.EventTypeNormal, "BaoObjectOrphaned",
+			"CR deleted without bao-side cleanup"+baoIdentitySuffix(obj))
 	default:
 		if err := r.Handlers.BaoDelete(ctx, obj); err != nil {
 			l.Error(err, "bao delete failed")
@@ -397,21 +411,16 @@ func (r *VaultResource[T]) setReadyOnce(ctx context.Context, key client.ObjectKe
 	return r.patchStatusOnce(ctx, key, status, reason, msg, false, "", "", nil)
 }
 
-// setReadyAndMaybeMarkWritten patches Ready and, when wrote=true, also
-// flips status.baoWritten=true and records the bao identity (curName,
-// curNS) into status.lastWrittenBaoName / status.lastWrittenOpenBaoNamespace.
-// All three fields go in the same MergeFrom patch so the transition is
-// atomic from the apiserver's perspective: a crash between two separate
-// patches cannot leave the CR with Ready=True but baoWritten=false, nor
-// with baoWritten=true but no recorded identity (the latter would defeat
-// rename cleanup on the next reconcile).
-//
-// When wrote=false (state already matched bao), the LastWritten fields
-// are still refreshed so a controller upgrade onto an older CR — written
-// before this field existed — can backfill the identity on the first
-// reconcile that finds bao already in the desired state.
-func (r *VaultResource[T]) setReadyAndMaybeMarkWritten(ctx context.Context, key client.ObjectKey, status metav1.ConditionStatus, reason, msg string, wrote bool, curName, curNS string, mutator StatusMutator[T]) error {
-	err := r.patchStatusOnce(ctx, key, status, reason, msg, wrote, curName, curNS, mutator)
+// setReadyAndMarkWritten patches Ready and, when markOwnership is
+// true, flips status.baoWritten and records the bao identity.
+// markOwnership is false only for a no-write pass of a primitive
+// without a CheckCollision hook (see the ownership comment in
+// Reconcile). Everything goes in one MergeFrom patch so a crash cannot
+// leave Ready=True with baoWritten=false, nor baoWritten=true without
+// the identity that rename cleanup needs. Marked no-write passes also
+// backfill the identity onto CRs written before the field existed.
+func (r *VaultResource[T]) setReadyAndMarkWritten(ctx context.Context, key client.ObjectKey, status metav1.ConditionStatus, reason, msg string, markOwnership bool, curName, curNS string, mutator StatusMutator[T]) error {
+	err := r.patchStatusOnce(ctx, key, status, reason, msg, markOwnership, curName, curNS, mutator)
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.FromContext(ctx).Error(err, "failed to write Ready+baoWritten+identity status",
 			"name", key.Name, "namespace", key.Namespace, "reason", reason)

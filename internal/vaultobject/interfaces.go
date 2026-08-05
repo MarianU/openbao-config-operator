@@ -28,13 +28,14 @@ type VaultObject interface {
 	IsEquivalentToDesiredState(payload map[string]any) bool
 	IsInitialized() bool
 	IsValid() (bool, error)
-	// IsDeletable reports whether CR deletion removes the bao object.
-	// True: the base calls BaoDelete on deletion and BaoDeleteIdentity on
-	// rename. False is orphan-by-design for irreplaceable bao objects (a
-	// PKI CA, a transit key): the base releases the finalizer without
-	// touching bao, skips rename cleanup, and records each orphaning with
-	// a log line and a BaoObjectOrphaned Event; removal is done against
-	// bao directly. Must be constant per type.
+	// IsDeletable reports whether the bao object should be removed on
+	// CR deletion (BaoDelete) or rename (BaoDeleteIdentity). False =
+	// intentional orphan: finalizer released without touching bao,
+	// logged + BaoObjectOrphaned Event. Implementations are hardcoded
+	// constants (PKI CA, transit key) or reads of the mutable
+	// spec.deletionPolicy. Re-evaluated every pass, including while
+	// Terminating (flipping the policy releases a stuck delete) —
+	// callers must never cache it or assume it constant per type.
 	IsDeletable() bool
 	PrepareInternalValues(ctx context.Context, obj client.Object) error
 	PrepareTLSConfig(ctx context.Context, obj client.Object) error
@@ -58,16 +59,15 @@ type ConditionsAware interface {
 	SetConditions(conditions []metav1.Condition)
 }
 
-// WriteTracker is implemented by any CRD that needs durable cross-reconcile
-// state about whether it has ever successfully written to OpenBao.
-//
-// The shared reconciler uses it on the deletion path: a CR that never wrote
-// to bao must NOT call BaoDelete (would strand the CR in Terminating on
-// primitives with strict delete endpoints), but a CR that wrote and then
-// flipped Ready=True→False (token lost capability, etc.) MUST call
-// BaoDelete or it leaks server-side state. The condition history is
-// transient (apiserver may compact, restore from backup loses it) and so
-// not load-bearing for cleanup correctness; this status field is.
+// WriteTracker carries the durable signal that a bao object was
+// confirmed under this CR's identity — set on every successful
+// reconcile, written or adopted. The deletion path keys on it: a CR
+// that never confirmed an object skips BaoDelete (avoids stranding in
+// Terminating on strict delete endpoints); one that owned an object
+// must still reach the deletion decision even after Ready flipped
+// False, and an adopted orphan must still be tear-down-able under
+// deletionPolicy=Delete. Condition history is transient (compaction,
+// backup restore); this status field is the load-bearing record.
 type WriteTracker interface {
 	IsBaoWritten() bool
 	MarkBaoWritten()

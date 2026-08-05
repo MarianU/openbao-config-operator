@@ -79,17 +79,45 @@ var _ = Describe("OpenBaoSecretEngine CR → OpenBao", Ordered, func() {
 		}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 
-	It("deletes the mount when the CR is deleted", func(ctx SpecContext) {
+	It("retains the mount when the CR is deleted (default deletionPolicy)", func(ctx SpecContext) {
 		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoSecretEngine{
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: seName},
 		})).To(Succeed())
 
 		expectGone(ctx, k8s, &v1alpha1.OpenBaoSecretEngine{}, nn)
 
+		// Retain is the default: the mount must survive the CR.
+		mount, err := bao.GetSecretEngineMount(ctx, path)
+		Expect(err).NotTo(HaveOccurred(),
+			"mount must be retained after CR delete under the default policy")
+		Expect(mount.Type).To(Equal("kv"))
+	})
+
+	It("adopts the retained mount and deletes it when deletionPolicy=Delete", func(ctx SpecContext) {
+		// Same path + same description as the retained mount, so the
+		// re-created CR adopts it without a write — the documented
+		// recovery/teardown flow for orphans.
+		cr := &v1alpha1.OpenBaoSecretEngine{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: seName},
+			Spec: v1alpha1.OpenBaoSecretEngineSpec{
+				Path:           path,
+				Description:    "e2e kv mount updated",
+				KvV2:           &v1alpha1.KvV2Spec{},
+				DeletionPolicy: v1alpha1.DeletionPolicyDelete,
+			},
+		}
+		Expect(k8s.Create(ctx, cr)).To(Succeed())
+		expectReady(ctx, k8s, &v1alpha1.OpenBaoSecretEngine{}, nn)
+
+		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoSecretEngine{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: seName},
+		})).To(Succeed())
+		expectGone(ctx, k8s, &v1alpha1.OpenBaoSecretEngine{}, nn)
+
 		Eventually(func(g Gomega) {
 			_, err := bao.GetSecretEngineMount(ctx, path)
 			g.Expect(errors.Is(err, baoclient.ErrNotFound)).To(BeTrue(),
-				"expected ErrNotFound after CR delete, got %v", err)
+				"expected ErrNotFound after CR delete with deletionPolicy=Delete, got %v", err)
 		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 

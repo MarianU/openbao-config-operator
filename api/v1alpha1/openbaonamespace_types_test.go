@@ -133,7 +133,9 @@ func TestOpenBaoNamespace_IsInitialized_IsDeletable(t *testing.T) {
 	t.Parallel()
 	n := &OpenBaoNamespace{}
 	require.True(t, n.IsInitialized())
-	require.True(t, n.IsDeletable())
+	// Data-bearing kind: empty deletionPolicy means Retain. The full
+	// policy table for every kind lives in deletionpolicy_test.go.
+	require.False(t, n.IsDeletable())
 }
 
 func TestOpenBaoNamespace_PrepareInternalValues_NoOp(t *testing.T) {

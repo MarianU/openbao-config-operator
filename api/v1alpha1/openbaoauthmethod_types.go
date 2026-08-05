@@ -131,7 +131,10 @@ func (d *OpenBaoAuthMethod) ToBaoSpec() baoclient.AuthMethodMountSpec {
 }
 
 func (d *OpenBaoAuthMethod) IsInitialized() bool { return true }
-func (d *OpenBaoAuthMethod) IsDeletable() bool   { return true }
+
+func (d *OpenBaoAuthMethod) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesDataKind()
+}
 
 func (d *OpenBaoAuthMethod) PrepareInternalValues(ctx context.Context, object client.Object) error {
 	return nil
@@ -193,6 +196,17 @@ type OpenBaoAuthMethodConfig struct {
 
 // OpenBaoAuthMethodSpec defines the desired state of OpenBaoAuthMethod.
 type OpenBaoAuthMethodSpec struct {
+	// DeletionPolicy controls what happens to the bao-side auth mount
+	// when this CR is deleted or its bao identity changes. Retain
+	// (the default) releases the CR without touching bao: the auth
+	// mount is intentionally orphaned and logged, and re-applying an
+	// identical CR adopts it. Delete disables the auth mount and the
+	// login roles under it; no secret data lives there, so this is
+	// disruptive but rebuildable from CRs.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Path is the bao-side auth-mount path (e.g. "cert", "jwt",
 	// "oidc"). Trailing slashes are accepted but stripped before the
 	// bao API call.
@@ -266,6 +280,7 @@ func (m *OpenBaoAuthMethod) SetLastWrittenBaoIdentity(name, namespace string) {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=obam
+// +kubebuilder:printcolumn:name="DeletionPolicy",type=string,JSONPath=`.spec.deletionPolicy`
 
 // OpenBaoAuthMethod is the Schema for the openbaoauthmethods API.
 // Reconciles a CR to a bao-side auth-method mount at sys/auth/<path>.

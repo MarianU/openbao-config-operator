@@ -18,3 +18,6 @@ metadata:
 spec:
   name: sub
   openbaoNamespace: acme/
+  # Retain (default) orphans the bao namespace on CR delete; Delete
+  # cascades through everything inside, unrecoverably.
+  deletionPolicy: Retain

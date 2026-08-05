@@ -1062,9 +1062,10 @@ func (c *sdkClient) DeleteNamespace(ctx context.Context, name string, opts ...Ca
 	}
 	wrapped := wrapStatus(err)
 	// Idempotent delete: 404 = already gone. Mirrors DeletePolicy.
-	// 400-class responses for "namespace contains children" surface as
-	// regular bao errors and the finalizer stays in place — exactly the
-	// graceful-block behaviour the controller wants.
+	// Note current bao CASCADES a namespace delete through everything
+	// inside it rather than rejecting on live children. Non-404 errors (permissions, transport) still
+	// surface as *StatusError so the controller keeps its finalizer and
+	// retries.
 	var se *StatusError
 	if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
 		return nil

@@ -119,7 +119,10 @@ func (d *OpenBaoCertAuthEngineRole) IsEquivalentToDesiredState(payload map[strin
 }
 
 func (d *OpenBaoCertAuthEngineRole) IsInitialized() bool { return true }
-func (d *OpenBaoCertAuthEngineRole) IsDeletable() bool   { return true }
+
+func (d *OpenBaoCertAuthEngineRole) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
+}
 
 // PrepareInternalValues resolves spec.certificateRef into the bao-wire
 // certificate body. Reads the named Secret, extracts the configured
@@ -223,6 +226,17 @@ type CertSecretRef struct {
 
 // OpenBaoCertAuthEngineRoleSpec defines the desired state.
 type OpenBaoCertAuthEngineRoleSpec struct {
+	// DeletionPolicy controls what happens to the bao-side cert entry
+	// when this CR is deleted or its bao identity changes. Delete
+	// (the default) removes it, so new logins through it stop; tokens
+	// already issued keep working until their TTL expires. Retain
+	// releases the CR without touching bao — the entry survives as an
+	// intentional, logged orphan that no CR tracks afterward; use
+	// only where rendering churn must never drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Path is the bao-side cert auth mount (e.g. "cert"). Pairs
 	// with an OpenBaoAuthMethod of type=cert at the same path.
 	// +kubebuilder:validation:Required

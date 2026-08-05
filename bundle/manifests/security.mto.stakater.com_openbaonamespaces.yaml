@@ -16,7 +16,11 @@ spec:
     singular: openbaonamespace
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.deletionPolicy
+      name: DeletionPolicy
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -44,6 +48,20 @@ spec:
           spec:
             description: OpenBaoNamespaceSpec defines the desired state of OpenBaoNamespace.
             properties:
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side namespace
+                  when this CR is deleted or renamed. Retain (the default)
+                  releases the CR without touching bao: the namespace is
+                  intentionally orphaned and logged, and re-applying an identical
+                  CR adopts it. Delete removes the bao namespace — bao's delete
+                  cascades through everything inside it (mounts, auth methods,
+                  secrets, keys, child namespaces), unrecoverably.
+                enum:
+                - Retain
+                - Delete
+                type: string
               name:
                 description: |-
                   Name is the bao-side namespace name (the local segment under

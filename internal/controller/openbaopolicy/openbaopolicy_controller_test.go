@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -233,6 +234,7 @@ func buildReconciler(t *testing.T, fb *fakeBao, objs ...runtime.Object) *OpenBao
 		Scheme:        scheme,
 		FinalizerName: OpenBaoPolicyFinalizer,
 		Handlers:      OpenBaoPolicyHandlers(cl, fb),
+		Recorder:      record.NewFakeRecorder(32),
 	}
 	return &OpenBaoPolicyReconciler{VaultResource: base}
 }
@@ -616,6 +618,30 @@ func TestOpenBaoPolicy_DeleteSkipsBaoIfNeverReady(t *testing.T) {
 
 	err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: p.Name}, &v1alpha1.OpenBaoPolicy{})
 	require.True(t, apierrors.IsNotFound(err))
+}
+
+// Grant kinds default to deletionPolicy=Delete (deleting the CR
+// revokes), but an explicit Retain opts a policy out of bao-side
+// cleanup: the grant is intentionally orphaned and the finalizer
+// still releases.
+func TestOpenBaoPolicy_DeletePath_RetainOrphans(t *testing.T) {
+	t.Parallel()
+	fb := newFakeBao()
+	p := samplePolicy("keep-me")
+	p.Spec.DeletionPolicy = v1alpha1.DeletionPolicyRetain
+	r := buildReconciler(t, fb, p)
+
+	reconcile(t, r, p.Name)
+	reconcile(t, r, p.Name)
+	require.Equal(t, 1, fb.upserts)
+
+	cur := getPolicy(t, r, p.Name)
+	require.NoError(t, r.Delete(context.Background(), cur))
+	reconcile(t, r, p.Name)
+
+	require.Equal(t, 0, fb.deletes, "Retain must skip BaoDelete")
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: p.Name}, &v1alpha1.OpenBaoPolicy{})
+	require.True(t, apierrors.IsNotFound(err), "finalizer must release even though bao is untouched")
 }
 
 // Cert auth + JWT/OIDC stubs — this controller does not exercise them.

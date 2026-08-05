@@ -64,17 +64,41 @@ var _ = Describe("OpenBaoNamespace CR → OpenBao", Ordered, func() {
 	// returns true unconditionally. Skip the update case; create→delete
 	// covers the lifecycle.
 
-	It("deletes the namespace when the CR is deleted", func(ctx SpecContext) {
+	It("retains the namespace when the CR is deleted (default deletionPolicy)", func(ctx SpecContext) {
 		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoNamespace{
 			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: nsName},
 		})).To(Succeed())
 
 		expectGone(ctx, k8s, &v1alpha1.OpenBaoNamespace{}, nn)
 
+		// Retain is the default: bao's namespace delete cascades through
+		// everything inside it, so the namespace must survive the CR.
+		ns, err := bao.GetNamespace(ctx, baoNS)
+		Expect(err).NotTo(HaveOccurred(),
+			"bao namespace must be retained after CR delete under the default policy")
+		Expect(ns.ID).NotTo(BeEmpty())
+	})
+
+	It("adopts the retained namespace and deletes it when deletionPolicy=Delete", func(ctx SpecContext) {
+		cr := &v1alpha1.OpenBaoNamespace{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: nsName},
+			Spec: v1alpha1.OpenBaoNamespaceSpec{
+				Name:           baoNS,
+				DeletionPolicy: v1alpha1.DeletionPolicyDelete,
+			},
+		}
+		Expect(k8s.Create(ctx, cr)).To(Succeed())
+		expectReady(ctx, k8s, &v1alpha1.OpenBaoNamespace{}, nn)
+
+		Expect(k8s.Delete(ctx, &v1alpha1.OpenBaoNamespace{
+			ObjectMeta: metav1.ObjectMeta{Namespace: OperatorNS, Name: nsName},
+		})).To(Succeed())
+		expectGone(ctx, k8s, &v1alpha1.OpenBaoNamespace{}, nn)
+
 		Eventually(func(g Gomega) {
 			_, err := bao.GetNamespace(ctx, baoNS)
 			g.Expect(errors.Is(err, baoclient.ErrNotFound)).To(BeTrue(),
-				"expected ErrNotFound after CR delete, got %v", err)
+				"expected ErrNotFound after CR delete with deletionPolicy=Delete, got %v", err)
 		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 	})
 

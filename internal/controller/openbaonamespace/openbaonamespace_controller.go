@@ -40,13 +40,13 @@ func NewOpenBaoNamespaceReconcilerWithClient(mgr ctrl.Manager, bao baoclient.Cli
 // CreateNamespace("sub", WithNamespace("acme/")) — bao writes to
 // sys/namespaces/sub under the acme/ context.
 //
-// Delete returns the bao error verbatim if the namespace contains live
-// children (mounts, auth methods, child namespaces). The shared base
-// keeps the finalizer in place when BaoDelete returns an error, so
-// the CR stays in Terminating until the children are removed and the
-// next 5-minute reconcile retries the delete successfully — the
-// "graceful block" behaviour from the controller-runtime concerns
-// matrix in the implementation plan.
+// BaoDelete runs only when spec.deletionPolicy is Delete. Bao's
+// namespace delete CASCADES: it removes the namespace together with
+// everything inside it — mounts, auth methods, secrets, keys, child
+// namespaces — rather than blocking on live children. With the
+// default Retain policy the
+// shared base never calls BaoDelete and the bao namespace is
+// intentionally orphaned.
 func OpenBaoNamespaceHandlers(cl client.Client, bao baoclient.Client) resource.Handlers[*v1alpha1.OpenBaoNamespace] {
 	return resource.Handlers[*v1alpha1.OpenBaoNamespace]{
 		NewInstance: func() *v1alpha1.OpenBaoNamespace { return &v1alpha1.OpenBaoNamespace{} },

@@ -16,7 +16,11 @@ spec:
     singular: openbaoauthmethod
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.deletionPolicy
+      name: DeletionPolicy
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -66,6 +70,20 @@ spec:
                     pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
                     type: string
                 type: object
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side auth mount
+                  when this CR is deleted or its bao identity changes. Retain
+                  (the default) releases the CR without touching bao: the auth
+                  mount is intentionally orphaned and logged, and re-applying an
+                  identical CR adopts it. Delete disables the auth mount and the
+                  login roles under it; no secret data lives there, so this is
+                  disruptive but rebuildable from CRs.
+                enum:
+                - Retain
+                - Delete
+                type: string
               description:
                 description: |-
                   Description is the bao-side mount description. Free-form;

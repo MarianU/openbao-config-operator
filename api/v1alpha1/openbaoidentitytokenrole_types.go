@@ -87,7 +87,10 @@ func (d *OpenBaoIdentityTokenRole) IsEquivalentToDesiredState(payload map[string
 }
 
 func (d *OpenBaoIdentityTokenRole) IsInitialized() bool { return true }
-func (d *OpenBaoIdentityTokenRole) IsDeletable() bool   { return true }
+
+func (d *OpenBaoIdentityTokenRole) IsDeletable() bool {
+	return d.Spec.DeletionPolicy.DeletesGrantKind()
+}
 
 func (d *OpenBaoIdentityTokenRole) PrepareInternalValues(ctx context.Context, object client.Object) error {
 	return nil
@@ -117,6 +120,18 @@ func (d *OpenBaoIdentityTokenRole) ToBaoSpec() baoclient.IdentityTokenRoleSpec {
 
 // OpenBaoIdentityTokenRoleSpec defines the desired state.
 type OpenBaoIdentityTokenRoleSpec struct {
+	// DeletionPolicy controls what happens to the bao-side role when
+	// this CR is deleted or its bao identity changes. Delete (the
+	// default) removes the role, so no new identity tokens are
+	// minted through it; tokens already minted remain valid until
+	// they expire. Retain releases the CR without touching bao — the
+	// role survives as an intentional, logged orphan that no CR
+	// tracks afterward; use only where rendering churn must never
+	// drop live access.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Delete
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// Name is the bao-side role name. Defaults to metadata.name.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=128

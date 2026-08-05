@@ -227,7 +227,7 @@ func TestOpenBaoPolicy_IsInitialized_IsDeletable(t *testing.T) {
 		t.Error("IsInitialized should always return true")
 	}
 	if !p.IsDeletable() {
-		t.Error("IsDeletable should always return true")
+		t.Error("empty deletionPolicy on a grant kind must mean Delete")
 	}
 }
 

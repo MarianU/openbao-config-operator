@@ -13,3 +13,6 @@ spec:
   config:
     defaultLeaseTtl: 1h
     maxLeaseTtl: 24h
+  # Retain (default) orphans the auth mount on CR delete; Delete disables
+  # it (no secret data — rebuildable).
+  deletionPolicy: Retain
