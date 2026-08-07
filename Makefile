@@ -440,16 +440,12 @@ kind: $(KIND)
 $(KIND): $(LOCALBIN)
 	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
 
-##@ Helm charts (operator + bootstrap + tenant)
+##@ Helm chart (operator)
 
 # Operator chart — auto-generated via helmify from config/default kustomize
 # output. Regenerated on every release; never committed.
 HELM_CHART_NAME      ?= $(OPERATOR_NAME)
 HELM_CHART_DIR       ?= charts/$(HELM_CHART_NAME)
-
-# Hand-maintained sibling charts.
-MTO_BOOTSTRAP_CHART_DIR ?= charts/openbao-config-mto-bootstrap
-MTO_CHART_DIR           ?= charts/openbao-config-mto
 
 HELM_REGISTRY        ?= $(DOCKER_REPO_BASE)/charts
 CHART_VERSION        ?= $(VERSION)$(GIT_TAG)
@@ -487,34 +483,11 @@ HELM_MK_ARGS = \
 	IMG=$(IMG)
 
 .PHONY: helm-release
-helm-release: helm-release-operator helm-release-mto-bootstrap helm-release-mto ## Release operator + mto-bootstrap + mto charts to OCI.
+helm-release: helm-release-operator ## Release the operator chart to OCI.
 
 .PHONY: helm-release-operator
 helm-release-operator: helmify kustomize yq download-helm-mk ## Helmify config/default and release the operator chart.
 	@$(HELM_MK_CMD) helm-release $(HELM_MK_ARGS)
-
-.PHONY: helm-release-mto-bootstrap
-helm-release-mto-bootstrap: helm ## Lint, package and push openbao-config-mto-bootstrap.
-	$(HELM) lint $(MTO_BOOTSTRAP_CHART_DIR) --strict
-	@mkdir -p dist
-	$(HELM) package $(MTO_BOOTSTRAP_CHART_DIR) -d dist --version $(CHART_VERSION)
-	$(HELM) push dist/openbao-config-mto-bootstrap-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
-
-.PHONY: helm-release-mto
-helm-release-mto: helm ## Lint, package and push openbao-config-mto (per-Tenant chart pulled by t-op-v2).
-	$(HELM) lint $(MTO_CHART_DIR) --strict --set tenant=lint-only
-	@mkdir -p dist
-	$(HELM) package $(MTO_CHART_DIR) -d dist --version $(CHART_VERSION)
-	$(HELM) push dist/openbao-config-mto-$(CHART_VERSION).tgz oci://$(HELM_REGISTRY)
-
-.PHONY: helm-lint
-helm-lint: helm ## Lint the two hand-maintained charts (operator chart is auto-generated).
-	$(HELM) lint $(MTO_BOOTSTRAP_CHART_DIR) --strict
-	$(HELM) lint $(MTO_CHART_DIR) --strict --set tenant=lint-only
-
-.PHONY: helm-render-test
-helm-render-test: helm yq ## Verify the tenant chart's component slices (golden, disjoint, union, purity).
-	HELM=$(HELM) YQ=$(YQ_BIN) hack/chart-render-tests.sh
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
@@ -582,7 +555,6 @@ endif
 endif
 
 .PHONY: yq
-# hack/chart-render-tests.sh needs the splitDoc operator (yq >= 4.25).
 YQ_VERSION := v4.44.3
 YQ_BIN := $(LOCALBIN)/yq
 yq:
