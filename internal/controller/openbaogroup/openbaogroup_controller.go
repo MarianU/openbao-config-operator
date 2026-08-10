@@ -10,9 +10,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
-	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject/resource"
+	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject/resource"
 )
 
 // +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaogroups,verbs=get;list;watch;update;patch

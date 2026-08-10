@@ -14,9 +14,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
-	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject/resource"
+	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject/resource"
 )
 
 const (

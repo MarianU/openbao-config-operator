@@ -6,7 +6,7 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
 )
 
 // NewTypedBaoClient builds a typed baoclient.Client from VAULT_ADDR /

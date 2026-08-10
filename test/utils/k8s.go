@@ -7,7 +7,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	extv1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
+	extv1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
 )
 
 func GetK8sClient() client.Client {

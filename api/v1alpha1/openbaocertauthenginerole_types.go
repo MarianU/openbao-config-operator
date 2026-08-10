@@ -32,8 +32,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
-	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject"
 )
 
 var _ vaultobject.VaultObject = &OpenBaoCertAuthEngineRole{}

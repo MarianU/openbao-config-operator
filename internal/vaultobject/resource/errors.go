@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
 )
 
 // Reason values surfaced in the Ready status condition. These are stable

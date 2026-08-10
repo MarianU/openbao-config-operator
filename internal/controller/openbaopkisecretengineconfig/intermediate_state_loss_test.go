@@ -15,9 +15,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
-	"github.com/stakater-ab/mto-extension-openbao/internal/vaultobject/resource"
+	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject/resource"
 )
 
 // Bao loses the private key behind an intermediate CA — a dev-mode restart, a

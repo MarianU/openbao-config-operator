@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	baoclient "github.com/stakater-ab/mto-extension-openbao/internal/client"
+	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
 )
 
 func ptrBool(b bool) *bool { return &b }

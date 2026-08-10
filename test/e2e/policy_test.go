@@ -13,8 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/stakater-ab/mto-extension-openbao/api/v1alpha1"
-	"github.com/stakater-ab/mto-extension-openbao/test/utils"
+	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
+	"github.com/stakater-ab/openbao-config-operator/test/utils"
 )
 
 // Drift correction is covered in envtest

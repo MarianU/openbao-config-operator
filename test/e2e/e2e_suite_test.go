@@ -27,7 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	crzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	_ "github.com/stakater-ab/mto-extension-openbao/test/utils"
+	_ "github.com/stakater-ab/openbao-config-operator/test/utils"
 )
 
 // OperatorNS is the namespace primitive CRs are created in for the e2e

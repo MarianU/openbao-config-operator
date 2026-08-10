@@ -1,4 +1,4 @@
-module github.com/stakater-ab/mto-extension-openbao
+module github.com/stakater-ab/openbao-config-operator
 
 go 1.26.0
 
