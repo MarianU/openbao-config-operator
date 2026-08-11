@@ -1,0 +1,21 @@
+# Configures OIDC at /v1/auth/oidc/config. The client_secret is read
+# from a Kubernetes Secret on every reconcile, so a Secret rotation
+# triggers a re-write automatically.
+#
+# Apply order:
+#   1. OpenBaoAuthMethod (path=oidc, type=oidc) enables the mount.
+#   2. OpenBaoJWTOIDCAuthEngineConfig (this CR) configures discovery + client.
+#   3. OpenBaoJWTOIDCAuthEngineRole binds claims to bao policies.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoJWTOIDCAuthEngineConfig
+metadata:
+  name: tenant-oidc
+  namespace: openbao-config-operator-system
+spec:
+  path: oidc
+  oidcDiscoveryUrl: https://accounts.example.com
+  oidcClientId: bao-tenant-client
+  oidcClientSecretRef:
+    name: oidc-client-secret
+    key: oidcClientSecret
+  defaultRole: tenant

@@ -1,0 +1,20 @@
+## Append samples of your project ##
+resources:
+- security_v1alpha1_openbaopolicy.yaml
+- security_v1alpha1_openbaokubernetesauthrole.yaml
+- security_v1alpha1_openbaokubernetesauthrole_selector.yaml
+- security_v1alpha1_openbaosecretengine.yaml
+- security_v1alpha1_openbaonamespace.yaml
+- security_v1alpha1_openbaopkisecretengineconfig.yaml
+- security_v1alpha1_openbaopkisecretenginerole.yaml
+- security_v1alpha1_openbaogroup.yaml
+- security_v1alpha1_openbaogroupalias.yaml
+- security_v1alpha1_openbaoidentitytokenrole.yaml
+- security_v1alpha1_openbaoauthmethod.yaml
+- security_v1alpha1_openbaocertauthengineconfig.yaml
+- security_v1alpha1_openbaocertauthenginerole.yaml
+- security_v1alpha1_openbaojwtoidcauthengineconfig.yaml
+- security_v1alpha1_openbaojwtoidcauthenginerole.yaml
+- security_v1alpha1_openbaokubernetesauthengineconfig.yaml
+- security_v1alpha1_openbaotransitkey.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

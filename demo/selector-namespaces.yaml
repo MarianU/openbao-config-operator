@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-app1
+  labels:
+    stakater.com/tenant: team-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-app2
+  labels:
+    stakater.com/tenant: team-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-b-app1
+  labels:
+    stakater.com/tenant: team-b

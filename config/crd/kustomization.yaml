@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - bases/security.mto.stakater.com_openbaopolicies.yaml
+  - bases/security.mto.stakater.com_openbaokubernetesauthroles.yaml
+  - bases/security.mto.stakater.com_openbaosecretengines.yaml
+  - bases/security.mto.stakater.com_openbaonamespaces.yaml
+  - bases/security.mto.stakater.com_openbaopkisecretengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaopkisecretengineroles.yaml
+  - bases/security.mto.stakater.com_openbaogroups.yaml
+  - bases/security.mto.stakater.com_openbaogroupaliases.yaml
+  - bases/security.mto.stakater.com_openbaoidentitytokenroles.yaml
+  - bases/security.mto.stakater.com_openbaoauthmethods.yaml
+  - bases/security.mto.stakater.com_openbaocertauthengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaocertauthengineroles.yaml
+  - bases/security.mto.stakater.com_openbaojwtoidcauthengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaojwtoidcauthengineroles.yaml
+  - bases/security.mto.stakater.com_openbaokubernetesauthengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaotransitkeys.yaml

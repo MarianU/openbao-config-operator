@@ -1,0 +1,11 @@
+# Tunes the cert auth mount at /v1/auth/cert/config. Pairs with an
+# OpenBaoAuthMethod of type=cert at the same path.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoCertAuthEngineConfig
+metadata:
+  name: cert
+  namespace: openbao-config-operator-system
+spec:
+  path: cert
+  enableIdentityAliasMetadata: true
+  ocspCacheSize: 200

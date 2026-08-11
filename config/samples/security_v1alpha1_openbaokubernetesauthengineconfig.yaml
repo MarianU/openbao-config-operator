@@ -1,0 +1,27 @@
+# Configures the kubernetes auth method at /v1/auth/<path>/config.
+# Pairs with an OpenBaoAuthMethod of type=kubernetes at the same path.
+# The token-reviewer JWT is read from a Kubernetes Secret on every
+# reconcile, so a Secret rotation triggers a re-write automatically.
+#
+# Apply order:
+#   1. OpenBaoAuthMethod (path=kubernetes, type=kubernetes) enables the mount.
+#   2. OpenBaoKubernetesAuthEngineConfig (this CR) writes /config.
+#   3. OpenBaoKubernetesAuthRole binds SA claims to bao policies.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoKubernetesAuthEngineConfig
+metadata:
+  name: tenant-k8s-auth
+  namespace: openbao-config-operator-system
+spec:
+  path: kubernetes
+  # Optional: scope this CR to a specific OpenBao namespace.
+  # openbaoNamespace: team-a/
+
+  kubernetesHost: https://kubernetes.default.svc:443
+  tokenReviewerJwtRef:
+    name: openbao-token-reviewer
+    key: token
+  kubernetesCaCertRef:
+    name: openbao-token-reviewer
+    key: ca.crt
+  issuer: kubernetes/serviceaccount

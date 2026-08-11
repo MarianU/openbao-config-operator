@@ -1,0 +1,199 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  creationTimestamp: null
+  name: openbaogroups.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoGroup
+    listKind: OpenBaoGroupList
+    plural: openbaogroups
+    shortNames:
+    - obg
+    singular: openbaogroup
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OpenBaoGroup is the Schema for the openbaogroups API. Reconciles a CR
+          to a bao-side identity group.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenBaoGroupSpec defines the desired state of OpenBaoGroup.
+            properties:
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side object
+                  when this CR is deleted or its bao identity changes. Delete
+                  (the default) removes it, so deleting the CR revokes the access
+                  it granted. Retain releases the CR without touching bao — the
+                  grant survives as an intentional, logged orphan that no CR
+                  tracks afterward; use only where rendering churn must never
+                  drop live access.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              memberEntityIds:
+                description: |-
+                  MemberEntityIds is the list of bao entity ids that belong to
+                  this group. Only meaningful for type=internal groups; external
+                  groups must leave this empty.
+                items:
+                  type: string
+                type: array
+              memberGroupIds:
+                description: |-
+                  MemberGroupIds is the list of bao group ids whose members
+                  inherit this group's policies. Only meaningful for
+                  type=internal groups; external groups must leave this empty.
+                items:
+                  type: string
+                type: array
+              metadata:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Metadata is a free-form key/value map persisted on the bao
+                  group. Useful for cross-system correlation. Keys and values
+                  must be ASCII strings.
+                type: object
+              name:
+                description: Name is the bao-side group name. Defaults to metadata.name.
+                maxLength: 128
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              openbaoNamespace:
+                description: OpenBaoNamespace targets a specific OpenBao namespace.
+                pattern: ^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$
+                type: string
+              policies:
+                description: |-
+                  Policies is the list of bao policy names attached to the
+                  group. Every member of the group inherits these policies.
+                items:
+                  type: string
+                type: array
+              type:
+                description: |-
+                  Type selects the bao group kind: "internal" (default) or
+                  "external". Internal groups hold member entities and member
+                  groups directly. External groups receive members through
+                  OpenBaoGroupAlias entries that map auth-method aliases into
+                  the group. Type is immutable on bao's side — changing it on
+                  an existing group surfaces as Ready=False with reason=BaoError;
+                  delete and recreate the CR to switch.
+                enum:
+                - internal
+                - external
+                type: string
+            type: object
+          status:
+            description: OpenBaoGroupStatus defines the observed state of OpenBaoGroup.
+            properties:
+              baoWritten:
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              groupId:
+                description: |-
+                  GroupID is the bao-side group id stamped on first create. Other
+                  CRs (notably OpenBaoGroupAlias) reference it as canonicalId
+                  when binding to this group.
+                type: string
+              lastWrittenBaoName:
+                type: string
+              lastWrittenOpenBaoNamespace:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

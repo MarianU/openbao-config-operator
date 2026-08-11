@@ -1,0 +1,205 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: openbaoauthmethods.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoAuthMethod
+    listKind: OpenBaoAuthMethodList
+    plural: openbaoauthmethods
+    shortNames:
+    - obam
+    singular: openbaoauthmethod
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.deletionPolicy
+      name: DeletionPolicy
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OpenBaoAuthMethod is the Schema for the openbaoauthmethods API.
+          Reconciles a CR to a bao-side auth-method mount at sys/auth/<path>.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenBaoAuthMethodSpec defines the desired state of OpenBaoAuthMethod.
+            properties:
+              config:
+                description: |-
+                  Config holds the tunable mount-config fields bao exposes on
+                  the /tune endpoint.
+                properties:
+                  defaultLeaseTtl:
+                    description: DefaultLeaseTTL is a bao duration string ("1h", "3600s").
+                    pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                    type: string
+                  listingVisibility:
+                    description: |-
+                      ListingVisibility controls whether unauthenticated users can
+                      see this mount in the bao UI listing. "" (default) or "hidden"
+                      — bao only accepts these two values.
+                    enum:
+                    - unauth
+                    - hidden
+                    type: string
+                  maxLeaseTtl:
+                    description: MaxLeaseTTL is a bao duration string ("1h", "3600s").
+                    pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                    type: string
+                type: object
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side auth mount
+                  when this CR is deleted or its bao identity changes. Retain
+                  (the default) releases the CR without touching bao: the auth
+                  mount is intentionally orphaned and logged, and re-applying an
+                  identical CR adopts it. Delete disables the auth mount and the
+                  login roles under it; no secret data lives there, so this is
+                  disruptive but rebuildable from CRs.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              description:
+                description: |-
+                  Description is the bao-side mount description. Free-form;
+                  mirrored verbatim into bao's mount info.
+                maxLength: 512
+                type: string
+              openbaoNamespace:
+                description: OpenBaoNamespace targets a specific OpenBao namespace.
+                pattern: ^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$
+                type: string
+              path:
+                description: |-
+                  Path is the bao-side auth-mount path (e.g. "cert", "jwt",
+                  "oidc"). Trailing slashes are accepted but stripped before the
+                  bao API call.
+                maxLength: 128
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9_./-]*$
+                type: string
+              type:
+                description: |-
+                  Type is the auth-method type as bao expects on the wire.
+                  Mutable through CR re-creation only — bao does not allow type
+                  to change in place.
+                enum:
+                - cert
+                - jwt
+                - oidc
+                - kubernetes
+                - approle
+                - userpass
+                - ldap
+                type: string
+            required:
+            - path
+            - type
+            type: object
+          status:
+            description: OpenBaoAuthMethodStatus defines the observed state.
+            properties:
+              baoWritten:
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastWrittenBaoName:
+                type: string
+              lastWrittenOpenBaoNamespace:
+                type: string
+              mountAccessor:
+                description: |-
+                  MountAccessor is the bao-side accessor of this auth mount.
+                  Auth-method aliases (OIDC sub, JWT subject, cert CN) and
+                  identity-group aliases bind by `mount_accessor`, so surfacing
+                  it on status lets downstream CRs (notably OpenBaoGroupAlias)
+                  reference the accessor without a manual `bao auth list` step.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

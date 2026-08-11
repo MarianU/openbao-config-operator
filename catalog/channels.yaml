@@ -1,0 +1,5 @@
+schema: olm.channel
+package: openbao-config-operator
+name: preview
+entries:
+  - name: openbao-config-operator.v0.0.1

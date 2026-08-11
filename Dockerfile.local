@@ -1,0 +1,18 @@
+# Local-only build: copies the host-cross-compiled binary into distroless.
+# Avoids the private-module fetch the main Dockerfile does.
+#
+# Usage:
+#   docker build --build-arg MANAGER_BIN=<path-to-built-binary> \
+#                -t <image>:<tag> -f Dockerfile.local .
+#
+# MANAGER_BIN defaults to manager-linux-arm64-for-build at the build
+# context root (the file the existing local-dev cross-build target
+# produces and `.gitignore` excludes).
+ARG MANAGER_BIN=manager-linux-arm64-for-build
+
+FROM gcr.io/distroless/static:nonroot
+ARG MANAGER_BIN
+WORKDIR /
+COPY ${MANAGER_BIN} /manager
+USER 65532:65532
+ENTRYPOINT ["/manager"]

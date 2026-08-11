@@ -1,0 +1,101 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - security.mto.stakater.com
+  resources:
+  - openbaoauthmethods
+  - openbaocertauthengineconfigs
+  - openbaocertauthengineroles
+  - openbaogroupaliases
+  - openbaogroups
+  - openbaoidentitytokenroles
+  - openbaojwtoidcauthengineconfigs
+  - openbaojwtoidcauthengineroles
+  - openbaokubernetesauthengineconfigs
+  - openbaokubernetesauthroles
+  - openbaonamespaces
+  - openbaopkisecretengineconfigs
+  - openbaopkisecretengineroles
+  - openbaopolicies
+  - openbaosecretengines
+  - openbaotransitkeys
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - security.mto.stakater.com
+  resources:
+  - openbaoauthmethods/finalizers
+  - openbaocertauthengineconfigs/finalizers
+  - openbaocertauthengineroles/finalizers
+  - openbaogroupaliases/finalizers
+  - openbaogroups/finalizers
+  - openbaoidentitytokenroles/finalizers
+  - openbaojwtoidcauthengineconfigs/finalizers
+  - openbaojwtoidcauthengineroles/finalizers
+  - openbaokubernetesauthengineconfigs/finalizers
+  - openbaokubernetesauthroles/finalizers
+  - openbaonamespaces/finalizers
+  - openbaopkisecretengineconfigs/finalizers
+  - openbaopkisecretengineroles/finalizers
+  - openbaopolicies/finalizers
+  - openbaosecretengines/finalizers
+  - openbaotransitkeys/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - security.mto.stakater.com
+  resources:
+  - openbaoauthmethods/status
+  - openbaocertauthengineconfigs/status
+  - openbaocertauthengineroles/status
+  - openbaogroupaliases/status
+  - openbaogroups/status
+  - openbaoidentitytokenroles/status
+  - openbaojwtoidcauthengineconfigs/status
+  - openbaojwtoidcauthengineroles/status
+  - openbaokubernetesauthengineconfigs/status
+  - openbaokubernetesauthroles/status
+  - openbaonamespaces/status
+  - openbaopkisecretengineconfigs/status
+  - openbaopkisecretengineroles/status
+  - openbaopolicies/status
+  - openbaosecretengines/status
+  - openbaotransitkeys/status
+  verbs:
+  - get
+  - patch
+  - update

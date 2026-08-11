@@ -1,0 +1,15 @@
+# Maps the OIDC subject claim "alice@example.com" into the
+# `oidc-admins` external OpenBaoGroup. The mountAccessor must match
+# the bao-side accessor of the OIDC auth method (look up via
+# `bao auth list -format=json | jq -r '.["oidc/"].accessor'`).
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoGroupAlias
+metadata:
+  name: alice-oidc-admin
+  namespace: openbao-config-operator-system
+spec:
+  name: alice@example.com
+  mountAccessor: REPLACE_ME_WITH_OIDC_ACCESSOR
+  canonicalGroupRef:
+    name: oidc-admins
+    # namespace defaults to this CR's namespace when omitted

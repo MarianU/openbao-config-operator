@@ -1,0 +1,18 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoKubernetesAuthRole
+metadata:
+  name: prod-deployers
+  namespace: openbao-config-operator-system
+spec:
+  path: kubernetes
+  policies:
+    - prod-deploy-policy
+  targetServiceAccounts:
+    - deployer
+  targetNamespaces:
+    targetNamespaces:
+      - prod-app-1
+      - prod-app-2
+  tokenTTL: 1h
+  tokenMaxTTL: 2h
+  tokenType: service

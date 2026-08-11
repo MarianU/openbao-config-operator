@@ -1,0 +1,362 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  creationTimestamp: null
+  name: openbaokubernetesauthroles.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoKubernetesAuthRole
+    listKind: OpenBaoKubernetesAuthRoleList
+    plural: openbaokubernetesauthroles
+    shortNames:
+    - obkar
+    singular: openbaokubernetesauthrole
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OpenBaoKubernetesAuthRole is the Schema for the openbaokubernetesauthroles
+          API. Reconciled against OpenBao auth/<path>/role/<name>.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              OpenBaoKubernetesAuthRoleSpec defines the desired state of
+              OpenBaoKubernetesAuthRole.
+            properties:
+              aliasNameSource:
+                default: serviceaccount_uid
+                description: |-
+                  AliasNameSource controls how identity aliases are generated.
+                  serviceaccount_uid is the safer choice (UIDs are unique and
+                  non-reusable); serviceaccount_name lets you pre-create alias
+                  records but conflates SA recreations with the same name.
+                enum:
+                - serviceaccount_uid
+                - serviceaccount_name
+                type: string
+              audience:
+                description: |-
+                  Audience is the JWT audience claim bao verifies on login.
+                  Optional; bao defaults to no audience check when unset.
+                type: string
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls what happens to the bao-side role when
+                  this CR is deleted or its bao identity changes. Delete (the
+                  default) removes the role, so new logins through it stop;
+                  tokens already issued keep working until their TTL expires.
+                  Retain releases the CR without touching bao — the role survives
+                  as an intentional, logged orphan that no CR tracks afterward;
+                  use only where rendering churn must never drop live access.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              name:
+                description: |-
+                  Name overrides metadata.name when written to bao. Pattern is
+                  anchored — OpenAPI v3's `pattern` keyword does substring match
+                  by default, so an unanchored regex would accept "Bad_Name1"
+                  because the substring "a" matches. MaxLength matches DNS-1123
+                  (the conservative ceiling for k8s-style names).
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              openbaoNamespace:
+                description: |-
+                  OpenBaoNamespace targets a specific OpenBao namespace for this
+                  role's API calls (sets the X-Vault-Namespace header). Empty (the
+                  default) means the root namespace and matches pre-namespace-support
+                  behaviour. Nested namespaces are allowed via slash-separated
+                  segments (e.g. "acme/sub"); a trailing slash is accepted but not
+                  required (bao accepts both forms).
+                pattern: ^([a-z0-9]([-a-z0-9/]*[a-z0-9])?/?)?$
+                type: string
+              path:
+                description: |-
+                  Path is the auth mount under which the role is created. The bao
+                  path is auth/<path>/role/<name>. Plain string (not VCO's Path)
+                  because we don't need the legacy regex VCO carries.
+
+                  The Pattern accepts nested mount paths (e.g. dev/k8s, k8s/cluster-a)
+                  since bao supports them, but rejects whitespace, control chars,
+                  and shell metacharacters at admission instead of letting them
+                  surface as a bao 400 mid-reconcile. MaxLength=128 is well above
+                  any realistic mount path while still bounding the request URL.
+                maxLength: 128
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9_./-]*$
+                type: string
+              policies:
+                description: Policies is the list of bao policy names this role binds.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              targetNamespaces:
+                description: |-
+                  TargetNamespaces selects the set of Kubernetes namespaces whose
+                  service accounts bind to this role.
+                properties:
+                  targetNamespaceSelector:
+                    description: |-
+                      TargetNamespaceSelector matches namespaces by label. Re-resolved
+                      on every reconcile and on every namespace label change (the
+                      controller's Watches(&corev1.Namespace{}) fans out via mapFn).
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  targetNamespaces:
+                    description: |-
+                      TargetNamespaces is a literal list of namespace names. Static —
+                      not re-resolved on namespace label change. Use this when the
+                      namespace set is known at apply time and does not move.
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
+              targetServiceAccounts:
+                default:
+                - default
+                description: |-
+                  TargetServiceAccounts is the list of service accounts inside each
+                  matched namespace whose tokens may exchange for a bao token via
+                  this role. Default is "default" because that's the typical SA a
+                  pod runs under absent explicit configuration.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              tokenBoundCIDRs:
+                description: |-
+                  TokenBoundCIDRs restricts which client IPs may use tokens issued
+                  from this role.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              tokenExplicitMaxTTL:
+                description: |-
+                  TokenExplicitMaxTTL is a hard cap on token lifetime that ignores
+                  renewals. Bao-format duration string. Empty omits the field.
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+              tokenMaxTTL:
+                description: |-
+                  TokenMaxTTL caps token renewal lifetime. Bao-format duration
+                  string (e.g. "24h", "86400s"). Empty omits the field on upsert.
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+              tokenNoDefaultPolicy:
+                description: |-
+                  TokenNoDefaultPolicy, when true, prevents bao from attaching its
+                  "default" policy to tokens issued by this role. Pointer to
+                  distinguish "leave at bao's default" from explicit false.
+                type: boolean
+              tokenNumUses:
+                description: |-
+                  TokenNumUses caps how many times a token may be used; 0 means
+                  unlimited. Pointer because 0 is a meaningful explicit value
+                  (override mount default) distinct from "leave at default".
+                minimum: 0
+                type: integer
+              tokenPeriod:
+                description: |-
+                  TokenPeriod, if set, makes tokens issued from this role periodic
+                  (renewable indefinitely as long as the period elapses). Bao-format
+                  duration string. Empty omits the field.
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+              tokenTTL:
+                description: |-
+                  TokenTTL is the bao-format duration string (e.g. "1h", "3600s",
+                  or compound forms like "1h30m") for the incremental token
+                  lifetime. Empty omits the field on upsert so bao falls back to
+                  mount defaults. The Pattern requires explicit units (no bare
+                  integers) so admission rejects typos like "1 hour" instead of
+                  surfacing them as a bao 400 mid-reconcile.
+                pattern: ^([0-9]+(ns|us|ms|s|m|h|d))+$
+                type: string
+              tokenType:
+                default: default
+                description: |-
+                  TokenType is the kind of token (service / batch / default /
+                  default-service / default-batch). Empty omits the field so bao
+                  uses the mount-tuned default.
+                enum:
+                - service
+                - batch
+                - default
+                - default-service
+                - default-batch
+                type: string
+            required:
+            - path
+            - policies
+            - targetNamespaces
+            - targetServiceAccounts
+            type: object
+          status:
+            description: OpenBaoKubernetesAuthRoleStatus defines the observed state.
+            properties:
+              baoWritten:
+                description: |-
+                  BaoWritten records whether this CR has ever successfully written
+                  to OpenBao. The shared reconciler uses it on the deletion path
+                  to decide whether to call BaoDelete; without a durable signal a
+                  CR whose Ready flipped True→False (e.g. token lost capability)
+                  before deletion would silently leak the bao role.
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastWrittenBaoName:
+                description: |-
+                  LastWrittenBaoName captures the role name the controller last
+                  successfully wrote. The next reconcile compares this against
+                  the current BaoName(); a mismatch means the user renamed via
+                  spec.name and the controller deletes the previous bao role
+                  before recording the new identity.
+                type: string
+              lastWrittenOpenBaoNamespace:
+                description: |-
+                  LastWrittenOpenBaoNamespace captures the OpenBao namespace the
+                  controller last wrote into. Combined with LastWrittenBaoName
+                  forms the full identity tuple.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

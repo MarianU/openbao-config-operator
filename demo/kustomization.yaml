@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - selector-namespaces.yaml
+  - policy.yaml
+  - kubernetesauthenginerole-static.yaml
+  - kubernetesauthenginerole-selector.yaml

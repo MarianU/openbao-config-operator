@@ -1,0 +1,26 @@
+# OIDC role at /v1/auth/oidc/role/tenant. Maps inbound OIDC tokens'
+# email claim to the bao identity, and grants the "tenant" policy on a
+# successful login. Pairs with an OpenBaoJWTOIDCAuthEngineConfig at
+# the same path.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoJWTOIDCAuthEngineRole
+metadata:
+  name: tenant
+  namespace: openbao-config-operator-system
+spec:
+  path: oidc
+  roleType: oidc
+  userClaim: email
+  boundAudiences:
+    - bao-tenant-client
+  allowedRedirectUris:
+    - https://bao.example.com/ui/vault/auth/oidc/oidc/callback
+  oidcScopes:
+    - profile
+    - email
+    - groups
+  groupsClaim: groups
+  tokenPolicies:
+    - tenant
+  tokenTtl: 1h
+  tokenMaxTtl: 24h

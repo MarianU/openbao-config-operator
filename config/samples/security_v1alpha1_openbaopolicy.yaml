@@ -1,0 +1,17 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoPolicy
+metadata:
+  name: secret-reader
+  namespace: openbao-config-operator-system
+spec:
+  # spec.name defaults to metadata.name; set it if the bao-side policy name
+  # must differ from the Kubernetes resource name.
+  # spec.openbaoNamespace targets a specific OpenBao namespace via the
+  # X-Vault-Namespace header. Empty (the default) means root.
+  policy: |
+    path "secret/data/public/*" {
+      capabilities = ["read", "list"]
+    }
+    path "secret/metadata/public/*" {
+      capabilities = ["list"]
+    }

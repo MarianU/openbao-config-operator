@@ -1,0 +1,21 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoKubernetesAuthRole
+metadata:
+  name: team-a-readers
+  namespace: openbao-config-operator-system
+spec:
+  path: kubernetes
+  policies:
+    - team-a-secret-reader
+  targetServiceAccounts:
+    - default
+  # Label-driven namespace binding. The controller watches Namespace
+  # labels and re-resolves on every label change, so adding the matching
+  # label to a new namespace rebinds the bao role within seconds.
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        stakater.com/tenant: team-a
+  audience: vault
+  tokenTTL: 1h
+  tokenMaxTTL: 24h
