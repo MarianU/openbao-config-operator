@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
 )
 
 // status returns a *baoclient.StatusError mimicking what the wrapper at

@@ -50,7 +50,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject"
+	"github.com/stakater/openbao-config-operator/internal/vaultobject"
 )
 
 // NoNamespacePlaceholder is the sentinel value the controller writes to
