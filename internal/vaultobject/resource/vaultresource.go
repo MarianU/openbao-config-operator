@@ -23,7 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject"
+	"github.com/stakater/openbao-config-operator/internal/vaultobject"
 )
 
 // EventRecorder reports a denied write to its own log rather than to the

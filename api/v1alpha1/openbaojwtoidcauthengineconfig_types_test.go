@@ -11,7 +11,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
 )
 
 const (

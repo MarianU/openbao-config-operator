@@ -4,20 +4,6 @@
 
 MTO OpenBao Extension
 
-## Go module setup for private repos
-
-This project depends on private modules under `github.com/stakater-ab`.
-
-Before running `make build` or `go mod tidy`, configure Go to treat them as private:
-
-```bash
-# Tell Go to skip proxy/caching for private modules
-export GOPRIVATE=github.com/stakater-ab/*
-
-# If you use SSH for GitHub (recommended):
-git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
-```
-
 ## OpenBao authentication
 
 The operator holds no stored OpenBao credential. It selects an auth mode from

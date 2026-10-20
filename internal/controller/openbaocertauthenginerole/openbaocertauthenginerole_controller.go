@@ -14,9 +14,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
-	"github.com/stakater-ab/openbao-config-operator/internal/vaultobject/resource"
+	v1alpha1 "github.com/stakater/openbao-config-operator/api/v1alpha1"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
+	"github.com/stakater/openbao-config-operator/internal/vaultobject/resource"
 )
 
 // +kubebuilder:rbac:groups=security.mto.stakater.com,resources=openbaocertauthengineroles,verbs=get;list;watch;update;patch

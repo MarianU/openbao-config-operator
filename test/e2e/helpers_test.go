@@ -12,8 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	v1alpha1 "github.com/stakater/openbao-config-operator/api/v1alpha1"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
 )
 
 // Shared timing knobs. 90s default covers worst-case reconcile under

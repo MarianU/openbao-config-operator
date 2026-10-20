@@ -8,7 +8,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
 )
 
 const sampleGroupName = "team-a"

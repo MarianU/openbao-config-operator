@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
 )
 
 const (

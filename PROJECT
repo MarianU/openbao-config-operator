@@ -9,5 +9,5 @@ plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: openbao-config-operator
-repo: github.com/stakater-ab/openbao-config-operator
+repo: github.com/stakater/openbao-config-operator
 version: "3"

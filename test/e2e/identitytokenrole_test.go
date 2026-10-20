@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/stakater-ab/openbao-config-operator/api/v1alpha1"
-	baoclient "github.com/stakater-ab/openbao-config-operator/internal/client"
-	"github.com/stakater-ab/openbao-config-operator/test/utils"
+	v1alpha1 "github.com/stakater/openbao-config-operator/api/v1alpha1"
+	baoclient "github.com/stakater/openbao-config-operator/internal/client"
+	"github.com/stakater/openbao-config-operator/test/utils"
 )
 
 var _ = Describe("OpenBaoIdentityTokenRole CR → OpenBao", Ordered, func() {
