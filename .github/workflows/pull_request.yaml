@@ -20,9 +20,7 @@ jobs:
       CONTAINER_REGISTRY_USERNAME: stakater-user
       CONTAINER_REGISTRY_PASSWORD: ${{ secrets.GHCR_TOKEN }}
       SLACK_WEBHOOK_URL: ${{ secrets.STAKATER_DELIVERY_SLACK_WEBHOOK }}
-      STAKATER_AB_REPOS: ${{ secrets.STAKATER_AB_REPOS }}
     with:
       ENABLE_LINTING: true
       ENABLE_UNIT_TESTS: true
-      ENABLE_STAKATER_AB_GIT_AUTH: true
       GO_VERSION: "1.26"
