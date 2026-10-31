@@ -12,6 +12,10 @@ lands its primitive(s).
 | `OpenBaoPolicy` | `security.mto.stakater.com/v1alpha1` | Namespaced | Authors an OpenBao ACL policy at `sys/policies/acl/<name>`. Optionally scoped to an OpenBao namespace via `spec.openbaoNamespace` (X-Vault-Namespace). |
 | `OpenBaoKubernetesAuthRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | Authors an OpenBao Kubernetes-auth role at `auth/<spec.path>/role/<name>`. Binds service accounts in selected namespaces to bao policies. |
 | `OpenBaoSecretEngine` | `security.mto.stakater.com/v1alpha1` | Namespaced | Manages a bao secret-engine mount lifecycle at `sys/mounts/<path>`. Discriminated-union spec selects engine kind: `kvV2`, `transit`, `pki`. Optionally scoped via `spec.openbaoNamespace`. Auth-method mounts are out of scope for this Kind. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
+| `OpenBaoKvSecret` | `security.mto.stakater.com/v1alpha1` | Namespaced | *Fork addition (reference-only)* — mirrors a same-namespace Kubernetes Secret (`spec.sourceSecret`) into an OpenBao KVv2 secret at `<spec.mount>/data/<spec.path>`, and re-syncs on every Secret change. The CR never holds secret material (Git stays clean); the value lives only in the source Secret + OpenBao. `spec.ensureSecret` creates an empty placeholder Secret if it is missing. Fills the "seed arbitrary KV" gap declaratively instead of via a one-shot script. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
+| `OpenBaoGeneratedSecret` | `security.mto.stakater.com/v1alpha1` | Namespaced | *Fork addition — generated/rotating* — makes OpenBao the system of record for a randomly generated secret so two or more services can share the same value with nobody setting it. The operator generates a `crypto/rand` value per `spec.generator` and writes it to `<spec.mount>/data/<spec.path>`; on `spec.rotationPeriod` it regenerates + rewrites (KVv2 version bump). VSO (read side, unchanged) syncs the path to each consumer's K8s Secret; Reloader/restart-on-change rotates the deployments, mirroring the database-password pattern. The value is never stored on the CR. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
+| `OpenBaoDatabaseEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | *Fork addition* — owns one database secret-engine connection config at `<spec.mount>/config/<spec.name>`. The database mount itself is deployment-owned (enabled by the operator-provisioning step as type=*database*); this CR manages only the connection beneath it. Credentials come from `spec.credentialsRef` (a k8s Secret) and are interpolated into the `{{username}}/{{password}}` placeholders of `spec.connectionUrl` at write time — never stored on the CR. Pairs with `OpenBaoDatabaseRole`. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
+| `OpenBaoDatabaseRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | *Fork addition* — owns one database static role at `<spec.mount>/roles/<spec.name>`. Defines how dynamic credentials are created/rotated/revoked for the connection named by `spec.database` (CREATE/GRANT/DROP statements, plus `defaultTtl`/`maxTtl`). A role may be consumed by a VSO dynamic-secret reader, so `deletionPolicy` defaults to `Retain`. CR deletion follows `spec.deletionPolicy`. |
 | `OpenBaoNamespace` | `security.mto.stakater.com/v1alpha1` | Namespaced | Owns a bao namespace at `sys/namespaces/<name>`. Nested via `spec.openbaoNamespace` as the parent. CR deletion follows `spec.deletionPolicy` (default `Retain`) — with `Delete`, bao CASCADES the namespace delete through every mount, secret and key inside. |
 | `OpenBaoPKISecretEngineConfig` | `security.mto.stakater.com/v1alpha1` | Namespaced | Generates the root CA at `<path>/root/generate/internal` and writes URL config at `<path>/config/urls`. Pairs with an existing `OpenBaoSecretEngine` of kind=pki at the same path. **IsDeletable=false**: CR delete does not disable the bao mount (would destroy the private key). |
 | `OpenBaoPKISecretEngineRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | PKI issuance role at `<path>/roles/<name>`. Defines what certs may be issued from a PKI mount (allowed domains, key type/bits, EKU flags, TTL). Requires the mount to have a CA configured. |
@@ -45,7 +49,7 @@ defaulting:
 
 | Group | Kinds | Default | Rationale |
 |---|---|---|---|
-| Data-bearing | `OpenBaoSecretEngine`, `OpenBaoNamespace`, `OpenBaoAuthMethod` | `Retain` | Deleting a mount/namespace destroys secrets, keys and CA material unrecoverably. A stale CRD or pruned field must never re-enable destruction. |
+| Data-bearing | `OpenBaoSecretEngine`, `OpenBaoNamespace`, `OpenBaoAuthMethod`, `OpenBaoKvSecret`, `OpenBaoGeneratedSecret`, `OpenBaoDatabaseEngineConfig`, `OpenBaoDatabaseRole` | `Retain` | Deleting a mount/namespace destroys secrets, keys and CA material unrecoverably. A stale CRD or pruned field must never re-enable destruction. A database connection holds its admin credentials (and is referenced by roles) and a role may be an active VSO consumer, so both default to Retain. |
 | Grant | `OpenBaoPolicy`, `OpenBaoKubernetesAuthRole`, `OpenBaoCertAuthEngineRole`, `OpenBaoJWTOIDCAuthEngineRole`, `OpenBaoPKISecretEngineRole`, `OpenBaoGroup`, `OpenBaoGroupAlias`, `OpenBaoIdentityTokenRole` | `Delete` | Deleting a grant revokes the access it carried (mandatory policy detach). A stale CRD or pruned field must never silently stop revocation. |
 
 Kinds with hardcoded orphan-by-design semantics are unaffected:
@@ -65,6 +69,75 @@ already Terminating — flipping a stuck `Delete` back to `Retain` also releases
 a CR wedged on a failing bao delete). The `openbao-config-mto` charts drive
 the field from `safety.deletionProtection` / `safety.grantDeletionProtection`
 values.
+
+---
+
+## `OpenBaoKvSecret` (reference-only mirror)
+
+Mirrors a same-namespace Kubernetes Secret into an OpenBao KVv2 path. The CR
+carries only a reference (`spec.sourceSecret`) plus the bao mount/path, never
+a value — so Git stays clean while OpenBao becomes a distribution hub VSO can
+serve from.
+
+```yaml
+kind: OpenBaoKvSecret
+metadata: { name: app-settings, namespace: apps }
+spec:
+  mount: secret               # default
+  path: apps/settings         # bao path <mount>/data/<path>
+  sourceSecret: app-settings  # same-ns K8s Secret owning the value
+  ensureSecret: true          # create empty placeholder Secret if missing
+  # openbaoNamespace: acme/
+  # deletionPolicy: Retain    # default; Delete removes on CR delete
+```
+
+The operator: (1) ensures the source Secret exists (creates it empty when
+`ensureSecret: true`), (2) copies its `.data` into bao, (3) watches it and
+re-syncs on every change. Until the Secret is populated the bao side stays
+empty. Typical bootstrap: apply the CR and let the real value be filled into
+the anchored `sourceSecret` later.
+
+## `OpenBaoGeneratedSecret` (generated + rotating)
+
+OpenBao is the system of record for a random value shared by two or more
+consumers; nobody sets it — the operator generates and rotates it.
+
+```yaml
+kind: OpenBaoGeneratedSecret
+metadata: { name: db-admin, namespace: ai }
+spec:
+  mount: secret               # default
+  path: apps/db/admin         # bao path <mount>/data/<path>
+  rotationPeriod: 720h        # regenerate+rewrite after 30d; 0 = never rotate
+  generator:
+    key: password             # store under this key (default "value")
+    length: 24                # default; excludes prefix
+    charset: alphaNumSpecial  # alphaNumSpecial|alphaNum|alpha|lower|upper|numeric|hex
+    # prefix: "$2b$"         # optional literal prefix
+  # deletionPolicy: Retain
+```
+
+Each consumer gets a VSO `VaultStaticSecret` on the same path → VSO syncs the
+value to its K8s Secret → Reloader/restart-on-change rotates the deployment.
+Rotation is operator-driven (OpenBao itself cannot re-randomize a KVv2 value
+on a timer), so it fires within ~5m of `rotationPeriod` due. The value is
+never persisted on the CR.
+
+**On-demand rotation** — force an immediate rotate + rewrite without touching
+the spec (e.g. before a breach window or right before a consumer deployment
+rotates):
+
+```sh
+kubectl annotate openbaogeneratedsecret/db-admin \
+  security.mto.stakater.com/rotate="$(date +%s)"
+```
+
+A fresh, non-empty annotation value triggers exactly one rotation (KVv2
+version bump) near-immediately, regardless of `rotationPeriod` — even a
+`rotationPeriod: 0` (never-rotate) secret rotates on request. The controller
+records the processed token in `status.lastRequestedRotation`, so repeating
+the same value is a no-op and never loops. Rotate again later with a new
+token value (e.g. a new timestamp).
 
 ---
 

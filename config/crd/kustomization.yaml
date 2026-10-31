@@ -17,3 +17,7 @@ resources:
   - bases/security.mto.stakater.com_openbaojwtoidcauthengineroles.yaml
   - bases/security.mto.stakater.com_openbaokubernetesauthengineconfigs.yaml
   - bases/security.mto.stakater.com_openbaotransitkeys.yaml
+  - bases/security.mto.stakater.com_openbaokvsecrets.yaml
+  - bases/security.mto.stakater.com_openbaogeneratedsecrets.yaml
+  - bases/security.mto.stakater.com_openbaodatabaseengineconfigs.yaml
+  - bases/security.mto.stakater.com_openbaodatabaseroles.yaml

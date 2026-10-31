@@ -1,0 +1,44 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoDatabaseEngineConfig
+metadata:
+  name: app-db
+  namespace: openbao-config-operator-system
+spec:
+  # Database secret-engine mount. Defaults to "database". The mount is
+  # deployment-owned (enabled by the operator-provisioning step); this CR
+  # manages only the connection beneath it.
+  # mount: database
+
+  # Database plugin serving this connection.
+  pluginName: mysql-database-plugin
+
+  # Connection template. {{username}}/{{password}} placeholders are required;
+  # the controller interpolates the credentials resolved from credentialsRef.
+  connectionUrl: "{{username}}:{{password}}@tcp(db.example.com:3306)/"
+
+  # Kubernetes Secret holding the connection admin username/password. The
+  # controller reads it at write time and never stores the material on the CR.
+  # Keys default to "username"/"password".
+  credentialsRef:
+    name: db-admin
+    # namespace: openbao-config-operator-system
+
+  # Roles permitted on this connection (server-enforced allowed_roles).
+  allowedRoles:
+    - app
+
+  # Ping the database on write.
+  verifyConnection: true
+
+  # Connection pool bounds (0 = plugin default).
+  maxOpenConnections: 5
+  maxIdleConnections: 2
+  # maxConnectionLifetime: 300s
+
+  # TLS: override server-name validation and/or skip verification.
+  # tlsServerName: db.example.com
+  # tlsSkipVerify: false
+
+  # Data-bearing kind: Retain (default) orphans the connection on CR delete;
+  # Delete removes it.
+  deletionPolicy: Retain

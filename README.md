@@ -50,8 +50,9 @@ would kill the script midway.
 VAULT_TOKEN=${BOOT_TOKEN} ./hack/e2e/openbao/bootstrap_operator_auth.sh
 ```
 
-**3. Deploy or upgrade the operator** by whichever route you use (kustomize,
-Helm, OLM bundle). The manifests already carry `BAO_AUTH_METHOD=kubernetes` and
+**3. Deploy or upgrade the operator** by whichever route you use (kustomize or
+Helm / ArgoCD; see the distribution note above). The manifests already carry
+`BAO_AUTH_METHOD=kubernetes` and
 the audience-bound projected token volume.
 
 Steps 2 and 3 are order-independent. An operator running without the bootstrap

@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -304,4 +305,24 @@ func TestPKIConfig_PrepareInternalValues_NoOp(t *testing.T) {
 	t.Parallel()
 	c := &OpenBaoPKISecretEngineConfig{}
 	require.NoError(t, c.PrepareInternalValues(context.Background(), c))
+}
+
+// TestPKIConfig_CRLFieldJSONTag pins the spec JSON field name for
+// CRLDistributionPoints to the lower-camelCase form so it stays consistent
+// with issuingCertificates/ocspServers and the GetPayload key. A capital-C
+// "CRLDistributionPoints" tag here previously produced a separate CRD field
+// that silently pruned manifest-set crlDistributionPoints URLs.
+func TestPKIConfig_CRLFieldJSONTag(t *testing.T) {
+	t.Parallel()
+	c := &OpenBaoPKISecretEngineConfig{}
+	c.Spec.CRLDistributionPoints = []string{"https://example.com/crl"}
+	b, err := json.Marshal(c)
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"crlDistributionPoints"`)
+	require.NotContains(t, string(b), `"CRLDistributionPoints"`)
+
+	// Round-trip: a lower-camelCase field must unmarshal into Spec.
+	round := OpenBaoPKISecretEngineConfig{}
+	require.NoError(t, json.Unmarshal(b, &round))
+	require.Equal(t, []string{"https://example.com/crl"}, round.Spec.CRLDistributionPoints)
 }

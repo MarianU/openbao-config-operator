@@ -34,6 +34,10 @@ const (
 )
 
 type fakeBao struct {
+	// Embedded to carry the full Client interface; KV methods are
+	// not exercised by this package and fall through to nil (panic if
+	// called from a test, which would be a test bug).
+	baoclient.Client
 	mounts map[string]*baoclient.AuthMethodMount // key: ns|path
 
 	enableErr  error

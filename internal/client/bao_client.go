@@ -98,6 +98,16 @@ type Client interface {
 	ReadPKIRole(ctx context.Context, mount, name string, opts ...CallOption) (*PKIRoleSpec, error)
 	DeletePKIRole(ctx context.Context, mount, name string, opts ...CallOption) error
 
+	// Database secret engine. Connection configs live at
+	// <mount>/config/<name>, static roles at <mount>/roles/<name>.
+	// Used by OpenBaoDatabaseEngineConfig / OpenBaoDatabaseRole.
+	WriteDatabaseConnection(ctx context.Context, mount, name string, spec DatabaseConnectionConfig, opts ...CallOption) error
+	ReadDatabaseConnection(ctx context.Context, mount, name string, opts ...CallOption) (*DatabaseConnectionConfig, error)
+	DeleteDatabaseConnection(ctx context.Context, mount, name string, opts ...CallOption) error
+	WriteDatabaseRole(ctx context.Context, mount, name string, spec DatabaseRoleSpec, opts ...CallOption) error
+	ReadDatabaseRole(ctx context.Context, mount, name string, opts ...CallOption) (*DatabaseRoleSpec, error)
+	DeleteDatabaseRole(ctx context.Context, mount, name string, opts ...CallOption) error
+
 	// Identity groups (identity/group). Groups bundle policies + members
 	// (entities or other groups for type=internal, alias for type=external).
 	// Bao writes by POSTing to identity/group with name in body; reads at
@@ -169,6 +179,15 @@ type Client interface {
 	ReadTransitKey(ctx context.Context, mount, name string, opts ...CallOption) (*TransitKeyInfo, error)
 	UpdateTransitKeyConfig(ctx context.Context, mount, name string, spec TransitKeySpec, opts ...CallOption) error
 	DeleteTransitKey(ctx context.Context, mount, name string, opts ...CallOption) error
+
+	// KVv2 secrets (<mount>/data/<path>). WriteKVSecret upserts the full
+	// secret (the CR is the source of truth — keys not declared are
+	// removed) and returns bao's new version. ReadKVSecret surfaces the
+	// declared data + metadata; ErrNotFound when the path has no versions.
+	// DeleteKVSecret removes the secret, idempotent on 404.
+	WriteKVSecret(ctx context.Context, mount, path string, data map[string]string, opts ...CallOption) (int, error)
+	ReadKVSecret(ctx context.Context, mount, path string, opts ...CallOption) (*KVSecret, error)
+	DeleteKVSecret(ctx context.Context, mount, path string, opts ...CallOption) error
 }
 
 // CertAuthConfigSpec is the write payload for auth/<mount>/config on
@@ -1169,8 +1188,8 @@ func (c *sdkClient) GetK8sRole(ctx context.Context, authMount, roleName string, 
 		Policies:                      asStringSlice(sec.Data["token_policies"]),
 		BoundServiceAccountNames:      asStringSlice(sec.Data["bound_service_account_names"]),
 		BoundServiceAccountNamespaces: asStringSlice(sec.Data["bound_service_account_namespaces"]),
-		TokenTTL:                      asString(sec.Data["token_ttl"]),
-		TokenMaxTTL:                   asString(sec.Data["token_max_ttl"]),
+		TokenTTL:                      baoTTLDuration(sec.Data["token_ttl"]),
+		TokenMaxTTL:                   baoTTLDuration(sec.Data["token_max_ttl"]),
 		Renewable:                     asBoolPtr(sec.Data["token_renewable"]),
 		Audience:                      asString(sec.Data["audience"]),
 		AliasNameSource:               asString(sec.Data["alias_name_source"]),
@@ -1802,6 +1821,100 @@ func mapToTransitKey(d map[string]interface{}) *TransitKeyInfo {
 	return out
 }
 
+// ---- KVv2 secrets (<mount>/data/<path>) ----
+
+// KVSecret is the read shape for GET <mount>/data/<path>. It surfaces the
+// declared data plus the KVv2 metadata (version, created_time) the
+// controller stamps on status. Drift comparison uses Data only.
+type KVSecret struct {
+	Data        map[string]string
+	Version     int
+	CreatedTime string
+}
+
+// WriteKVSecret upserts the full KVv2 secret at <mount>/data/<path>.
+// KVv2 PUT replaces the secret with exactly the given keys — the CR is the
+// source of truth, so keys not declared in spec.data are removed. Returns
+// bao's new version (best-effort: 0 when the response carries no version).
+func (c *sdkClient) WriteKVSecret(ctx context.Context, mount, path string, data map[string]string, opts ...CallOption) (int, error) {
+	mount = strings.Trim(mount, "/")
+	path = strings.Trim(path, "/")
+	if mount == "" || path == "" {
+		return 0, errors.New("kv mount or secret path is empty")
+	}
+	if len(data) == 0 {
+		return 0, errors.New("kv secret data is empty")
+	}
+	body := map[string]interface{}{"data": data}
+	resp, err := c.clientFor(opts).Logical().WriteWithContext(ctx, mount+"/data/"+path, body)
+	if err != nil {
+		return 0, wrapStatus(err)
+	}
+	if resp == nil || resp.Data == nil {
+		return 0, nil
+	}
+	// vault/api already unwraps the response's top-level "data" object into
+	// Secret.Data, so the KVv2 write response `{"data":{"version":N}}`
+	// surfaces the version directly at Data["version"], not under a nested
+	// "data" key.
+	if p := asIntPtr(resp.Data["version"]); p != nil {
+		return *p, nil
+	}
+	return 0, nil
+}
+
+// ReadKVSecret fetches the secret data + metadata at <mount>/data/<path>.
+// KVv2 answers 404 (or 200 with empty body) when the path has no versions;
+// both are coalesced to ErrNotFound so the controller's "needs create"
+// branch fires consistently.
+func (c *sdkClient) ReadKVSecret(ctx context.Context, mount, path string, opts ...CallOption) (*KVSecret, error) {
+	mount = strings.Trim(mount, "/")
+	path = strings.Trim(path, "/")
+	resp, err := c.clientFor(opts).Logical().ReadWithContext(ctx, mount+"/data/"+path)
+	if err != nil {
+		wrapped := wrapStatus(err)
+		var se *StatusError
+		if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, wrapped
+	}
+	if resp == nil || resp.Data == nil {
+		return nil, ErrNotFound
+	}
+	kv := &KVSecret{}
+	if d, ok := resp.Data["data"].(map[string]interface{}); ok {
+		kv.Data = asStringMap(d)
+	}
+	if meta, ok := resp.Data["metadata"].(map[string]interface{}); ok {
+		if p := asIntPtr(meta["version"]); p != nil {
+			kv.Version = *p
+		}
+		kv.CreatedTime = asString(meta["created_time"])
+	}
+	if len(kv.Data) == 0 && kv.Version == 0 {
+		return nil, ErrNotFound
+	}
+	return kv, nil
+}
+
+// DeleteKVSecret removes the secret at <mount>/data/<path>. Idempotent on
+// 404.
+func (c *sdkClient) DeleteKVSecret(ctx context.Context, mount, path string, opts ...CallOption) error {
+	mount = strings.Trim(mount, "/")
+	path = strings.Trim(path, "/")
+	_, err := c.clientFor(opts).Logical().DeleteWithContext(ctx, mount+"/data/"+path)
+	if err == nil {
+		return nil
+	}
+	wrapped := wrapStatus(err)
+	var se *StatusError
+	if errors.As(wrapped, &se) && se.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return wrapped
+}
+
 // ---- helpers ----
 
 // isAlreadyInUse classifies bao's idempotent-re-enable signal.
@@ -1863,6 +1976,22 @@ func asString(v any) string {
 		return s
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// baoTTLDuration renders a bao-read TTL into the CRD-valid bao duration
+// string. OpenBao stores TTLs as integer seconds but the kubernetes-auth
+// role CRD XValidation only accepts a unit-suffixed duration (e.g. "1h",
+// "3600s"), so a numeric read must be normalized to "<n>s" for the drift
+// comparator to see the same value the spec validates. Strings are passed
+// through unchanged (bao already echoes them as durations).
+func baoTTLDuration(v any) string {
+	if p := asIntPtr(v); p != nil {
+		if *p == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%ds", *p)
+	}
+	return asString(v)
 }
 
 func asBoolPtr(v any) *bool {

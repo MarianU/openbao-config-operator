@@ -40,6 +40,9 @@ import (
 	openbaoauthmethod "github.com/stakater/openbao-config-operator/internal/controller/openbaoauthmethod"
 	openbaocertcfg "github.com/stakater/openbao-config-operator/internal/controller/openbaocertauthengineconfig"
 	openbaocertrole "github.com/stakater/openbao-config-operator/internal/controller/openbaocertauthenginerole"
+	openbaodbc "github.com/stakater/openbao-config-operator/internal/controller/openbaodatabaseengineconfig"
+	openbaodbr "github.com/stakater/openbao-config-operator/internal/controller/openbaodatabaserole"
+	openbaogeneratedsecret "github.com/stakater/openbao-config-operator/internal/controller/openbaogeneratedsecret"
 	openbaogroup "github.com/stakater/openbao-config-operator/internal/controller/openbaogroup"
 	openbaogroupalias "github.com/stakater/openbao-config-operator/internal/controller/openbaogroupalias"
 	openbaoitr "github.com/stakater/openbao-config-operator/internal/controller/openbaoidentitytokenrole"
@@ -47,6 +50,7 @@ import (
 	openbaojwtrole "github.com/stakater/openbao-config-operator/internal/controller/openbaojwtoidcauthenginerole"
 	openbaok8scfg "github.com/stakater/openbao-config-operator/internal/controller/openbaokubernetesauthengineconfig"
 	openbaokar "github.com/stakater/openbao-config-operator/internal/controller/openbaokubernetesauthrole"
+	openbaokvsecret "github.com/stakater/openbao-config-operator/internal/controller/openbaokvsecret"
 	openbaonamespace "github.com/stakater/openbao-config-operator/internal/controller/openbaonamespace"
 	openbaopkic "github.com/stakater/openbao-config-operator/internal/controller/openbaopkisecretengineconfig"
 	openbaopkir "github.com/stakater/openbao-config-operator/internal/controller/openbaopkisecretenginerole"
@@ -222,6 +226,10 @@ func setupReconcilers(mgr ctrl.Manager) error {
 		openbaojwtrole.NewOpenBaoJWTOIDCAuthEngineRoleReconcilerWithClient(mgr, bao),
 		openbaok8scfg.NewOpenBaoKubernetesAuthEngineConfigReconcilerWithClient(mgr, bao, hmac),
 		openbaotk.NewOpenBaoTransitKeyReconcilerWithClient(mgr, bao),
+		openbaokvsecret.NewOpenBaoKvSecretReconcilerWithClient(mgr, bao),
+		openbaogeneratedsecret.NewOpenBaoGeneratedSecretReconcilerWithClient(mgr, bao),
+		openbaodbc.NewOpenBaoDatabaseEngineConfigReconcilerWithClient(mgr, bao),
+		openbaodbr.NewOpenBaoDatabaseRoleReconcilerWithClient(mgr, bao),
 	}
 	for _, r := range reconcilers {
 		if err := r.SetupWithManager(mgr); err != nil {

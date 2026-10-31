@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "local>stakater/.github:renovate"
+    "config:recommended",
+    "docker:enableMajor"
   ],
   "packageRules": [
     {

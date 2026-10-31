@@ -333,7 +333,13 @@ type OpenBaoPKISecretEngineConfigSpec struct {
 
 	// CRLDistributionPoints are the CRL distribution-point URLs.
 	// +kubebuilder:validation:Optional
-	CRLDistributionPoints []string `json:"CRLDistributionPoints,omitempty"`
+	//
+	// NOTE: the JSON tag must stay lower-camelCase (crlDistributionPoints) to
+	// match issuingCertificates/ocspServers and the payload key used by
+	// GetPayload. The earlier CRLDistributionPoints tag produced a separate
+	// capital-C CRD field, so manifest-set crl URLs were silently pruned by the
+	// API server and never written to OpenBao.
+	CRLDistributionPoints []string `json:"crlDistributionPoints,omitempty"`
 
 	// OCSPServers are the OCSP responder URLs.
 	// +kubebuilder:validation:Optional

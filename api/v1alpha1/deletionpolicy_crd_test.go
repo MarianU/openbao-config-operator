@@ -24,9 +24,16 @@ func TestDeletionPolicy_CRDMarkers(t *testing.T) {
 
 	expected := map[string]DeletionPolicy{
 		// Data-bearing kinds: destruction must be opt-in.
-		prefix + "openbaosecretengines.yaml": DeletionPolicyRetain,
-		prefix + "openbaonamespaces.yaml":    DeletionPolicyRetain,
-		prefix + "openbaoauthmethods.yaml":   DeletionPolicyRetain,
+		prefix + "openbaosecretengines.yaml":    DeletionPolicyRetain,
+		prefix + "openbaonamespaces.yaml":       DeletionPolicyRetain,
+		prefix + "openbaoauthmethods.yaml":      DeletionPolicyRetain,
+		prefix + "openbaokvsecrets.yaml":        DeletionPolicyRetain,
+		prefix + "openbaogeneratedsecrets.yaml": DeletionPolicyRetain,
+		// database connection config + role default to Retain: both are
+		// data-bearing — the connection holds admin creds and is referenced
+		// by roles, and a role may be actively consumed by a VSO reader.
+		prefix + "openbaodatabaseengineconfigs.yaml": DeletionPolicyRetain,
+		prefix + "openbaodatabaseroles.yaml":         DeletionPolicyRetain,
 		// Grant kinds: revocation must stay on by default.
 		prefix + "openbaopolicies.yaml":               DeletionPolicyDelete,
 		prefix + "openbaokubernetesauthroles.yaml":    DeletionPolicyDelete,

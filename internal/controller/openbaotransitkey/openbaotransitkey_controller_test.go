@@ -35,6 +35,10 @@ const (
 // fakeBao keys keys (heh) by (openbaoNs, mount, name) so the same key
 // name on different mounts or namespaces is correctly distinct.
 type fakeBao struct {
+	// Embedded to carry the full Client interface; KV methods are
+	// not exercised by this package and fall through to nil (panic if
+	// called from a test, which would be a test bug).
+	baoclient.Client
 	keys map[string]*baoclient.TransitKeyInfo
 	// deletionBlocked, when true for a given key, causes
 	// DeleteTransitKey to return ErrDeletionNotAllowed regardless of

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -391,7 +392,7 @@ func TestReconcile_AddFinalizerUpdateFailureWritesStatus(t *testing.T) {
 	got := &stubCR{}
 	require.NoError(t, cl.Get(context.Background(),
 		types.NamespacedName{Namespace: "default", Name: "no-finalizer-yet"}, got))
-	require.Len(t, got.Status.Conditions, 1, "Ready must be written so the failure is user-visible")
+	require.Len(t, got.Status.Conditions, 3, "Ready+Synced+Progressing must be written so the failure is user-visible")
 	require.Equal(t, ConditionReady, got.Status.Conditions[0].Type)
 	require.Equal(t, metav1.ConditionFalse, got.Status.Conditions[0].Status)
 }
@@ -452,10 +453,75 @@ func TestSetReady_RetriesOnConflict(t *testing.T) {
 	got := &stubCR{}
 	require.NoError(t, cl.Get(context.Background(),
 		types.NamespacedName{Namespace: "default", Name: "retry"}, got))
-	require.Len(t, got.Status.Conditions, 1)
+	require.Len(t, got.Status.Conditions, 3)
 	require.Equal(t, ConditionReady, got.Status.Conditions[0].Type)
 	require.Equal(t, metav1.ConditionTrue, got.Status.Conditions[0].Status)
 }
+
+// TestConditions_ThreeStateOutput pins the Synced/Ready/Progressing condition
+// set the base writes, so the ArgoCD health.lua mapping (Synced=False ->
+// Degraded, Ready!=True -> Progressing, else Healthy) has a stable contract.
+func TestConditions_ThreeStateOutput(t *testing.T) {
+	t.Parallel()
+
+	// writeConditions reconciles setReady and returns the three conditions.
+	writeConditions := func(status metav1.ConditionStatus, reason, msg string) (req, syn, prog *metav1.Condition) {
+		scheme := stubScheme(t)
+		name := fmt.Sprintf("cond-%d", atomic.AddInt32(&condNameSeq, 1))
+		cl := crfake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(&stubCR{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}).
+			WithStatusSubresource(&stubCR{}).
+			Build()
+		r := &VaultResource[*stubCR]{
+			Client:        cl,
+			Scheme:        scheme,
+			Handlers:      (&recordingHandlers{}).handlers(),
+			FinalizerName: "stub.finalizer",
+		}
+		require.NoError(t, r.setReady(context.Background(),
+			types.NamespacedName{Namespace: "default", Name: name}, status, reason, msg))
+		got := &stubCR{}
+		require.NoError(t, cl.Get(context.Background(),
+			types.NamespacedName{Namespace: "default", Name: name}, got))
+		return apimeta.FindStatusCondition(got.Status.Conditions, ConditionReady),
+			apimeta.FindStatusCondition(got.Status.Conditions, ConditionSynced),
+			apimeta.FindStatusCondition(got.Status.Conditions, ConditionProgressing)
+	}
+
+	t.Run("converged", func(t *testing.T) {
+		t.Parallel()
+		ready, synced, progressing := writeConditions(metav1.ConditionTrue, ReasonReconciled, "")
+		require.NotNil(t, ready)
+		require.Equal(t, metav1.ConditionTrue, ready.Status)
+		require.Equal(t, metav1.ConditionTrue, synced.Status, "Ready=True must imply Synced=True")
+		require.Equal(t, metav1.ConditionFalse, progressing.Status, "converged must not be progressing")
+	})
+
+	t.Run("hard failure", func(t *testing.T) {
+		t.Parallel()
+		ready, synced, progressing := writeConditions(metav1.ConditionFalse, ReasonBaoError, "403 denied")
+		require.Equal(t, metav1.ConditionFalse, ready.Status)
+		require.Equal(t, metav1.ConditionFalse, synced.Status,
+			"a real reconcile failure must set Synced=False so Argo marks Degraded")
+		require.Equal(t, ReasonBaoError, synced.Reason)
+		require.Contains(t, synced.Message, "403 denied")
+		require.Equal(t, metav1.ConditionFalse, progressing.Status, "a stuck failure is not progressing")
+	})
+
+	t.Run("awaiting external signature", func(t *testing.T) {
+		t.Parallel()
+		ready, synced, progressing := writeConditions(metav1.ConditionFalse, ReasonAwaitingExternalSignature, "waiting for offline root")
+		require.Equal(t, metav1.ConditionFalse, ready.Status)
+		require.Equal(t, metav1.ConditionTrue, synced.Status,
+			"awaiting-signature is not a failure: Synced stays True")
+		require.Equal(t, metav1.ConditionTrue, progressing.Status,
+			"awaiting-signature must be Progressing, not Degraded")
+	})
+}
+
+// condNameSeq makes CRs created within a single test unique.
+var condNameSeq int32
 
 // Retained as a regression sentinel: the previous implementation logged
 // "may be orphaned" from a transient-condition heuristic. After replacing

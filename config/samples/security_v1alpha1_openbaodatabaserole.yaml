@@ -1,0 +1,35 @@
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoDatabaseRole
+metadata:
+  name: app
+  namespace: openbao-config-operator-system
+spec:
+  # Database secret-engine mount. Defaults to "database".
+  # mount: database
+
+  # Connection (db_name) this role targets. The OpenBaoDatabaseEngineConfig
+  # with that name must exist on the same mount.
+  database: app-db
+
+  # SQL executed on credential create. The order of statements is preserved.
+  creationStatements:
+    - "CREATE USER '{{name}}'@'%' IDENTIFIED BY '{{password}}'"
+    - "GRANT SELECT ON app.* TO '{{name}}'@'%'"
+
+  # SQL executed on lease revoke (cleanup).
+  revocationStatements:
+    - "DROP USER IF EXISTS '{{name}}'@'%'"
+
+  # rotationStatements / rollbackStatements are optional.
+  # rotationStatements:
+  #   - "SET PASSWORD FOR '{{name}}'@'%' = PASSWORD('{{password}}')"
+
+  credentialType: password
+
+  # Lease bounds of minted credentials.
+  defaultTtl: 1h
+  maxTtl: 24h
+
+  # A role may be consumed by a VSO dynamic-secret reader, so Retain
+  # (the default) is the safe choice; Delete removes it explicitly.
+  deletionPolicy: Retain

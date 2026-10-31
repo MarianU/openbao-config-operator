@@ -1,64 +1,19 @@
-# VERSION defines the project version for the bundle.
-# Update this value when you upgrade the version of your project.
-# To re-generate a bundle for another specific version without changing the standard setup, you can:
-# - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
-# - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.1
+# VERSION defines the project version. Update this value when you upgrade the
+# version of your project.
+VERSION ?= 0.0.8
 # Must equal the GitHub repository name. Stakater's shared CI derives the image
 # it advertises on the pull request and pulls back during e2e from the
 # repository name alone, so an image pushed under any other name is one nothing
 # downstream can find.
 OPERATOR_NAME ?= openbao-config-operator
-CATALOG_DIR_PATH ?= catalog
-DOCKER_REPO_BASE ?= ghcr.io/stakater
+DOCKER_REPO_BASE ?= ghcr.io/marianu
 ifeq ($(strip $(DOCKER_REPO_BASE)),)
-DOCKER_REPO_BASE := ghcr.io/stakater
+DOCKER_REPO_BASE := ghcr.io/marianu
 endif
 
-# CHANNELS define the bundle channels used in the bundle.
-# Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
-# To re-generate a bundle for other specific channels without changing the standard setup, you can:
-# - use the CHANNELS as arg of the bundle target (e.g make bundle CHANNELS=candidate,fast,stable)
-# - use environment variables to overwrite this value (e.g export CHANNELS="candidate,fast,stable")
-ifneq ($(origin CHANNELS), undefined)
-BUNDLE_CHANNELS := --channels=$(CHANNELS)
-endif
-
-# DEFAULT_CHANNEL defines the default channel used in the bundle.
-# Add a new line here if you would like to change its default config. (E.g DEFAULT_CHANNEL = "stable")
-# To re-generate a bundle for any other default channel without changing the default setup, you can:
-# - use the DEFAULT_CHANNEL as arg of the bundle target (e.g make bundle DEFAULT_CHANNEL=stable)
-# - use environment variables to overwrite this value (e.g export DEFAULT_CHANNEL="stable")
-ifneq ($(origin DEFAULT_CHANNEL), undefined)
-BUNDLE_DEFAULT_CHANNEL := --default-channel=$(DEFAULT_CHANNEL)
-endif
-BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
-
-# IMAGE_TAG_BASE defines the docker.io namespace and part of the image name for remote images.
-# This variable is used to construct full image tags for bundle and catalog images.
-#
-# For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# stakater.cloud/openbao-config-operator-bundle:$VERSION and stakater.cloud/openbao-config-operator-catalog:$VERSION.
+# IMAGE_TAG_BASE defines the container registry namespace and part of the image
+# name for remote images; it is used to construct the controller image tag.
 IMAGE_TAG_BASE ?= $(DOCKER_REPO_BASE)/$(OPERATOR_NAME)
-
-# BUNDLE_IMG defines the image:tag used for the bundle.
-# You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
-BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:v$(VERSION)$(GIT_TAG)
-
-# BUNDLE_GEN_FLAGS are the flags passed to the operator-sdk generate bundle command
-BUNDLE_GEN_FLAGS ?= -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
-
-# USE_IMAGE_DIGESTS defines if images are resolved via tags or digests
-# You can enable this value if you would like to use SHA Based Digests
-# To enable set flag to true
-USE_IMAGE_DIGESTS ?= false
-ifeq ($(USE_IMAGE_DIGESTS), true)
-	BUNDLE_GEN_FLAGS += --use-image-digests
-endif
-
-# Set the Operator SDK version to use. By default, what is installed on the system is used.
-# This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
-OPERATOR_SDK_VERSION ?= v1.41.1
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_TAG_BASE):v$(VERSION)$(GIT_TAG)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -442,52 +397,17 @@ $(KIND): $(LOCALBIN)
 
 ##@ Helm chart (operator)
 
-# Operator chart — auto-generated via helmify from config/default kustomize
-# output. Regenerated on every release; never committed.
-HELM_CHART_NAME      ?= $(OPERATOR_NAME)
-HELM_CHART_DIR       ?= charts/$(HELM_CHART_NAME)
+HELM_CHART_NAME ?= $(OPERATOR_NAME)
+HELM_CHART_DIR  ?= charts/$(HELM_CHART_NAME)
 
-HELM_REGISTRY        ?= $(DOCKER_REPO_BASE)/charts
-CHART_VERSION        ?= $(VERSION)$(GIT_TAG)
-HELMIFY_POSTPROCESS  ?=
-
-# Shared helm release pipeline. Pulled from stakater/.github at first use.
-HELM_MK_URL ?= https://raw.githubusercontent.com/stakater/.github/refs/heads/main/.github/makefiles/helm.mk
-HELM_MK     := makefiles/helm.mk
-
-.PHONY: download-helm-mk
-download-helm-mk: ## Download shared helm.mk if missing.
-	@if [ ! -f $(HELM_MK) ]; then \
-		mkdir -p $(dir $(HELM_MK)); \
-		echo "Downloading $(HELM_MK_URL) -> $(HELM_MK)"; \
-		curl -fsSL $(HELM_MK_URL) -o $(HELM_MK); \
-	fi
-
-# helm.mk logs in to ghcr.io with GIT_USER/GIT_TOKEN; the CI chart-push action only
-# exports GHCR_USERNAME/GHCR_TOKEN, so fall back to those when GIT_* is unset.
-GIT_USER  ?= $(GHCR_USERNAME)
-GIT_TOKEN ?= $(GHCR_TOKEN)
-
-HELM_MK_CMD = GOBIN=$(LOCALBIN) PATH="$(LOCALBIN):$$PATH" $(MAKE) -f $(HELM_MK)
-# helm.mk references $(KUSTOMIZE) but never defines it, so it has to be passed in.
-HELM_MK_ARGS = \
-	KUSTOMIZE=$(KUSTOMIZE) \
-	GIT_USER=$(GIT_USER) \
-	GIT_TOKEN=$(GIT_TOKEN) \
-	OPERATOR_NAME=$(OPERATOR_NAME) \
-	HELM_CHART_NAME=$(HELM_CHART_NAME) \
-	HELM_CHART_DIR=$(HELM_CHART_DIR) \
-	HELM_REGISTRY=$(HELM_REGISTRY) \
-	CHART_VERSION=$(CHART_VERSION) \
-	HELMIFY_POSTPROCESS=$(HELMIFY_POSTPROCESS) \
-	IMG=$(IMG)
-
-.PHONY: helm-release
-helm-release: helm-release-operator ## Release the operator chart to OCI.
-
-.PHONY: helm-release-operator
-helm-release-operator: helmify kustomize yq download-helm-mk ## Helmify config/default and release the operator chart.
-	@$(HELM_MK_CMD) helm-release $(HELM_MK_ARGS)
+.PHONY: chart
+chart: helmify kustomize yq ## Regenerate the operator chart from config/default (never commit).
+	@rm -rf $(HELM_CHART_DIR)
+	@mkdir -p $(HELM_CHART_DIR)
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
+	$(KUSTOMIZE) build config/default | $(YQ_BIN) 'del(.. | .imagePullSecrets?)' | $(HELMIFY) -crd-dir -image-pull-secrets $(HELM_CHART_DIR)
+	@$(YQ_BIN) -i '.name="$(HELM_CHART_NAME)" | .appVersion="$(VERSION)"' $(HELM_CHART_DIR)/Chart.yaml
+	@n=$$(ls $(HELM_CHART_DIR)/crds | wc -l); echo "✓ chart generated at $(HELM_CHART_DIR) ($$n CRDs) — do NOT commit it"
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
@@ -505,107 +425,24 @@ mv $(1) $(1)-$(3) ;\
 ln -sf $(1)-$(3) $(1)
 endef
 
-.PHONY: operator-sdk
-OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
-operator-sdk: ## Download operator-sdk locally if necessary.
-ifeq (,$(wildcard $(OPERATOR_SDK)))
-ifeq (, $(shell which operator-sdk 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OPERATOR_SDK)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} ;\
-	chmod +x $(OPERATOR_SDK) ;\
-	}
-else
-OPERATOR_SDK = $(shell which operator-sdk)
-endif
-endif
-
-.PHONY: bundle
-bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-
-.PHONY: bundle-build
-bundle-build: ## Build the bundle image.
-	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
-
-.PHONY: bundle-push
-bundle-push: ## Push the bundle image.
-	$(MAKE) docker-push IMG=$(BUNDLE_IMG)
-
-.PHONY: opm
-OPM = $(LOCALBIN)/opm
-opm: ## Download opm locally if necessary.
-ifeq (,$(wildcard $(OPM)))
-ifeq (,$(shell which opm 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OPM)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/v1.23.0/$${OS}-$${ARCH}-opm ;\
-	chmod +x $(OPM) ;\
-	}
-else
-OPM = $(shell which opm)
-endif
-endif
-
 .PHONY: yq
 YQ_VERSION := v4.44.3
 YQ_BIN := $(LOCALBIN)/yq
 yq:
 ifeq (,$(wildcard $(YQ_BIN)))
-ifeq (,$(shell which yq 2>/dev/null))
 	@{ \
 	set -e ;\
 	mkdir -p $(dir $(YQ_BIN)) ;\
 	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(YQ_BIN) https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_$${OS}-$${ARCH} ;\
+	curl -sSLo $(YQ_BIN) https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_$${OS}_$${ARCH} ;\
 	chmod +x $(YQ_BIN) ;\
 	}
-else
-YQ_BIN = $(shell which yq)
-endif
 endif
 
-# A comma-separated list of bundle images (e.g. make catalog-build BUNDLE_IMGS=example.com/operator-bundle:v0.1.0,example.com/operator-bundle:v0.2.0).
-# These images MUST exist in a registry and be pull-able.
-BUNDLE_IMGS ?= $(BUNDLE_IMG)
+##@ Build
 
-# The image tag given to the resulting catalog image (e.g. make catalog-build CATALOG_IMG=example.com/operator-catalog:v0.2.0).
-CATALOG_IMG ?= $(IMAGE_TAG_BASE)-catalog:v$(VERSION)$(GIT_TAG)
+.PHONY: clean
+clean: ## Remove generated build artifacts (local tooling, packaged charts, generated chart).
+	@rm -rf $(LOCALBIN) dist build $(HELM_CHART_DIR)
+	@echo "✓ Cleared generated artifacts (bin/, dist/, build/, $(HELM_CHART_DIR))"
 
-# Set CATALOG_BASE_IMG to an existing catalog image tag to add $BUNDLE_IMGS to that image.
-ifneq ($(origin CATALOG_BASE_IMG), undefined)
-FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
-endif
-
-# Render bundle to the catalog index.
-.PHONY: catalog-render
-catalog-render: opm yq ## Render bundle to catalog index.
-	bash generate-catalog-index.sh $(DOCKER_REPO_BASE) $(OPERATOR_NAME) $(CATALOG_DIR_PATH) $(VERSION) $(GIT_TAG)
-
-# Build a catalog image by adding bundle images to an empty catalog using the operator package manager tool, 'opm'.
-# This recipe invokes 'opm' in 'semver' bundle add mode. For more information on add modes, see:
-# https://github.com/operator-framework/community-operators/blob/7f1438c/docs/packaging-operator.md#updating-your-existing-operator
-.PHONY: catalog-build
-catalog-build: opm ## Build a catalog image.
-	$(OPM) index add --container-tool docker --mode semver --tag $(CATALOG_IMG) --bundles $(BUNDLE_IMGS) $(FROM_INDEX_OPT)
-
-# Push the catalog image.
-.PHONY: catalog-push
-catalog-push: ## Push a catalog image.
-	$(MAKE) docker-push IMG=$(CATALOG_IMG)
-
-# Push the catalog image.
-.PHONY: publish
-publish: ## Build and publish operator.
-	echo $(BUNDLE_IMGS)
-	$(MAKE) manifests build docker-build docker-push
-	rm -f bin/kustomize
-	$(MAKE) bundle bundle-build bundle-push
-	$(MAKE) catalog-render catalog-build catalog-push

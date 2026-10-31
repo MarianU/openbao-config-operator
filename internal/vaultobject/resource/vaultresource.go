@@ -33,6 +33,20 @@ import (
 // ConditionReady is the canonical condition type written by the base.
 const ConditionReady = "Ready"
 
+// ConditionSynced reports whether the last reconcile could talk to OpenBao
+// and the object matches/advanced desired state. A crossplane-parity signal:
+// it is False only on a real reconcile failure (denied/unreachable/invalid),
+// so Argo health can map Synced=False -> Degraded — the "I cannot apply this
+// resource to OpenBao" signal — without flagging an intermediate state that
+// is progressing normally.
+const ConditionSynced = "Synced"
+
+// ConditionProgressing reports an in-flight, not-yet-converged state (e.g. an
+// intermediate CA awaiting an external signature). It is True only for
+// non-fatal "waiting" reasons; a hard failure sets Progressing=False (it is
+// stuck, not progressing) and relies on Synced=False + Ready=False instead.
+const ConditionProgressing = "Progressing"
+
 const (
 	PeriodicInterval = 5 * time.Minute
 	ErrorBackoff     = 30 * time.Second
@@ -520,11 +534,41 @@ func (r *VaultResource[T]) patchStatusOnce(ctx context.Context, key client.Objec
 		}
 		emitObj, emitMsg = cur, condMsg
 
+		// Derive the Synced/Progressing companions from the same reconcile
+		// outcome so all three stay consistent in one patch. A non-fatal
+		// intermediate reason (awaiting external signature) keeps Synced=True
+		// (the object was advanced/CSR exported) but marks Progressing=True;
+		// any other Ready=False is a real failure -> Synced=False, not
+		// progressing (stuck). Ready=True -> fully converged.
+		const awaiting = ReasonAwaitingExternalSignature
+		progressing := status != metav1.ConditionTrue && reason == awaiting
+		synced := metav1.ConditionTrue
+		if status != metav1.ConditionTrue && !progressing {
+			synced = metav1.ConditionFalse
+		}
+		progressingStatus := metav1.ConditionFalse
+		if progressing {
+			progressingStatus = metav1.ConditionTrue
+		}
+
 		apimeta.SetStatusCondition(&conds, metav1.Condition{
 			Type:               ConditionReady,
 			Status:             status,
 			Reason:             reason,
 			Message:            condMsg,
+			ObservedGeneration: cur.GetGeneration(),
+		})
+		apimeta.SetStatusCondition(&conds, metav1.Condition{
+			Type:               ConditionSynced,
+			Status:             synced,
+			Reason:             reason,
+			Message:            condMsg,
+			ObservedGeneration: cur.GetGeneration(),
+		})
+		apimeta.SetStatusCondition(&conds, metav1.Condition{
+			Type:               ConditionProgressing,
+			Status:             progressingStatus,
+			Reason:             reason,
 			ObservedGeneration: cur.GetGeneration(),
 		})
 		cur.SetConditions(conds)

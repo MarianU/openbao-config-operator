@@ -40,6 +40,10 @@ const (
 // controller never touches them, but the type must satisfy the full
 // baoclient.Client interface.
 type fakeBao struct {
+	// Embedded to carry the full Client interface; KV methods are
+	// not exercised by this package and fall through to nil (panic if
+	// called from a test, which would be a test bug).
+	baoclient.Client
 	caBySerial map[string]*baoclient.PKICAResponse // keyed "<openbaoNs>|<mount>"
 	urls       map[string]*baoclient.PKIURLsInput  // same key
 	// keysByMount is the mount's key store, same key shape.

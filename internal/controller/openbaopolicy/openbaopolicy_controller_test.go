@@ -31,6 +31,10 @@ import (
 // OpenBaoPolicyController doesn't touch k8s-auth roles, so this fake
 // stubs those methods to return success without state.
 type fakeBao struct {
+	// Embedded to carry the full Client interface; KV methods are
+	// not exercised by this package and fall through to nil (panic if
+	// called from a test, which would be a test bug).
+	baoclient.Client
 	// policies keyed as "<openbaoNs>|<name>" so the same name in different
 	// namespaces stays separate (matches bao's actual storage).
 	policies map[string]string

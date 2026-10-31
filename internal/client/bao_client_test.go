@@ -579,6 +579,31 @@ func TestGetK8sRole_ReadsFieldsAtAuthRolePath(t *testing.T) {
 	require.Equal(t, "service", role.TokenType)
 }
 
+// Pins the numeric-to-duration normalization on read: OpenBao stores
+// token_ttl/token_max_ttl as integer seconds but the CRD XValidation demands
+// a unit-suffixed string, so the read must render "<n>s" (otherwise the
+// drift comparator sees spec "3600s" vs read "3600" and re-upserts forever).
+func TestGetK8sRole_NumericTTLsNormalizedToDuration(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"token_policies": ["p"],
+				"bound_service_account_names": ["default"],
+				"bound_service_account_namespaces": ["vault"],
+				"token_ttl": 3600,
+				"token_max_ttl": 86400,
+				"token_type": "default"
+			}
+		}`))
+	})
+	role, err := c.GetK8sRole(context.Background(), "kubernetes", "r")
+	require.NoError(t, err)
+	require.Equal(t, "3600s", role.TokenTTL)
+	require.Equal(t, "86400s", role.TokenMaxTTL)
+}
+
 func TestGetK8sRole_MissingReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -2532,3 +2557,76 @@ func TestNewHTTPClient_TLS_PresentCAFilePreservesEnv(t *testing.T) {
 
 // ---- silence linter on imports used only by appended tests ----
 var _ = io.Discard
+
+// ---- KVv2 secrets (<mount>/data/<path>) ----
+
+func TestWriteKVSecret_PostsDataAndParsesVersion(t *testing.T) {
+	t.Parallel()
+	var gotPath, gotBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"version":4}}`))
+	})
+	ver, err := c.WriteKVSecret(context.Background(), "secret", "apps/foo",
+		map[string]string{"token": "abc"}, WithNamespace("tenant1"))
+	require.NoError(t, err)
+	require.Equal(t, 4, ver)
+	require.Equal(t, "/v1/secret/data/apps/foo", gotPath)
+	require.JSONEq(t, `{"data":{"token":"abc"}}`, gotBody)
+	require.Equal(t, "tenant1", NamespaceFromOpts([]CallOption{WithNamespace("tenant1")}))
+}
+
+func TestWriteKVSecret_RejectsEmptyData(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server must not be called for empty-data validation")
+	})
+	_, err := c.WriteKVSecret(context.Background(), "secret", "apps/foo", nil)
+	require.Error(t, err)
+	_, err = c.WriteKVSecret(context.Background(), "secret", "", map[string]string{"k": "v"})
+	require.Error(t, err)
+}
+
+func TestReadKVSecret_DecodesDataAndMetadata(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/secret/data/apps/foo", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"data":{"k":"v","num":"1"},"metadata":{"version":3,"created_time":"2024-01-01T00:00:00Z"}}}`))
+	})
+	kv, err := c.ReadKVSecret(context.Background(), "secret", "apps/foo")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"k": "v", "num": "1"}, kv.Data)
+	require.Equal(t, 3, kv.Version)
+	require.Equal(t, "2024-01-01T00:00:00Z", kv.CreatedTime)
+}
+
+func TestReadKVSecret_NotFound(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`{"errors":["not found"]}`, `{}`} {
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if body == `{"errors":["not found"]}` {
+				http.Error(w, body, http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		})
+		_, err := c.ReadKVSecret(context.Background(), "secret", "apps/missing")
+		require.ErrorIs(t, err, ErrNotFound, "body: %s", body)
+	}
+}
+
+func TestDeleteKVSecret_IdempotentOn404(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":["not found"]}`))
+	})
+	require.NoError(t, c.DeleteKVSecret(context.Background(), "secret", "apps/foo"))
+}
