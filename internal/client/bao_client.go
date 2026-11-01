@@ -795,19 +795,39 @@ func newSDKCfg(addr string, tc *tls.Config) (*vault.Config, error) {
 	if strings.TrimSpace(addr) == "" {
 		return nil, fmt.Errorf("bao client: address is empty")
 	}
-	unsetMissingCAEnv("VAULT_CACERT")
+	if tc != nil {
+		// The caller supplies a complete per-connection TLS config (CA pool,
+		// client cert/key, SNI, skip-verify), so the process environment must
+		// not contribute any TLS. The operator's CI-generated chart bakes
+		// PLACEHOLDER VAULT_CACERT / VAULT_CLIENT_CERT / VAULT_CLIENT_KEY /
+		// VAULT_TLS_SERVER_NAME into its manifests; vault.DefaultConfig()
+		// (and the fresh DefaultConfig vault.NewClient runs for its own
+		// error check) reads those and setupTLSConfig tries to load the
+		// pointed-to files, failing with e.g. "open some_client_cert: no
+		// such file or directory". Unsetting them first neutralizes that -
+		// the per-connection *tls.Config, injected into the transport below,
+		// becomes the sole TLS source.
+		for _, k := range []string{"VAULT_CACERT", "VAULT_CLIENT_CERT", "VAULT_CLIENT_KEY", "VAULT_TLS_SERVER_NAME"} {
+			_ = os.Unsetenv(k)
+		}
+	}
 	cfg := vault.DefaultConfig()
 	cfg.Address = strings.TrimRight(addr, "/")
 	if tc != nil {
-		// DefaultConfig produced a cleanhttp *http.Transport with a fresh
-		// TLSClientConfig; overwrite that TLS config with the per-connection
-		// one (CA pool, client cert/key, SNI, skip-verify). HTTP/2 setup that
-		// DefaultConfig already ran on the transport is unaffected.
+		// DefaultConfig produced a cleanhttp *http.Transport; overwrite its
+		// TLSClientConfig with the per-connection one (CA pool, client
+		// cert/key, SNI, skip-verify). HTTP/2 setup that DefaultConfig ran on
+		// the transport is unaffected (only TLSClientConfig is replaced via a
+		// clone).
 		if tr, ok := cfg.HttpClient.Transport.(*http.Transport); ok {
 			clone := tr.Clone()
 			clone.TLSClientConfig = tc
 			cfg.HttpClient.Transport = clone
 		}
+	} else {
+		// Legacy env-driven path (no per-connection TLS): keep the pre-existing
+		// behavior of clearing a stale VAULT_CACERT that points at a missing file.
+		unsetMissingCAEnv("VAULT_CACERT")
 	}
 	return cfg, nil
 }
