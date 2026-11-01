@@ -4,12 +4,46 @@ User-facing reference for the CRDs this operator installs. Appended to as each
 story of the [VCO wrap roadmap](./plans/PLAN-vco-wrap-roadmap.md)
 lands its primitive(s).
 
+## Connections (`spec.connectionRef`) — required on every primitive
+
+Every `OpenBao*` primitive (policy, role, mount, group, KV/generated secret,
+…) carries a required `spec.connectionRef: { name, namespace? }` selecting the
+`OpenBaoConnection` it should reconcile against. The connection CR holds the
+address, TLS (CA bundle + optional client mTLS via Secret refs, server name,
+skip-verify) and auth (kubernetes SA login or static token) for one OpenBao.
+On each reconcile the operator dereferences the referenced connection, builds
+a dedicated client, and injects it for the run — so one operator instance can
+drive many independent OpenBao instances with no pod-level environment, and a
+CR with no (or an unresolvable) connection surfaces `Ready=False /
+reason=ConnectionError` until one is provided.
+
+```yaml
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoConnection
+metadata:
+  name: openbao
+spec:
+  address: https://bao.example:8200
+  tls:
+    caCertSecretRef: { name: openbao-ca-cert }
+    clientCertSecretRef: { name: openbao-client-cert }  # optional mTLS
+    tlsServerName: bao.example
+  auth:
+    method: kubernetes
+    kubernetes:
+      mount: k8s-operator
+      role: openbao-config-operator
+      jwtPath: /var/run/secrets/openbao/token
+```
+
+
 ## Summary
 
 | Kind | Group / Version | Scope | Purpose |
 |---|---|---|---|
 | `OpenBaoExtension` | `security.mto.stakater.com/v1alpha1` | Namespaced | Cluster-level connection + defaults for OpenBao integration. Reconciled by the `ClusterAuth` and `Tenant` controllers. |
 | `OpenBaoPolicy` | `security.mto.stakater.com/v1alpha1` | Namespaced | Authors an OpenBao ACL policy at `sys/policies/acl/<name>`. Optionally scoped to an OpenBao namespace via `spec.openbaoNamespace` (X-Vault-Namespace). |
+| `OpenBaoConnection` | `security.mto.stakater.com/v1alpha1` | Namespaced | *Fork addition* — the named source of a connection. Carries every parameter to reach one OpenBao: `spec.address`, TLS (`caCertSecretRef`, `clientCertSecretRef` for mTLS, `tlsServerName`, `insecure`) and auth (`kubernetes` SA login or static `token`, both via k8s Secret refs). All other primitives reference it via `spec.connectionRef`; the operator resolves it per reconcile and builds a dedicated client, so one operator can drive arbitrarily many OpenBao instances with no pod-level env. Its controller validates the connection and health-probes it (`auth/token/lookup-self`), surfacing `Ready`/`Synced`, and re-probes on referenced-Secret rotation. |
 | `OpenBaoKubernetesAuthRole` | `security.mto.stakater.com/v1alpha1` | Namespaced | Authors an OpenBao Kubernetes-auth role at `auth/<spec.path>/role/<name>`. Binds service accounts in selected namespaces to bao policies. |
 | `OpenBaoSecretEngine` | `security.mto.stakater.com/v1alpha1` | Namespaced | Manages a bao secret-engine mount lifecycle at `sys/mounts/<path>`. Discriminated-union spec selects engine kind: `kvV2`, `transit`, `pki`. Optionally scoped via `spec.openbaoNamespace`. Auth-method mounts are out of scope for this Kind. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
 | `OpenBaoKvSecret` | `security.mto.stakater.com/v1alpha1` | Namespaced | *Fork addition (reference-only)* — mirrors a same-namespace Kubernetes Secret (`spec.sourceSecret`) into an OpenBao KVv2 secret at `<spec.mount>/data/<spec.path>`, and re-syncs on every Secret change. The CR never holds secret material (Git stays clean); the value lives only in the source Secret + OpenBao. `spec.ensureSecret` creates an empty placeholder Secret if it is missing. Fills the "seed arbitrary KV" gap declaratively instead of via a one-shot script. CR deletion follows `spec.deletionPolicy` (default `Retain`). |
