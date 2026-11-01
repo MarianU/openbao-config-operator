@@ -155,6 +155,13 @@ type VaultResource[T VaultCR] struct {
 	Recorder record.EventRecorder
 }
 
+// SetResolver installs the BaoResolver (per-connection client resolution) on
+// the engine. Production wires it from main.go via this method; test struct
+// literals omit it (nil leaves handlers on their constructed client).
+func (r *VaultResource[T]) SetResolver(res BaoResolver) {
+	r.Resolver = res
+}
+
 // event emits via Recorder when one is wired; the nil-guard keeps the
 // field genuinely optional.
 func (r *VaultResource[T]) event(obj client.Object, eventtype, reason, message string) {

@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	obxv1alpha1 "github.com/stakater/openbao-config-operator/api/v1alpha1"
-	baoclient "github.com/stakater/openbao-config-operator/internal/client"
+	"github.com/stakater/openbao-config-operator/internal/connection"
 	openbaoauthmethod "github.com/stakater/openbao-config-operator/internal/controller/openbaoauthmethod"
 	openbaocertcfg "github.com/stakater/openbao-config-operator/internal/controller/openbaocertauthengineconfig"
 	openbaocertrole "github.com/stakater/openbao-config-operator/internal/controller/openbaocertauthenginerole"
@@ -59,6 +59,7 @@ import (
 	openbaose "github.com/stakater/openbao-config-operator/internal/controller/openbaosecretengine"
 	openbaotk "github.com/stakater/openbao-config-operator/internal/controller/openbaotransitkey"
 	"github.com/stakater/openbao-config-operator/internal/hmacstore"
+	"github.com/stakater/openbao-config-operator/internal/vaultobject/resource"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -188,36 +189,39 @@ func main() {
 	}
 }
 
-// setupReconcilers wires every controller into the manager. All reconcilers
-// share one bao client: auth mode (static token vs. in-cluster Kubernetes
-// login) is selected once from the environment by baoclient.NewClientFromEnv.
-// Only configuration errors are fatal here — bao reachability is checked
-// per-reconcile so a sealed or still-starting bao surfaces as CR conditions
-// that heal on requeue, not a crash-looping process.
+// setupReconcilers wires every controller into the manager. There is no
+// shared OpenBao client: each primitive resolves its own OpenBaoConnection
+// (spec.connectionRef) on every reconcile and the base injects the
+// per-connection client into the context before any bao I/O runs. main passes
+// a ctx-delegating wrapper (nil fallback) so the handler closures route
+// through the resolved client; an unresolvable/missing connection surfaces
+// as Ready=False / ReasonConnectionError, never a crash-looping process.
 func setupReconcilers(mgr ctrl.Manager) error {
 	// +kubebuilder:scaffold:builder
 
 	// The OpenBaoConnection controller validates + health-checks connection
 	// CRs (the named sources of per-connection clients all other CRDs
-	// reference). Registered independently of the shared env client below.
+	// reference).
 	if err := openbaoconnection.NewReconciler(mgr.GetClient()).
 		SetupWithManager(mgr); err != nil {
 		return err
 	}
-
-	bao, err := baoclient.NewClientFromEnv()
-	if err != nil {
-		return err
-	}
-	setupLog.Info("bao client configured", "authMethod", baoAuthMethod())
 
 	hmac, err := bootstrapHMACComputer(mgr)
 	if err != nil {
 		return err
 	}
 
+	// Per-connection model. The wrapper delegates every call to the client
+	// the base resolves per reconcile from the CR's OpenBaoConnection. The
+	// fallback is nil deliberately: in production the base always injects a
+	// resolved client before handlers run (or fails to ConnectionError), so
+	// the wrapper's nil fallback is never dereferenced here.
+	bao := connection.WrapClient(nil)
+
 	reconcilers := []interface {
 		SetupWithManager(ctrl.Manager) error
+		SetResolver(resource.BaoResolver)
 	}{
 		openbaopolicy.NewOpenBaoPolicyReconcilerWithClient(mgr, bao),
 		openbaokar.NewOpenBaoKubernetesAuthRoleReconcilerWithClient(mgr, bao),
@@ -240,21 +244,14 @@ func setupReconcilers(mgr ctrl.Manager) error {
 		openbaodbc.NewOpenBaoDatabaseEngineConfigReconcilerWithClient(mgr, bao),
 		openbaodbr.NewOpenBaoDatabaseRoleReconcilerWithClient(mgr, bao),
 	}
+	resolver := connection.New()
 	for _, r := range reconcilers {
+		r.SetResolver(resolver)
 		if err := r.SetupWithManager(mgr); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// baoAuthMethod reports the effective auth mode for the startup log.
-// Mirrors the default in baoclient.NewClientFromEnv.
-func baoAuthMethod() string {
-	if m := os.Getenv("BAO_AUTH_METHOD"); m != "" {
-		return m
-	}
-	return "token"
 }
 
 // bootstrapHMACComputer loads or generates the HMAC key used by the

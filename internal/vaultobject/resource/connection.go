@@ -45,3 +45,16 @@ func BaoClientFromContext(ctx context.Context) baoclient.Client {
 	}
 	return nil
 }
+
+// BaoClientFromContextOr returns the per-reconcile resolved client injected by
+// the base when present, else fallback. Handlers that want to honor a
+// per-connection OpenBaoConnection wrap this around the client they were
+// constructed with: in production the base injects the resolved client (so the
+// ctx one wins); in tests no resolution runs, so the fallback (the fake) is
+// used and the existing suites keep passing untouched.
+func BaoClientFromContextOr(ctx context.Context, fallback baoclient.Client) baoclient.Client {
+	if c := BaoClientFromContext(ctx); c != nil {
+		return c
+	}
+	return fallback
+}
