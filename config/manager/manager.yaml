@@ -74,11 +74,27 @@ spec:
             value: kubernetes
           - name: BAO_AUTH_JWT_PATH
             value: /var/run/secrets/openbao/token
-          - name: VAULT_ADDR
+          # Resolve the hmac key secret in the release namespace. OPERATOR_NS is
+          # set via the downward API (metadata.namespace) so it stays correct
+          # regardless of the namespace the chart is installed into.
+          - name: OPERATOR_NS
             valueFrom:
-              configMapKeyRef:
-                name: controller-manager-config
-                key: VAULT_ADDR
+              fieldRef:
+                fieldPath: metadata.namespace
+          # OpenBao/Vault endpoint. Defaults to a co-located service; a chart
+          # install overrides this value with the concrete endpoint.
+          - name: VAULT_ADDR
+            value: http://openbao:8200
+          # mTLS / TLS-override. All are value placeholders a chart install
+          # overrides with the concrete paths / hostname.
+          - name: VAULT_CACERT
+            value: some_ca_cert
+          - name: VAULT_CLIENT_CERT
+            value: some_client_cert
+          - name: VAULT_CLIENT_KEY
+            value: some_client_key
+          - name: VAULT_TLS_SERVER_NAME
+            value: some_tls_server_name
         image: controller:latest
         imagePullPolicy: IfNotPresent
         name: manager

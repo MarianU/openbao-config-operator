@@ -242,6 +242,14 @@ type PKISpec struct {
 // OpenBaoSecretEngine. Exactly one of the engine-type slots must be
 // set; IsValid + the CRD's XValidation rule enforce the XOR.
 type OpenBaoSecretEngineSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side mount when
 	// this CR is deleted or its bao identity (spec.path /
 	// spec.openbaoNamespace) changes. Retain (the default) releases
@@ -376,3 +384,6 @@ type OpenBaoSecretEngineList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoSecretEngine{}, &OpenBaoSecretEngineList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoSecretEngine) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

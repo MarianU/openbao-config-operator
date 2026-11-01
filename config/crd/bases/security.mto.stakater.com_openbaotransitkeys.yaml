@@ -55,6 +55,25 @@ spec:
                   duration shape — use "720h"). "0" or empty disables auto-rotation.
                 pattern: ^(0|[0-9]+(s|m|h))+$
                 type: string
+              connectionRef:
+                description: |-
+                  ConnectionRef selects the OpenBaoConnection CR this resource uses to
+                  reach OpenBao. Name is required; Namespace defaults to this CR's own
+                  namespace. When a connection resolver is enabled, a resource with no
+                  ref is rejected as ConnectionError.
+                properties:
+                  name:
+                    description: Name of the OpenBaoConnection CR. Required.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the OpenBaoConnection CR. Defaults to the referencing
+                      CR's own namespace when omitted.
+                    type: string
+                required:
+                - name
+                type: object
               convergentEncryption:
                 description: |-
                   ConvergentEncryption requires derived=true; same plaintext +

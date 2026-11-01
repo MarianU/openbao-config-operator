@@ -21,4 +21,5 @@ resources:
 - security_v1alpha1_openbaogeneratedsecret.yaml
 - security_v1alpha1_openbaodatabaseengineconfig.yaml
 - security_v1alpha1_openbaodatabaserole.yaml
+- security_v1alpha1_openbaoconnection.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

@@ -83,6 +83,14 @@ var _ vaultobject.RenameTracker = &OpenBaoGeneratedSecret{}
 
 // OpenBaoGeneratedSecretSpec defines the desired state.
 type OpenBaoGeneratedSecretSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side secret when this
 	// CR is deleted. Retain (the default) orphans the secret; Delete removes
 	// it. The value is data-bearing, so the fail-safe direction is Retain.
@@ -423,3 +431,6 @@ type OpenBaoGeneratedSecretList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoGeneratedSecret{}, &OpenBaoGeneratedSecretList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoGeneratedSecret) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

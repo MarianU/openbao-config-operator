@@ -199,6 +199,14 @@ func copyStringMapV1(m map[string]string) map[string]string {
 
 // OpenBaoGroupSpec defines the desired state of OpenBaoGroup.
 type OpenBaoGroupSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side object
 	// when this CR is deleted or its bao identity changes. Delete
 	// (the default) removes it, so deleting the CR revokes the access
@@ -317,3 +325,6 @@ type OpenBaoGroupList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoGroup{}, &OpenBaoGroupList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoGroup) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

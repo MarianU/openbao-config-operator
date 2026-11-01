@@ -48,6 +48,7 @@ func TestDeletionPolicy_CRDMarkers(t *testing.T) {
 	// orphan-by-design (hardcoded IsDeletable=false), the auth-config
 	// kinds have no bao DELETE endpoint at all.
 	exempt := map[string]bool{
+		prefix + "openbaoconnections.yaml":                 true,
 		prefix + "openbaotransitkeys.yaml":                 true,
 		prefix + "openbaopkisecretengineconfigs.yaml":      true,
 		prefix + "openbaocertauthengineconfigs.yaml":       true,

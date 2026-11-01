@@ -46,6 +46,7 @@ rules:
   - openbaoauthmethods
   - openbaocertauthengineconfigs
   - openbaocertauthengineroles
+  - openbaoconnections
   - openbaodatabaseengineconfigs
   - openbaodatabaseroles
   - openbaogeneratedsecrets
@@ -100,6 +101,7 @@ rules:
   - openbaoauthmethods/status
   - openbaocertauthengineconfigs/status
   - openbaocertauthengineroles/status
+  - openbaoconnections/status
   - openbaodatabaseengineconfigs/status
   - openbaodatabaseroles/status
   - openbaogeneratedsecrets/status

@@ -7,6 +7,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -30,6 +31,12 @@ import (
 // targets the root namespace and matches pre-namespace-support behaviour.
 type Client interface {
 	CheckKVv2Mount(ctx context.Context, mount string, opts ...CallOption) (bool, error)
+
+	// TokenLookupSelf reports the currently-authenticated token's info
+	// (auth/token/lookup-self). Used by the OpenBaoConnection controller to
+	// prove connectivity + auth on a named connection and to surface token
+	// TTL / expiry. Works for both static-token and kubernetes-auth clients.
+	TokenLookupSelf(ctx context.Context, opts ...CallOption) (*TokenInfo, error)
 
 	// Secret-engine mount lifecycle (sys/mounts/<path>). Used by the
 	// OpenBaoSecretEngine controller to manage KV / Transit / PKI mounts.
@@ -750,27 +757,59 @@ type sdkClient struct {
 // of as repeated reconcile-time failures with no diagnostic for the
 // operator process itself.
 func NewHTTPClient(addr, token string) (Client, error) {
-	if strings.TrimSpace(addr) == "" {
-		return nil, fmt.Errorf("bao client: address is empty")
+	return NewHTTPClientTLS(addr, token, nil)
+}
+
+// NewHTTPClientTLS is NewHTTPClient with an explicit per-connection TLS
+// configuration. Passing a non-nil tc fully overrides the env-driven TLS
+// (VAULT_CACERT / VAULT_CLIENT_CERT / VAULT_TLS_SERVER_NAME) that
+// newSDKCfg would otherwise apply, so multiple OpenBao connections with
+// distinct CA/client certificates can coexist in one operator. A nil tc is
+// exactly NewHTTPClient's behaviour (env-based TLS).
+func NewHTTPClientTLS(addr, token string, tc *tls.Config) (Client, error) {
+	cfg, err := newSDKCfg(addr, tc)
+	if err != nil {
+		return nil, err
 	}
-	// vault.DefaultConfig() reads VAULT_CACERT and errors hard if the
-	// path is set but the file is missing. In Kubernetes the operator
-	// pod typically mounts the CA bundle from an `optional: true`
-	// Secret that may not be provisioned (HTTP-only bao, or before
-	// the secret is created); the env var stays pointed at the
-	// would-be mount path, the file doesn't materialize, and the SDK
-	// crashes the process at startup. Drop the env var when the file
-	// doesn't exist so the SDK falls back to system roots — matching
-	// the contract the v6 deployment manifest documents.
-	unsetMissingCAEnv("VAULT_CACERT")
-	cfg := vault.DefaultConfig()
-	cfg.Address = strings.TrimRight(addr, "/")
 	v, err := vault.NewClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("bao client: %w", err)
 	}
 	v.SetToken(token)
 	return &sdkClient{v: v}, nil
+}
+
+// newSDKCfg builds the vault/api Config the HTTP and kubernetes-auth clients
+// share. Address is always explicit; TLS comes from tc when non-nil,
+// otherwise (nil tc) from the environment via vault.DefaultConfig().
+//
+// vault.DefaultConfig() reads VAULT_CACERT and errors hard if the path is
+// set but the file is missing. In Kubernetes the operator pod typically
+// mounts the CA bundle from an `optional: true` Secret that may not be
+// provisioned (HTTP-only bao, or before the secret is created); the env var
+// stays pointed at the would-be mount path, the file doesn't materialize,
+// and the SDK crashes the process at startup. Drop the env var when the file
+// doesn't exist so the SDK falls back to system roots — matching the
+// contract the v6 deployment manifest documents.
+func newSDKCfg(addr string, tc *tls.Config) (*vault.Config, error) {
+	if strings.TrimSpace(addr) == "" {
+		return nil, fmt.Errorf("bao client: address is empty")
+	}
+	unsetMissingCAEnv("VAULT_CACERT")
+	cfg := vault.DefaultConfig()
+	cfg.Address = strings.TrimRight(addr, "/")
+	if tc != nil {
+		// DefaultConfig produced a cleanhttp *http.Transport with a fresh
+		// TLSClientConfig; overwrite that TLS config with the per-connection
+		// one (CA pool, client cert/key, SNI, skip-verify). HTTP/2 setup that
+		// DefaultConfig already ran on the transport is unaffected.
+		if tr, ok := cfg.HttpClient.Transport.(*http.Transport); ok {
+			clone := tr.Clone()
+			clone.TLSClientConfig = tc
+			cfg.HttpClient.Transport = clone
+		}
+	}
+	return cfg, nil
 }
 
 // unsetMissingCAEnv clears `name` from the process environment if it
@@ -812,6 +851,37 @@ func (c *sdkClient) clientFor(opts []CallOption) *vault.Client {
 		return c.v
 	}
 	return c.v.WithNamespace(o.namespace)
+}
+
+// TokenInfo summarizes the current authenticated token (auth/token/lookup-self).
+// Only the fields the operator surfaces on the OpenBaoConnection status are
+// extracted; the underlying response may carry more.
+type TokenInfo struct {
+	// TTLSeconds is the remaining lifetime of the token in seconds (0 when
+	// the token does not expire — e.g. a root-like token).
+	TTLSeconds int64
+	// Policies lists the token's effective policies.
+	Policies []string
+}
+
+// TokenLookupSelf authenticates the current token and returns its info. For a
+// kubernetes-auth client this first performs a fresh login (see authTransport)
+// if the cached token is near expiry, so it also serves as a connectivity +
+// auth proof for a named connection.
+func (c *sdkClient) TokenLookupSelf(ctx context.Context, opts ...CallOption) (*TokenInfo, error) {
+	sec, err := c.clientFor(opts).Auth().Token().LookupSelfWithContext(ctx)
+	if err != nil {
+		return nil, wrapStatus(err)
+	}
+	if sec == nil || sec.Data == nil {
+		return nil, ErrNotFound
+	}
+	info := &TokenInfo{}
+	if p := asIntPtr(sec.Data["ttl"]); p != nil {
+		info.TTLSeconds = int64(*p)
+	}
+	info.Policies = asStringSlice(sec.Data["policies"])
+	return info, nil
 }
 
 // ---- Mounts ----

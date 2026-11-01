@@ -1,0 +1,282 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: openbaoconnections.security.mto.stakater.com
+spec:
+  group: security.mto.stakater.com
+  names:
+    kind: OpenBaoConnection
+    listKind: OpenBaoConnectionList
+    plural: openbaoconnections
+    shortNames:
+    - obc
+    singular: openbaoconnection
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: OpenBaoConnection is the Schema for the openbaoconnections API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenBaoConnectionSpec defines the desired state of OpenBaoConnection.
+            properties:
+              address:
+                description: |-
+                  Address is the base URL of the OpenBao server, e.g.
+                  https://bao.k8s.hostingpro.ro:8200. Required.
+                minLength: 1
+                type: string
+              auth:
+                description: Auth describes how the operator authenticates to OpenBao.
+                properties:
+                  kubernetes:
+                    description: |-
+                      Kubernetes configures the kubernetes-auth login. Required when
+                      method=kubernetes.
+                    properties:
+                      jwtPath:
+                        description: |-
+                          JWTPath is the filesystem path of the projected ServiceAccount token.
+                          Defaults to /var/run/secrets/openbao/token.
+                        type: string
+                      mount:
+                        description: |-
+                          Mount is the kubernetes auth mount to log in against. Defaults to
+                          "k8s-operator".
+                        type: string
+                      role:
+                        description: |-
+                          Role is the login role to request (must be bound to the operator's
+                          ServiceAccount). Required.
+                        minLength: 1
+                        type: string
+                    required:
+                    - role
+                    type: object
+                  method:
+                    description: |-
+                      Method selects the auth mode: "kubernetes" (SA login) or "token"
+                      (static token from a referenced Secret). Required.
+                    enum:
+                    - kubernetes
+                    - token
+                    type: string
+                  token:
+                    description: |-
+                      Token configures a static-token connection. Required when
+                      method=token.
+                    properties:
+                      tokenSecretRef:
+                        description: |-
+                          TokenSecretRef references a Kubernetes Secret holding the token under
+                          its `token` key (or `key`). Material is read at reconcile time; never
+                          stored inline.
+                        properties:
+                          key:
+                            description: |-
+                              Key within the Secret's data. Defaults per-use (e.g. "token" for an
+                              auth token, "ca.crt" for a CA bundle, "tls.crt"/"tls.key" for a
+                              client certificate pair).
+                            type: string
+                          name:
+                            description: Name of the Kubernetes Secret. Required.
+                            minLength: 1
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace of the Kubernetes Secret. Defaults to the connection CR's
+                              own namespace when omitted.
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    required:
+                    - tokenSecretRef
+                    type: object
+                required:
+                - method
+                type: object
+              openbaoNamespace:
+                description: |-
+                  OpenBaoNamespace is the default OpenBao namespace (X-Vault-Namespace)
+                  applied to calls made through this connection when the referencing CR
+                  does not set its own. Empty = root namespace.
+                type: string
+              tls:
+                description: TLS carries trust + client-mTLS parameters for the connection.
+                properties:
+                  caCertSecretRef:
+                    description: |-
+                      CACertSecretRef references a Secret holding the server CA bundle under
+                      `ca.crt` (or `key`), used to verify the OpenBao server certificate.
+                      Omitted = system root store.
+                    properties:
+                      key:
+                        description: |-
+                          Key within the Secret's data. Defaults per-use (e.g. "token" for an
+                          auth token, "ca.crt" for a CA bundle, "tls.crt"/"tls.key" for a
+                          client certificate pair).
+                        type: string
+                      name:
+                        description: Name of the Kubernetes Secret. Required.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace of the Kubernetes Secret. Defaults to the connection CR's
+                          own namespace when omitted.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  clientCertSecretRef:
+                    description: |-
+                      ClientCertSecretRef references a Kubernetes tls-type Secret holding a
+                      client certificate+key pair (tls.crt / tls.key) used for mutual TLS.
+                      Omitted = no client cert.
+                    properties:
+                      key:
+                        description: |-
+                          Key within the Secret's data. Defaults per-use (e.g. "token" for an
+                          auth token, "ca.crt" for a CA bundle, "tls.crt"/"tls.key" for a
+                          client certificate pair).
+                        type: string
+                      name:
+                        description: Name of the Kubernetes Secret. Required.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace of the Kubernetes Secret. Defaults to the connection CR's
+                          own namespace when omitted.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  insecure:
+                    description: |-
+                      Insecure disables server-certificate verification. Intended only for
+                      non-production / plaintext-dev boxes. Defaults false.
+                    type: boolean
+                  tlsServerName:
+                    description: |-
+                      TLSServerName overrides the SNI / hostname used to verify the server
+                      certificate (the internal CA may present a name different from the
+                      address host). Omitted = derived from the address host.
+                    type: string
+                type: object
+            required:
+            - address
+            - auth
+            type: object
+          status:
+            description: OpenBaoConnectionStatus defines the observed state of OpenBaoConnection.
+            properties:
+              authenticated:
+                description: |-
+                  Authenticated reports whether the last health probe successfully
+                  authenticated and reached OpenBao.
+                type: boolean
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the last spec generation successfully
+                  health-checked.
+                format: int64
+                type: integer
+              tokenTTLSeconds:
+                description: |-
+                  TokenTTLSeconds is the remaining TTL of the authenticated token in
+                  seconds, as of the last probe. 0 = non-expiring token.
+                format: int64
+                type: integer
+              version:
+                description: |-
+                  Version is the OpenBao server version reported by the last successful
+                  probe, when available.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

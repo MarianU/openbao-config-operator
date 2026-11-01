@@ -155,7 +155,11 @@ func TestEveryReasonIsReachable(t *testing.T) {
 
 	// Reasons the base writes directly rather than via ClassifyErr. Adding an
 	// entry is a deliberate act; the point is that it cannot be skipped.
-	emittedElsewhere := map[string]string{}
+	emittedElsewhere := map[string]string{
+		// Emitted directly by the connection-resolution step and the
+		// OpenBaoConnection controller, not via ClassifyErr.
+		"ReasonConnectionError": ReasonConnectionError,
+	}
 
 	produced := map[string]bool{}
 	for _, tc := range classifyErrCases {

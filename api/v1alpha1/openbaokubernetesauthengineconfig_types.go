@@ -250,6 +250,14 @@ type KubernetesCaSecretRef struct {
 
 // OpenBaoKubernetesAuthEngineConfigSpec defines the desired state.
 type OpenBaoKubernetesAuthEngineConfigSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// Path is the bao-side kubernetes auth mount path (e.g.
 	// "kubernetes"). Pairs with an OpenBaoAuthMethod of
 	// type=kubernetes at the same path.
@@ -397,4 +405,9 @@ type OpenBaoKubernetesAuthEngineConfigList struct {
 
 func init() {
 	SchemeBuilder.Register(&OpenBaoKubernetesAuthEngineConfig{}, &OpenBaoKubernetesAuthEngineConfigList{})
+}
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoKubernetesAuthEngineConfig) ConnectionRef() *ConnectionRef {
+	return d.Spec.ConnectionRef
 }

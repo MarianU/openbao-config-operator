@@ -141,6 +141,14 @@ func (d *OpenBaoNamespace) IsValid() (bool, error) {
 
 // OpenBaoNamespaceSpec defines the desired state of OpenBaoNamespace.
 type OpenBaoNamespaceSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side namespace
 	// when this CR is deleted or renamed. Retain (the default)
 	// releases the CR without touching bao: the namespace is
@@ -259,3 +267,6 @@ type OpenBaoNamespaceList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoNamespace{}, &OpenBaoNamespaceList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoNamespace) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

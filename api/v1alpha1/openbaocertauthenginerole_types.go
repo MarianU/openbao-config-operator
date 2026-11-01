@@ -226,6 +226,14 @@ type CertSecretRef struct {
 
 // OpenBaoCertAuthEngineRoleSpec defines the desired state.
 type OpenBaoCertAuthEngineRoleSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side cert entry
 	// when this CR is deleted or its bao identity changes. Delete
 	// (the default) removes it, so new logins through it stop; tokens
@@ -385,3 +393,6 @@ type OpenBaoCertAuthEngineRoleList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoCertAuthEngineRole{}, &OpenBaoCertAuthEngineRoleList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoCertAuthEngineRole) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

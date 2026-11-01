@@ -304,6 +304,14 @@ func PayloadFromTransitKeyInfo(info *baoclient.TransitKeyInfo) map[string]any {
 // Fields fall into three groups (immutable post-create, mutable, accepted
 // on both endpoints). See the package comment for the overall design.
 type OpenBaoTransitKeySpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// Path is the parent transit secret-engine mount (must be type=transit;
 	// bao 400s otherwise). Defaults to "transit"; the omitempty JSON tag
 	// is intentional — kubebuilder defaulting only fires when the field
@@ -486,3 +494,6 @@ type OpenBaoTransitKeyList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoTransitKey{}, &OpenBaoTransitKeyList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoTransitKey) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

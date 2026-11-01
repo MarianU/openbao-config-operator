@@ -1,0 +1,37 @@
+# OpenBaoConnection sample — a kubernetes-auth connection to an external
+# OpenBao with server-CA trust and client mutual-TLS. All material comes from
+# referenced Secrets (never inline, consistent with the repo's no-secrets-in-git
+# posture). Other OpenBao* CRDs reference this by spec.connectionRef.
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoConnection
+metadata:
+  name: default
+spec:
+  address: https://bao.k8s.hostingpro.ro:8200
+  tls:
+    caCertSecretRef:
+      name: openbao-ca-cert
+      key: ca.crt
+    clientCertSecretRef:
+      name: openbao-client-cert
+    tlsServerName: bao.k8s.hostingpro.ro
+  auth:
+    method: kubernetes
+    kubernetes:
+      mount: k8s-operator
+      role: openbao-config-operator
+      jwtPath: /var/run/secrets/openbao/token
+---
+# Alternative: a static-token connection (token read from a Secret).
+apiVersion: security.mto.stakater.com/v1alpha1
+kind: OpenBaoConnection
+metadata:
+  name: token-example
+spec:
+  address: https://127.0.0.1:8200
+  auth:
+    method: token
+    token:
+      tokenSecretRef:
+        name: bao-token
+        key: token

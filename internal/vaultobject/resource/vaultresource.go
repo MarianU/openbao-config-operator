@@ -142,6 +142,12 @@ type VaultResource[T VaultCR] struct {
 	Scheme        *runtime.Scheme
 	Handlers      Handlers[T]
 	FinalizerName string
+	// Resolver resolves the per-connection bao client for each reconcile by
+	// dereferencing the CR's OpenBaoConnection. Optional: nil skips
+	// resolution (test struct literals, / un-migrated primitives) and
+	// handlers fall back to the constructed client. When non-nil it is used
+	// for every reconcile and its error is a Ready=False/ConnectionError.
+	Resolver BaoResolver
 	// Recorder emits Events on Ready transitions and bao-object
 	// orphaning. Optional: nil skips emission (test struct literals).
 	// All emission is nil-guarded — never call r.Recorder.Event
@@ -229,6 +235,23 @@ func (r *VaultResource[T]) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		_ = r.setReady(ctx, req.NamespacedName, metav1.ConditionFalse, ReasonInvalid, msg)
 		return ctrl.Result{}, nil // no requeue; user must fix spec
+	}
+
+	// Resolve the connection (if a Resolver is wired) and inject the
+	// per-reconcile client into ctx before handlers run. Optional in the
+	// shared base so test struct literals (no Resolver) and not-yet-migrated
+	// primitives keep their constructed client; when a Resolver is set the
+	// CR's OpenBaoConnection drives the client and a resolution failure is a
+	// stable ConnectionError (no requeue until the connection is fixed).
+	if r.Resolver != nil {
+		if referer, ok := any(obj).(ConnectionReferer); ok {
+			bao, rerr := r.Resolver.Resolve(ctx, r.Client, referer)
+			if rerr != nil {
+				_ = r.setReady(ctx, req.NamespacedName, metav1.ConditionFalse, ReasonConnectionError, rerr.Error())
+				return ctrl.Result{}, nil
+			}
+			ctx = WithBaoClient(ctx, bao)
+		}
 	}
 
 	// Prepare any server-dependent values (e.g. accessor substitution,

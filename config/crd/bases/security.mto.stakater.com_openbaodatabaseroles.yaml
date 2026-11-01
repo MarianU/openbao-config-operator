@@ -46,6 +46,25 @@ spec:
           spec:
             description: OpenBaoDatabaseRoleSpec defines the desired state.
             properties:
+              connectionRef:
+                description: |-
+                  ConnectionRef selects the OpenBaoConnection CR this resource uses to
+                  reach OpenBao. Name is required; Namespace defaults to this CR's own
+                  namespace. When a connection resolver is enabled, a resource with no
+                  ref is rejected as ConnectionError.
+                properties:
+                  name:
+                    description: Name of the OpenBaoConnection CR. Required.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the OpenBaoConnection CR. Defaults to the referencing
+                      CR's own namespace when omitted.
+                    type: string
+                required:
+                - name
+                type: object
               creationStatements:
                 description: |-
                   CreationStatements are the SQL statements run on credential create

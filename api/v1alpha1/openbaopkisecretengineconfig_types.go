@@ -204,6 +204,14 @@ func (d *OpenBaoPKISecretEngineConfig) IsValid() (bool, error) {
 // exactly, except spec.connection/spec.authentication are dropped (single-token
 // model) and spec.openbaoNamespace is added.
 type OpenBaoPKISecretEngineConfigSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// Path is the bao-side PKI mount path (e.g. "pki", "pki/internal"). Must
 	// match an existing OpenBaoSecretEngine of kind=pki at the same path; the
 	// controller does NOT enable the mount itself.
@@ -506,3 +514,6 @@ type OpenBaoPKISecretEngineConfigList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoPKISecretEngineConfig{}, &OpenBaoPKISecretEngineConfigList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoPKISecretEngineConfig) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

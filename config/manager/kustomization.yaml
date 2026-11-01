@@ -6,8 +6,3 @@ images:
   - name: controller
     newName: ghcr.io/marianu/openbao-config-operator
     newTag: v0.0.8
-configMapGenerator:
-  - literals:
-      - VAULT_ADDR=http://openbao.openbao.svc.cluster.local:8200
-    name: controller-manager-config
-    namespace: openbao-config-operator-system

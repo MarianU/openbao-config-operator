@@ -143,6 +143,14 @@ func (d *OpenBaoKvSecret) IsValid() (bool, error) {
 
 // OpenBaoKvSecretSpec defines the desired state.
 type OpenBaoKvSecretSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side secret when this
 	// CR is deleted. Retain (the default) releases the CR without touching
 	// bao — the secret survives as an intentional orphan. Delete removes the
@@ -272,3 +280,6 @@ type OpenBaoKvSecretList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoKvSecret{}, &OpenBaoKvSecretList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoKvSecret) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

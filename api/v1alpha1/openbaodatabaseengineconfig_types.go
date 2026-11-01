@@ -212,6 +212,14 @@ type DatabaseCredentialsRef struct {
 
 // OpenBaoDatabaseEngineConfigSpec defines the desired state.
 type OpenBaoDatabaseEngineConfigSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side connection when
 	// this CR is deleted or its bao identity changes. Retain (the default)
 	// releases the CR without touching bao — the connection survives as a
@@ -420,3 +428,6 @@ type OpenBaoDatabaseEngineConfigList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoDatabaseEngineConfig{}, &OpenBaoDatabaseEngineConfigList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoDatabaseEngineConfig) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

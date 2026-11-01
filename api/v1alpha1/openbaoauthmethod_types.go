@@ -196,6 +196,14 @@ type OpenBaoAuthMethodConfig struct {
 
 // OpenBaoAuthMethodSpec defines the desired state of OpenBaoAuthMethod.
 type OpenBaoAuthMethodSpec struct {
+
+	// ConnectionRef selects the OpenBaoConnection CR this resource uses to
+	// reach OpenBao. Name is required; Namespace defaults to this CR's own
+	// namespace. When a connection resolver is enabled, a resource with no
+	// ref is rejected as ConnectionError.
+	// +kubebuilder:validation:Optional
+	ConnectionRef *ConnectionRef `json:"connectionRef,omitempty"`
+
 	// DeletionPolicy controls what happens to the bao-side auth mount
 	// when this CR is deleted or its bao identity changes. Retain
 	// (the default) releases the CR without touching bao: the auth
@@ -304,3 +312,6 @@ type OpenBaoAuthMethodList struct {
 func init() {
 	SchemeBuilder.Register(&OpenBaoAuthMethod{}, &OpenBaoAuthMethodList{})
 }
+
+// ConnectionRef returns the OpenBaoConnection CR this resource references.
+func (d *OpenBaoAuthMethod) ConnectionRef() *ConnectionRef { return d.Spec.ConnectionRef }

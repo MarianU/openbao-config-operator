@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -228,6 +229,17 @@ func k8sLogin(ctx context.Context, v *vault.Client, mount, role, jwtPath string)
 // sealed or still-starting bao surfaces as per-reconcile errors that heal on
 // requeue instead of a crash-looping process.
 func NewKubernetesAuthClient(addr, mount, role, jwtPath string) (Client, error) {
+	return newKubernetesAuthClient(addr, mount, role, jwtPath, nil)
+}
+
+// NewKubernetesAuthClientTLS is NewKubernetesAuthClient with an explicit
+// per-connection TLS configuration (see NewHTTPClientTLS for the semantics —
+// non-nil tc overrides env-driven TLS entirely).
+func NewKubernetesAuthClientTLS(addr, mount, role, jwtPath string, tc *tls.Config) (Client, error) {
+	return newKubernetesAuthClient(addr, mount, role, jwtPath, tc)
+}
+
+func newKubernetesAuthClient(addr, mount, role, jwtPath string, tc *tls.Config) (Client, error) {
 	if strings.TrimSpace(addr) == "" {
 		return nil, fmt.Errorf("bao client: address is empty")
 	}
@@ -243,13 +255,12 @@ func NewKubernetesAuthClient(addr, mount, role, jwtPath string) (Client, error) 
 	}
 	// Same optional-CA contract as NewHTTPClient: a VAULT_CACERT pointing
 	// at a file that never materialized must not crash the process.
-	unsetMissingCAEnv("VAULT_CACERT")
-	addr = strings.TrimRight(addr, "/")
+	cfg, err := newSDKCfg(addr, tc)
+	if err != nil {
+		return nil, err
+	}
 
 	mgr := &loginManager{now: time.Now}
-
-	cfg := vault.DefaultConfig()
-	cfg.Address = addr
 	// 403 handling lives in authTransport. The only deviation from the default
 	// policy is to stop retrying a call whose login failed: the SDK reads that
 	// as a transport error and would re-attempt the login twice more per call.

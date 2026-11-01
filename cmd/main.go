@@ -40,6 +40,7 @@ import (
 	openbaoauthmethod "github.com/stakater/openbao-config-operator/internal/controller/openbaoauthmethod"
 	openbaocertcfg "github.com/stakater/openbao-config-operator/internal/controller/openbaocertauthengineconfig"
 	openbaocertrole "github.com/stakater/openbao-config-operator/internal/controller/openbaocertauthenginerole"
+	openbaoconnection "github.com/stakater/openbao-config-operator/internal/controller/openbaoconnection"
 	openbaodbc "github.com/stakater/openbao-config-operator/internal/controller/openbaodatabaseengineconfig"
 	openbaodbr "github.com/stakater/openbao-config-operator/internal/controller/openbaodatabaserole"
 	openbaogeneratedsecret "github.com/stakater/openbao-config-operator/internal/controller/openbaogeneratedsecret"
@@ -195,6 +196,14 @@ func main() {
 // that heal on requeue, not a crash-looping process.
 func setupReconcilers(mgr ctrl.Manager) error {
 	// +kubebuilder:scaffold:builder
+
+	// The OpenBaoConnection controller validates + health-checks connection
+	// CRs (the named sources of per-connection clients all other CRDs
+	// reference). Registered independently of the shared env client below.
+	if err := openbaoconnection.NewReconciler(mgr.GetClient()).
+		SetupWithManager(mgr); err != nil {
+		return err
+	}
 
 	bao, err := baoclient.NewClientFromEnv()
 	if err != nil {

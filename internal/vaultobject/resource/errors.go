@@ -33,6 +33,11 @@ const (
 	// cert to land in its referenced Secret. It is not a failure — the
 	// reconcile requeues until the signed cert appears.
 	ReasonAwaitingExternalSignature = "AwaitingExternalSignature"
+	// ReasonConnectionError covers a missing/invalid/unresolvable
+	// OpenBaoConnection referenced by spec.connectionRef (ref omitted, CR
+	// missing, referenced Secret absent). Distinct from BaoError because the
+	// fault is the connection definition, not the bao server.
+	ReasonConnectionError = "ConnectionError"
 )
 
 // ErrNameCollision is returned by a primitive's BaoWrite callback when it
