@@ -2,6 +2,7 @@ package openbaoconnection
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	k8srec "k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -137,36 +139,47 @@ func references(c *v1alpha1.OpenBaoConnection, secretName string) bool {
 // writeStatus patches the OpenBaoConnection status: a single Ready condition
 // (replace by type) plus Authenticated / TokenTTLSeconds / ObservedGeneration.
 func (r *OpenBaoConnectionReconciler) writeStatus(ctx context.Context, c *v1alpha1.OpenBaoConnection, ok bool, reason, msg string, ttl int64) {
-	if r.Recorder != nil {
-		r.Recorder.Event(c, "Normal", reason, msg)
-	}
-	cur := &v1alpha1.OpenBaoConnection{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: c.Namespace, Name: c.Name}, cur); err != nil {
-		return
-	}
-	st := metav1.ConditionFalse
-	if ok {
-		st = metav1.ConditionTrue
-	}
-	ready := metav1.Condition{
-		Type:               resource.ConditionReady,
-		Status:             st,
-		Reason:             reason,
-		Message:            msg,
-		ObservedGeneration: cur.Generation,
-	}
-	conds := []metav1.Condition{ready}
-	for _, existing := range cur.Status.Conditions {
-		if existing.Type != resource.ConditionReady {
-			conds = append(conds, existing)
+	// Patch (MergeFrom) inside RetryOnConflict, mirroring the primitives'
+	// working patchStatusOnce path — a bare Status().Update here was observed
+	// failing silently in production (status never persisted), so use the
+	// proven pattern: fresh fetch per attempt, patch the diff, replay on
+	// conflict.
+	key := types.NamespacedName{Namespace: c.Namespace, Name: c.Name}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cur := &v1alpha1.OpenBaoConnection{}
+		if err := r.Get(ctx, key, cur); err != nil {
+			return err
 		}
-	}
-	cur.Status.Conditions = conds
-	cur.Status.ObservedGeneration = cur.Generation
-	cur.Status.Authenticated = ok
-	cur.Status.TokenTTLSeconds = ttl
-	if err := r.Status().Update(ctx, cur); err != nil {
-		// Best-effort status write.
-		return
+		orig, okC := cur.DeepCopyObject().(client.Object)
+		if !okC {
+			return fmt.Errorf("deep copy of %T is not a client.Object", cur)
+		}
+		st := metav1.ConditionFalse
+		if ok {
+			st = metav1.ConditionTrue
+		}
+		ready := metav1.Condition{
+			Type:               resource.ConditionReady,
+			Status:             st,
+			Reason:             reason,
+			Message:            msg,
+			ObservedGeneration: cur.Generation,
+		}
+		conds := []metav1.Condition{ready}
+		for _, existing := range cur.Status.Conditions {
+			if existing.Type != resource.ConditionReady {
+				conds = append(conds, existing)
+			}
+		}
+		cur.Status.Conditions = conds
+		cur.Status.ObservedGeneration = cur.Generation
+		cur.Status.Authenticated = ok
+		cur.Status.TokenTTLSeconds = ttl
+		return r.Status().Patch(ctx, cur, client.MergeFrom(orig))
+	})
+	if err != nil {
+		// Persistent failure — log it rather than swallowing so a status-write
+		// regression is visible in the operator log.
+		log.FromContext(ctx).Error(err, "connection status write failed", "name", c.Name, "namespace", c.Namespace)
 	}
 }
