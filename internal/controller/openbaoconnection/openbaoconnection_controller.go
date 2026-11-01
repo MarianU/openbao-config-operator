@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	k8srec "k8s.io/client-go/tools/record"
@@ -158,23 +159,20 @@ func (r *OpenBaoConnectionReconciler) writeStatus(ctx context.Context, c *v1alph
 		if ok {
 			st = metav1.ConditionTrue
 		}
-		ready := metav1.Condition{
+		cur.Status.ObservedGeneration = cur.Generation
+		cur.Status.Authenticated = ok
+		cur.Status.TokenTTLSeconds = ttl
+		// SetStatusCondition (like the primitives) fills LastTransitionTime
+		// (Required by metav1.Condition schema) and preserves it when the
+		// Ready status/reason/message are unchanged. Hand-constructing the
+		// condition without LastTransitionTime made the CRD reject the write.
+		apimeta.SetStatusCondition(&cur.Status.Conditions, metav1.Condition{
 			Type:               resource.ConditionReady,
 			Status:             st,
 			Reason:             reason,
 			Message:            msg,
 			ObservedGeneration: cur.Generation,
-		}
-		conds := []metav1.Condition{ready}
-		for _, existing := range cur.Status.Conditions {
-			if existing.Type != resource.ConditionReady {
-				conds = append(conds, existing)
-			}
-		}
-		cur.Status.Conditions = conds
-		cur.Status.ObservedGeneration = cur.Generation
-		cur.Status.Authenticated = ok
-		cur.Status.TokenTTLSeconds = ttl
+		})
 		return r.Status().Patch(ctx, cur, client.MergeFrom(orig))
 	})
 	if err != nil {

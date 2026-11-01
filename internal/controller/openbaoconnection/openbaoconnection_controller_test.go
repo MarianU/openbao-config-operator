@@ -67,4 +67,7 @@ func TestReconcile_WritesReadyFalseOnUnreachableBao(t *testing.T) {
 	require.Equal(t, resource.ConditionReady, got.Status.Conditions[0].Type)
 	require.Equal(t, metav1.ConditionFalse, got.Status.Conditions[0].Status)
 	require.NotEmpty(t, got.Status.Conditions[0].Reason)
+	// LastTransitionTime is Required by the metav1.Condition schema; missing it
+	// makes the CRD reject the write (the original production bug).
+	require.False(t, got.Status.Conditions[0].LastTransitionTime.IsZero())
 }
